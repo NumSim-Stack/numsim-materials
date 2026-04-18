@@ -1,0 +1,2 @@
+add_numsim_materials_example(autocatalytic_reaction main.cpp)
+

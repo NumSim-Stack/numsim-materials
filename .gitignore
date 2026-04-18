@@ -1,32 +1,28 @@
-# Prerequisites
-*.d
+# Build directories
+build/
+build_clean/
+cmake-build-*/
 
-# Compiled Object files
-*.slo
-*.lo
+# IDE
+.vscode/
+.idea/
+*.user
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Compiled
 *.o
-*.obj
-
-# Precompiled Headers
-*.gch
-*.pch
-
-# Compiled Dynamic libraries
+*.a
 *.so
 *.dylib
-*.dll
 
-# Fortran module files
-*.mod
-*.smod
+# QCustomPlot archive
+third_party/qcustomplot/qcp.tar.gz
 
-# Compiled Static libraries
-*.lai
-*.la
-*.a
-*.lib
-
-# Executables
-*.exe
-*.out
-*.app
+# Generated plots
+*.png
+*.user*
