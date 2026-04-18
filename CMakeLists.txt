@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
 
 project(numsim-materials
-  VERSION 2.0.0
+  VERSION 0.1.0
   LANGUAGES CXX
   DESCRIPTION "Property-graph material framework for FEM simulations"
 )
