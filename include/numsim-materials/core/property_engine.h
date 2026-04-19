@@ -40,11 +40,14 @@ public:
   }
 
   /// Update a single property and all its upstream dependencies.
-  void update_property(const std::string& material, const std::string& property) {
+  /// Properties in @p exclude are skipped during evaluation.
+  void update_property(const std::string& material, const std::string& property,
+                       const std::unordered_set<const property_base*>& exclude = {}) {
     auto key = material + "::" + property;
     auto subgraph = collect_upstream(key);
     for (auto* prop : m_property_execution_order) {
-      if (subgraph.contains(prop) && prop->traits().update)
+      if (subgraph.contains(prop) && prop->traits().update
+          && !exclude.contains(prop))
         prop->traits().update();
     }
   }
