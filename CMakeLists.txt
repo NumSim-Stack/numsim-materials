@@ -48,10 +48,16 @@ target_include_directories(${PROJECT_NAME}
 
 target_compile_features(${PROJECT_NAME} INTERFACE cxx_std_23)
 target_link_libraries(${PROJECT_NAME} INTERFACE numsim-core)
-if(TARGET tmech::tmech)
+
+# tmech is header-only — add its include path without linking a target
+# (linking would pull it into the install export set)
+if(TARGET tmech)
+  get_target_property(_tmech_inc tmech INTERFACE_INCLUDE_DIRECTORIES)
+  if(_tmech_inc)
+    target_include_directories(${PROJECT_NAME} INTERFACE ${_tmech_inc})
+  endif()
+elseif(tmech_FOUND)
   target_link_libraries(${PROJECT_NAME} INTERFACE tmech::tmech)
-elseif(TARGET tmech)
-  target_link_libraries(${PROJECT_NAME} INTERFACE tmech)
 endif()
 
 # Force C++23 globally — numsim-core headers use <print>/std::println
