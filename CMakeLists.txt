@@ -30,7 +30,7 @@ if(NOT tmech_FOUND)
   FetchContent_Declare(
     tmech
     GIT_REPOSITORY https://github.com/petlenz/tmech
-    GIT_TAG main
+    GIT_TAG master
   )
   set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
   FetchContent_MakeAvailable(tmech)
