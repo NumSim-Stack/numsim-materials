@@ -13,12 +13,28 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # --- Dependencies ---
 include(FetchContent)
 
+set(BUILD_TESTS OFF CACHE BOOL "" FORCE)     # disable numsim-core's own tests
+set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)  # disable numsim-core's own examples
 FetchContent_Declare(
   numsim-core
   GIT_REPOSITORY https://github.com/NumSim-Stack/numsim-core
-  GIT_TAG origin/main
+  GIT_TAG main
 )
+# To use a local numsim-core checkout, configure with:
+#   -DFETCHCONTENT_SOURCE_DIR_NUMSIM-CORE=/path/to/numsim-core
 FetchContent_MakeAvailable(numsim-core)
+
+# --- Dependencies (tmech tensor library) ---
+find_package(tmech QUIET)
+if(NOT tmech_FOUND)
+  FetchContent_Declare(
+    tmech
+    GIT_REPOSITORY https://github.com/petlenz/tmech
+    GIT_TAG master
+  )
+  set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  FetchContent_MakeAvailable(tmech)
+endif()
 
 # --- Header-only library ---
 add_library(${PROJECT_NAME} INTERFACE)
@@ -31,6 +47,22 @@ target_include_directories(${PROJECT_NAME}
 )
 
 target_compile_features(${PROJECT_NAME} INTERFACE cxx_std_23)
+target_link_libraries(${PROJECT_NAME} INTERFACE numsim-core)
+
+# tmech is header-only — add its include path without linking a target
+# (linking would pull it into the install export set)
+if(TARGET tmech)
+  get_target_property(_tmech_inc tmech INTERFACE_INCLUDE_DIRECTORIES)
+  if(_tmech_inc)
+    target_include_directories(${PROJECT_NAME} INTERFACE ${_tmech_inc})
+  endif()
+elseif(tmech_FOUND)
+  target_link_libraries(${PROJECT_NAME} INTERFACE tmech::tmech)
+endif()
+
+# Force C++23 globally — numsim-core headers use <print>/std::println
+set(CMAKE_CXX_STANDARD 23 CACHE STRING "" FORCE)
+set(CMAKE_CXX_STANDARD_REQUIRED ON CACHE BOOL "" FORCE)
 
 # --- Optional Qt plotting ---
 option(ENABLE_PLOTTING "Enable Qt6-based live plotting" OFF)
@@ -86,8 +118,22 @@ install(
   DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/${PROJECT_NAME}/cmake
 )
 
+# --- Testing ---
+option(NUMSIM_BUILD_TESTS "Build unit tests" ON)
+if(NUMSIM_BUILD_TESTS)
+  enable_testing()
+  FetchContent_Declare(
+    googletest
+    GIT_REPOSITORY https://github.com/google/googletest
+    GIT_TAG v1.15.2
+  )
+  set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+  FetchContent_MakeAvailable(googletest)
+  add_subdirectory(tests)
+endif()
+
 # --- Examples ---
-option(BUILD_EXAMPLES "Build examples" ON)
-if(BUILD_EXAMPLES)
+option(NUMSIM_BUILD_EXAMPLES "Build examples" ON)
+if(NUMSIM_BUILD_EXAMPLES)
   add_subdirectory(examples)
 endif()

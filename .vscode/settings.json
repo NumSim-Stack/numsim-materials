@@ -1,0 +1,14 @@
+{
+    "cmake.buildDirectory": "${workspaceFolder}/build_debug",
+    "cmake.configureArgs": [
+        "-DCMAKE_CXX_COMPILER=g++-14",
+        "-DNUMSIM_BUILD_TESTS=ON",
+        "-DNUMSIM_BUILD_EXAMPLES=ON",
+        "-DENABLE_PLOTTING=OFF"
+    ],
+    "C_Cpp.default.cppStandard": "c++23",
+    "C_Cpp.default.compilerPath": "/usr/bin/g++-14",
+    "files.associations": {
+        "*.h": "cpp"
+    }
+}

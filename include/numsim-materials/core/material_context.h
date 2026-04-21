@@ -1,6 +1,7 @@
 #ifndef MATERIAL_CONTEXT_H
 #define MATERIAL_CONTEXT_H
 
+#include <fstream>
 #include <stdexcept>
 #include <unordered_set>
 #include "numsim-materials/core/material_base.h"
@@ -85,6 +86,31 @@ public:
 
   void commit() { m_engine.commit(); }
   void revert() { m_engine.revert(); }
+
+  // --- Checkpoint / Restart ---
+
+  /// Save all history property state to a binary file.
+  void save_state(const std::string& path) const {
+    check_finalized("save_state");
+    std::ofstream out(path, std::ios::binary);
+    if (!out)
+      throw std::runtime_error("save_state: cannot open '" + path + "'");
+    for (auto* prop : m_engine.property_execution_order())
+      if (prop->is_history())
+        prop->serialize(out);
+  }
+
+  /// Load history property state from a binary file.
+  /// The context must have the same materials in the same order as when saved.
+  void load_state(const std::string& path) {
+    check_finalized("load_state");
+    std::ifstream in(path, std::ios::binary);
+    if (!in)
+      throw std::runtime_error("load_state: cannot open '" + path + "'");
+    for (auto* prop : m_engine.property_execution_order())
+      if (prop->is_history())
+        prop->deserialize(in);
+  }
 
   // --- Lookup ---
 

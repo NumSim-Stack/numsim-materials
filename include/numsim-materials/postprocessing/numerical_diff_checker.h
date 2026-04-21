@@ -28,9 +28,11 @@ struct diff_traits<tmech::tensor<T,Dim,2>, tmech::tensor<T,Dim,2>> {
   using sequence_type = tmech::sequence<1,2,3,4>;
   // Symmetry of input (strain): ε_ij = ε_ji
   using sym_direction = std::tuple<tmech::sequence<1,2>, tmech::sequence<2,1>>;
-  // Result symmetry: both minor symmetries C_ijkl = C_jikl = C_ijlk = C_jilk
-  using sym_result = std::tuple<tmech::sequence<1,2,3,4>, tmech::sequence<2,1,3,4>,
-                                tmech::sequence<1,2,4,3>, tmech::sequence<2,1,4,3>>;
+  // Result storage: num_diff_sym_central builds tuples as (k,l,i,j) where
+  // (k,l) are input indices and (i,j) are output indices. Sequences <3,4,1,2>
+  // remap to result(i,j,k,l) = C_ijkl. Minor symmetries applied via all 4 permutations.
+  using sym_result = std::tuple<tmech::sequence<3,4,1,2>, tmech::sequence<4,3,1,2>,
+                                tmech::sequence<3,4,2,1>, tmech::sequence<4,3,2,1>>;
 };
 
 // --- Result type deduction ---
@@ -279,7 +281,7 @@ private:
   void restore_state(Input& input_ref, const Input& input_saved) {
     input_ref = input_saved;
     for (auto* hp : m_hist_props) hp->revert();
-    m_ctx->update_property(m_output_src.material, m_output_src.property);
+    m_ctx->update_property(m_output_src.material, m_output_src.property, m_exclude);
   }
 
   value_type& m_error;

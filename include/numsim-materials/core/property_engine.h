@@ -11,6 +11,7 @@
 #include <vector>
 #include "numsim-materials/core/property_traits.h"
 #include "numsim-materials/core/property.h"
+#include "numsim-materials/core/history_property.h"
 #include "numsim-materials/core/material_interface.h"
 
 namespace numsim::materials {
@@ -78,6 +79,8 @@ public:
     return jt != it->second.end() ? jt->second.get() : nullptr;
   }
 
+  /// Read-only access to a property value.
+  /// Handles both regular properties and history properties (returns new_value).
   template<typename T>
   const T& get(property_handler& properties,
                const std::string& material, const std::string& prop_name) {
@@ -85,13 +88,16 @@ public:
     if (!p)
       throw std::runtime_error("property_engine::get(): property '" +
                                material + "::" + prop_name + "' not found");
-    auto* typed = dynamic_cast<const numsim_core::property<T, property_traits>*>(p);
-    if (!typed)
-      throw std::runtime_error("property_engine::get(): type mismatch for '" +
-                               material + "::" + prop_name + "'");
-    return typed->get();
+    if (auto* typed = dynamic_cast<const numsim_core::property<T, property_traits>*>(p))
+      return typed->get();
+    if (auto* hist = dynamic_cast<const numsim_core::history_property<T, property_traits>*>(p))
+      return hist->new_value();
+    throw std::runtime_error("property_engine::get(): type mismatch for '" +
+                             material + "::" + prop_name + "'");
   }
 
+  /// Mutable access to a property value — bypasses the property graph.
+  /// Handles both regular properties and history properties (returns new_value).
   template<typename T>
   T& get_mutable(property_handler& properties,
                  const std::string& material, const std::string& prop_name) {
@@ -99,11 +105,12 @@ public:
     if (!p)
       throw std::runtime_error("property_engine::get_mutable(): property '" +
                                material + "::" + prop_name + "' not found");
-    auto* typed = dynamic_cast<numsim_core::property<T, property_traits>*>(p);
-    if (!typed)
-      throw std::runtime_error("property_engine::get_mutable(): type mismatch for '" +
-                               material + "::" + prop_name + "'");
-    return typed->get();
+    if (auto* typed = dynamic_cast<numsim_core::property<T, property_traits>*>(p))
+      return typed->get();
+    if (auto* hist = dynamic_cast<numsim_core::history_property<T, property_traits>*>(p))
+      return hist->new_value();
+    throw std::runtime_error("property_engine::get_mutable(): type mismatch for '" +
+                             material + "::" + prop_name + "'");
   }
 
   const std::vector<property_base*>& property_execution_order() const noexcept {

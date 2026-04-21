@@ -1,10 +1,8 @@
 # Build directories
-build/
-build_clean/
+build*/
 cmake-build-*/
 
 # IDE
-.vscode/
 .idea/
 *.user
 *.swp
