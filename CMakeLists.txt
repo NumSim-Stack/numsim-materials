@@ -25,7 +25,7 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(numsim-core)
 
 # --- Dependencies (tmech tensor library) ---
-find_package(tmech REQUIRED)
+find_package(tmech QUIET)
 
 # --- Header-only library ---
 add_library(${PROJECT_NAME} INTERFACE)
@@ -38,7 +38,10 @@ target_include_directories(${PROJECT_NAME}
 )
 
 target_compile_features(${PROJECT_NAME} INTERFACE cxx_std_23)
-target_link_libraries(${PROJECT_NAME} INTERFACE numsim-core tmech::tmech)
+target_link_libraries(${PROJECT_NAME} INTERFACE numsim-core)
+if(tmech_FOUND)
+  target_link_libraries(${PROJECT_NAME} INTERFACE tmech::tmech)
+endif()
 
 # Force C++23 globally — numsim-core headers use <print>/std::println
 set(CMAKE_CXX_STANDARD 23 CACHE STRING "" FORCE)

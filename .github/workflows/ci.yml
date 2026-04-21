@@ -18,13 +18,10 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y g++-14 cmake
 
-    - name: Install tmech (header-only)
+    - name: Install tmech
       run: |
-        git clone https://github.com/petlenz/tmech.git /tmp/tmech
+        git clone --depth 1 https://github.com/petlenz/tmech.git /tmp/tmech
         sudo cp -r /tmp/tmech/include/tmech /usr/local/include/
-        cd /tmp/tmech && cmake -B build -DBUILD_TESTS=OFF
-        sudo mkdir -p /usr/local/share/tmech/cmake
-        sudo cp build/tmechConfig*.cmake /usr/local/share/tmech/cmake/
 
     - name: Configure
       run: |
