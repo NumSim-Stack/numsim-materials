@@ -4,7 +4,6 @@ build_clean/
 cmake-build-*/
 
 # IDE
-.vscode/
 .idea/
 *.user
 *.swp

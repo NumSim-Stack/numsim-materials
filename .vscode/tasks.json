@@ -1,0 +1,50 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "CMake Configure (Debug)",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "-S", "${workspaceFolder}",
+                "-B", "${workspaceFolder}/build_debug",
+                "-DCMAKE_BUILD_TYPE=Debug",
+                "-DCMAKE_CXX_COMPILER=g++-14",
+                "-DNUMSIM_BUILD_TESTS=ON",
+                "-DNUMSIM_BUILD_EXAMPLES=ON",
+                "-DENABLE_PLOTTING=OFF"
+            ],
+            "problemMatcher": [],
+            "detail": "Configure CMake in Debug mode with tests"
+        },
+        {
+            "label": "CMake Build (Debug)",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "--build", "${workspaceFolder}/build_debug",
+                "-j4"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": ["$gcc"],
+            "dependsOn": [],
+            "detail": "Build in Debug mode"
+        },
+        {
+            "label": "Run Tests",
+            "type": "shell",
+            "command": "ctest",
+            "args": ["--output-on-failure"],
+            "options": {
+                "cwd": "${workspaceFolder}/build_debug"
+            },
+            "group": "test",
+            "problemMatcher": [],
+            "dependsOn": "CMake Build (Debug)",
+            "detail": "Run all CTest tests"
+        }
+    ]
+}

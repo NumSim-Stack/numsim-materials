@@ -13,7 +13,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # --- Dependencies ---
 include(FetchContent)
 
-set(BUILD_TESTS OFF CACHE BOOL "" FORCE)  # disable numsim-core's own tests
+set(BUILD_TESTS OFF CACHE BOOL "" FORCE)     # disable numsim-core's own tests
+set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)  # disable numsim-core's own examples
 FetchContent_Declare(
   numsim-core
   GIT_REPOSITORY https://github.com/NumSim-Stack/numsim-core
@@ -110,7 +111,7 @@ if(NUMSIM_BUILD_TESTS)
 endif()
 
 # --- Examples ---
-option(BUILD_EXAMPLES "Build examples" ON)
-if(BUILD_EXAMPLES)
+option(NUMSIM_BUILD_EXAMPLES "Build examples" ON)
+if(NUMSIM_BUILD_EXAMPLES)
   add_subdirectory(examples)
 endif()
