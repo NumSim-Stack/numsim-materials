@@ -13,12 +13,16 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # --- Dependencies ---
 include(FetchContent)
 
+set(BUILD_TESTS OFF CACHE BOOL "" FORCE)  # disable numsim-core's own tests
 FetchContent_Declare(
   numsim-core
   GIT_REPOSITORY https://github.com/NumSim-Stack/numsim-core
-  GIT_TAG origin/main
+  GIT_TAG origin/feature/property-graph-and-factory
 )
 FetchContent_MakeAvailable(numsim-core)
+
+# --- Dependencies (tmech tensor library) ---
+find_package(tmech REQUIRED)
 
 # --- Header-only library ---
 add_library(${PROJECT_NAME} INTERFACE)
@@ -31,6 +35,11 @@ target_include_directories(${PROJECT_NAME}
 )
 
 target_compile_features(${PROJECT_NAME} INTERFACE cxx_std_23)
+target_link_libraries(${PROJECT_NAME} INTERFACE numsim-core tmech::tmech)
+
+# Force C++23 globally — numsim-core headers use <print>/std::println
+set(CMAKE_CXX_STANDARD 23 CACHE STRING "" FORCE)
+set(CMAKE_CXX_STANDARD_REQUIRED ON CACHE BOOL "" FORCE)
 
 # --- Optional Qt plotting ---
 option(ENABLE_PLOTTING "Enable Qt6-based live plotting" OFF)
@@ -85,6 +94,20 @@ install(
   NAMESPACE ${PROJECT_NAME}::
   DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/${PROJECT_NAME}/cmake
 )
+
+# --- Testing ---
+option(NUMSIM_BUILD_TESTS "Build unit tests" ON)
+if(NUMSIM_BUILD_TESTS)
+  enable_testing()
+  FetchContent_Declare(
+    googletest
+    GIT_REPOSITORY https://github.com/google/googletest
+    GIT_TAG v1.15.2
+  )
+  set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+  FetchContent_MakeAvailable(googletest)
+  add_subdirectory(tests)
+endif()
 
 # --- Examples ---
 option(BUILD_EXAMPLES "Build examples" ON)
