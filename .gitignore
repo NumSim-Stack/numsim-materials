@@ -1,6 +1,5 @@
 # Build directories
-build/
-build_clean/
+build*/
 cmake-build-*/
 
 # IDE

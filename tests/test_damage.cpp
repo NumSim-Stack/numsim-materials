@@ -188,10 +188,10 @@ TEST_F(TangentCheckerTest, ExclusionWorks) {
       << "Stepper should NOT have run when excluded";
 }
 
-// TODO: This test passes in test_material but fails in the gtest binary.
-// The elastic steps match perfectly (rel < 1e-12) but damage steps show
-// major-symmetry-like swaps in specific tangent components.
-// Needs investigation — possible subtle build/link order issue.
+// TODO: Damage-regime tangent checker fails in GTest binary but passes in
+// test_material (same source, same compiler, same tmech). State values are
+// correct — the numerical differentiation produces different results.
+// Needs debugger investigation.
 TEST_F(TangentCheckerTest, DISABLED_MachinePrecisionAllSteps) {
   T max_rel_error = 0;
   for (int i = 0; i < 15; ++i) {
@@ -204,9 +204,7 @@ TEST_F(TangentCheckerTest, DISABLED_MachinePrecisionAllSteps) {
       << "Tangent should match numerical derivative to machine precision";
 }
 
-// TODO: Elastic steps pass in test_material but fail in gtest binary.
-// Same source, same compiler — needs runtime debugging.
-TEST_F(TangentCheckerTest, DISABLED_ElasticStepsMachinePrecision) {
+TEST_F(TangentCheckerTest, ElasticStepsMachinePrecision) {
   for (int i = 0; i < 3; ++i) {
     ctx.update();
     auto rel = ctx.get<T>("checker", "rel_error");

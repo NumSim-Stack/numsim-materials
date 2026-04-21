@@ -279,7 +279,7 @@ private:
   void restore_state(Input& input_ref, const Input& input_saved) {
     input_ref = input_saved;
     for (auto* hp : m_hist_props) hp->revert();
-    m_ctx->update_property(m_output_src.material, m_output_src.property);
+    m_ctx->update_property(m_output_src.material, m_output_src.property, m_exclude);
   }
 
   value_type& m_error;

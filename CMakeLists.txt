@@ -20,6 +20,8 @@ FetchContent_Declare(
   GIT_REPOSITORY https://github.com/NumSim-Stack/numsim-core
   GIT_TAG origin/feature/property-graph-and-factory
 )
+# To use a local numsim-core checkout, configure with:
+#   -DFETCHCONTENT_SOURCE_DIR_NUMSIM-CORE=/path/to/numsim-core
 FetchContent_MakeAvailable(numsim-core)
 
 # --- Dependencies (tmech tensor library) ---
