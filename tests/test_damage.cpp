@@ -195,7 +195,7 @@ TEST_F(TangentCheckerTest, ExclusionWorks) {
 // damage tangent in this GTest binary but works correctly in test_material.
 // Same source, same compiler, same tmech headers. Needs tmech-level debugging.
 // Non-symmetric num_diff_central produces correct results for all steps.
-TEST_F(TangentCheckerTest, DISABLED_MachinePrecisionAllSteps) {
+TEST_F(TangentCheckerTest, MachinePrecisionAllSteps) {
   T max_rel_error = 0;
   for (int i = 0; i < 15; ++i) {
     ctx.update();
