@@ -2,6 +2,7 @@
 #define MATERIAL_CONTEXT_H
 
 #include <stdexcept>
+#include <unordered_set>
 #include "numsim-materials/core/material_base.h"
 #include "numsim-materials/core/material_property_info.h"
 #include "numsim-materials/core/object_store.h"
@@ -76,9 +77,10 @@ public:
     m_engine.update();
   }
 
-  void update_property(const std::string& material, const std::string& property) {
+  void update_property(const std::string& material, const std::string& property,
+                       const std::unordered_set<const property_base*>& exclude = {}) {
     check_finalized("update_property");
-    m_engine.update_property(material, property);
+    m_engine.update_property(material, property, exclude);
   }
 
   void commit() { m_engine.commit(); }

@@ -1,9 +1,12 @@
 #ifndef NUMSIM_MATERIALS_NUMERICAL_DIFF_CHECKER_H
 #define NUMSIM_MATERIALS_NUMERICAL_DIFF_CHECKER_H
 
+#include <cassert>
 #include <cmath>
 #include <print>
 #include <string>
+#include <type_traits>
+#include <unordered_set>
 #include <vector>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_base.h"
@@ -23,8 +26,11 @@ struct diff_traits {
 template<typename T, std::size_t Dim>
 struct diff_traits<tmech::tensor<T,Dim,2>, tmech::tensor<T,Dim,2>> {
   using sequence_type = tmech::sequence<1,2,3,4>;
+  // Symmetry of input (strain): ε_ij = ε_ji
   using sym_direction = std::tuple<tmech::sequence<1,2>, tmech::sequence<2,1>>;
-  using sym_result = std::tuple<>;
+  // Result symmetry: both minor symmetries C_ijkl = C_jikl = C_ijlk = C_jilk
+  using sym_result = std::tuple<tmech::sequence<1,2,3,4>, tmech::sequence<2,1,3,4>,
+                                tmech::sequence<1,2,4,3>, tmech::sequence<2,1,4,3>>;
 };
 
 // --- Result type deduction ---
@@ -50,12 +56,20 @@ struct diff_result<tmech::tensor<T,Dim,2>, double> {
   using type = tmech::tensor<T,Dim,2>;
 };
 
-// --- Component-wise error reporting ---
+// --- Helpers ---
 
 namespace detail {
 
 template<typename T>
-void report_mismatches(double analytical, double numerical, T tol) {
+auto compute_norm(const T& x) {
+  if constexpr (std::is_arithmetic_v<T>) return std::abs(x);
+  else return tmech::norm(x);
+}
+
+// --- Component-wise error reporting ---
+
+template<typename T>
+void report_mismatches(T analytical, T numerical, T tol) {
   auto diff = std::abs(analytical - numerical);
   auto ref = std::max(std::abs(analytical), std::abs(numerical));
   auto rel = (ref > T{1e-30}) ? diff / ref : diff;
@@ -94,23 +108,16 @@ void report_mismatches(const tmech::tensor<T,Dim,4>& analytical,
         }
 }
 
-template<typename T>
-T frobenius_norm(double a) { return std::abs(a); }
-
-template<typename T, std::size_t Dim, std::size_t Rank>
-T frobenius_norm(const tmech::tensor<T,Dim,Rank>& t) {
-  T sum{0};
-  auto kernel = [&](auto... idx) { sum += t(idx...) * t(idx...); };
-  using loop = typename tmech::detail::meta_for_loop_deep<Dim, Rank-1>::type;
-  loop::loop(kernel);
-  return std::sqrt(sum);
-}
-
 } // namespace detail
 
 // --- Numerical differentiation checker material ---
 
-/// Checks an analytical derivative against numerical central differences.
+/// Diagnostic material that checks an analytical derivative against numerical
+/// central differences.
+///
+/// This is a privileged material: it requires a material_context pointer to
+/// perturb inputs and re-evaluate the property graph. Normal materials
+/// communicate only through the graph; this one operates ON the graph.
 ///
 /// Template parameters:
 ///   Traits  — material policy
@@ -124,7 +131,6 @@ T frobenius_norm(const tmech::tensor<T,Dim,Rank>& t) {
 ///   "analytical_source" — "material::property" of analytical df/dx
 ///   "history_sources"   — vector<string> of histories to revert
 ///   "epsilon"           — perturbation size (default 1e-7)
-///   "use_symmetric"     — int: 1 to use symmetric kernel (default 0)
 ///   "report_threshold"  — value_type: report components with rel error above this (default 0.01)
 ///
 /// Outputs:
@@ -157,6 +163,8 @@ public:
         m_report_threshold(base::template get_parameter<value_type>("report_threshold")),
         m_history_strs(base::template get_parameter<std::vector<std::string>>("history_sources"))
   {
+    base::template add_input<Input>(
+        m_input_src.material, m_input_src.property, EdgeKind::Global);
     base::template add_input<result_type>(
         m_analytical_src.material, m_analytical_src.property, EdgeKind::Global);
     base::template add_input<Output>(
@@ -181,42 +189,68 @@ public:
   }
 
   void compute() {
-    // 1. Copy input
+    assert(m_ctx->is_finalized() && "numerical_diff_checker requires finalized context");
+
+    // 1. Cache property pointers (once, after finalize)
+    if (!m_cached) {
+      m_input_prop = m_ctx->find_property(m_input_src.material, m_input_src.property);
+      if (!m_input_prop)
+        throw std::runtime_error(
+            "numerical_diff_checker '" + std::string(base::name()) +
+            "': input source '" + m_input_src.material + "::" + m_input_src.property + "' not found");
+      for (auto& src : m_history_srcs) {
+        auto* p = m_ctx->find_property(src.material, src.property);
+        if (!p)
+          throw std::runtime_error(
+              "numerical_diff_checker '" + std::string(base::name()) +
+              "': history source '" + src.material + "::" + src.property + "' not found");
+        m_hist_props.push_back(p);
+      }
+      m_exclude = {m_input_prop};
+      m_cached = true;
+    }
+
+    // 2. Copy input
     auto& input_ref = m_ctx->template get_mutable<Input>(
         m_input_src.material, m_input_src.property);
     const Input input_saved{input_ref};
-
-    // 2. Collect history properties
-    std::vector<property_base*> hist_props;
-    for (auto& src : m_history_srcs) {
-      auto* p = m_ctx->find_property(src.material, src.property);
-      if (p) hist_props.push_back(p);
-    }
 
     // 3. Read analytical derivative
     const result_type analytical{m_ctx->template get<result_type>(
         m_analytical_src.material, m_analytical_src.property)};
 
-    // 4. Build perturbation lambda
+    // 4. Build perturbation lambda — uses update_property with exclusion
+    //    to skip the input producer's callback (e.g., a stepper)
     auto func = [&](const Input& trial) -> Output {
       input_ref = trial;
-      for (auto* hp : hist_props) hp->revert();
-      m_ctx->update_property(m_output_src.material, m_output_src.property);
+      for (auto* hp : m_hist_props) hp->revert();
+      m_ctx->update_property(m_output_src.material, m_output_src.property, m_exclude);
       return m_ctx->template get<Output>(m_output_src.material, m_output_src.property);
     };
 
-    // 5. Numerical differentiation
-    result_type numerical = compute_standard(func, input_saved);
+    // 5. Numerical differentiation (symmetric for tensor inputs)
+    //    Wrapped in try/catch to guarantee state restoration on failure.
+    result_type numerical;
+    try {
+      if constexpr (requires_symmetric_diff()) {
+        using sym_dir = typename traits_info::sym_direction;
+        using sym_res = typename traits_info::sym_result;
+        numerical = tmech::num_diff_sym_central<sym_dir, sym_res>(func, input_saved, m_epsilon);
+      } else {
+        numerical = compute_standard(func, input_saved);
+      }
+    } catch (...) {
+      restore_state(input_ref, input_saved);
+      throw;
+    }
 
-    // 6. Restore
-    input_ref = input_saved;
-    for (auto* hp : hist_props) hp->revert();
-    m_ctx->update_property(m_output_src.material, m_output_src.property);
+    // 6. Restore graph to pre-perturbation state
+    restore_state(input_ref, input_saved);
 
     // 7. Compute error
     const result_type diff{analytical - numerical};
-    m_error = detail::frobenius_norm<value_type>(diff);
-    auto norm = detail::frobenius_norm<value_type>(analytical);
+    m_error = detail::compute_norm(diff);
+    auto norm = detail::compute_norm(analytical);
     m_rel_error = (norm > value_type{1e-30}) ? m_error / norm : m_error;
 
     // 8. Report mismatching components
@@ -228,7 +262,10 @@ public:
   }
 
 private:
-  // Standard (non-symmetric) numerical differentiation
+  static constexpr bool requires_symmetric_diff() {
+    return !std::is_same_v<typename traits_info::sym_direction, void>;
+  }
+
   template<typename Func>
   result_type compute_standard(Func& func, const Input& x) {
     using seq = typename traits_info::sequence_type;
@@ -237,6 +274,12 @@ private:
     } else {
       return tmech::num_diff_central<seq>(func, x, m_epsilon);
     }
+  }
+
+  void restore_state(Input& input_ref, const Input& input_saved) {
+    input_ref = input_saved;
+    for (auto* hp : m_hist_props) hp->revert();
+    m_ctx->update_property(m_output_src.material, m_output_src.property);
   }
 
   value_type& m_error;
@@ -249,6 +292,10 @@ private:
   const value_type& m_report_threshold;
   const std::vector<std::string>& m_history_strs;
   std::vector<connection_source> m_history_srcs;
+  const property_base* m_input_prop{nullptr};
+  std::unordered_set<const property_base*> m_exclude;
+  std::vector<property_base*> m_hist_props;
+  bool m_cached{false};
 };
 
 // --- Convenience aliases ---
