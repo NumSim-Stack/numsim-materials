@@ -26,6 +26,15 @@ FetchContent_MakeAvailable(numsim-core)
 
 # --- Dependencies (tmech tensor library) ---
 find_package(tmech QUIET)
+if(NOT tmech_FOUND)
+  FetchContent_Declare(
+    tmech
+    GIT_REPOSITORY https://github.com/petlenz/tmech
+    GIT_TAG origin/main
+  )
+  set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  FetchContent_MakeAvailable(tmech)
+endif()
 
 # --- Header-only library ---
 add_library(${PROJECT_NAME} INTERFACE)
@@ -39,8 +48,10 @@ target_include_directories(${PROJECT_NAME}
 
 target_compile_features(${PROJECT_NAME} INTERFACE cxx_std_23)
 target_link_libraries(${PROJECT_NAME} INTERFACE numsim-core)
-if(tmech_FOUND)
+if(TARGET tmech::tmech)
   target_link_libraries(${PROJECT_NAME} INTERFACE tmech::tmech)
+elseif(TARGET tmech)
+  target_link_libraries(${PROJECT_NAME} INTERFACE tmech)
 endif()
 
 # Force C++23 globally — numsim-core headers use <print>/std::println

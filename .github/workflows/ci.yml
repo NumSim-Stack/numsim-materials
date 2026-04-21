@@ -18,11 +18,6 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y g++-14 cmake
 
-    - name: Install tmech
-      run: |
-        git clone --depth 1 https://github.com/petlenz/tmech.git /tmp/tmech
-        sudo cp -r /tmp/tmech/include/tmech /usr/local/include/
-
     - name: Configure
       run: |
         cmake -B build \
