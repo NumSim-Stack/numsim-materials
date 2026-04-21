@@ -2,6 +2,7 @@
 #define MATERIAL_CONTEXT_H
 
 #include <stdexcept>
+#include <unordered_set>
 #include "numsim-materials/core/material_base.h"
 #include "numsim-materials/core/material_property_info.h"
 #include "numsim-materials/core/object_store.h"
@@ -76,9 +77,10 @@ public:
     m_engine.update();
   }
 
-  void update_property(const std::string& material, const std::string& property) {
+  void update_property(const std::string& material, const std::string& property,
+                       const std::unordered_set<const property_base*>& exclude = {}) {
     check_finalized("update_property");
-    m_engine.update_property(material, property);
+    m_engine.update_property(material, property, exclude);
   }
 
   void commit() { m_engine.commit(); }
@@ -100,6 +102,10 @@ public:
     return m_engine.template get<T>(m_properties, material, prop_name);
   }
 
+  /// Mutable access to a property value — bypasses the property graph.
+  /// WARNING: Only for diagnostic/privileged code (e.g., numerical_diff_checker).
+  /// Writing to a property without triggering update_property leaves the graph
+  /// in an inconsistent state. Caller is responsible for restoring consistency.
   template<typename T>
   T& get_mutable(const std::string& material, const std::string& prop_name) {
     return m_engine.template get_mutable<T>(m_properties, material, prop_name);
@@ -153,14 +159,15 @@ private:
     // Additional checks can be added here.
   }
 
-  // IMPORTANT: Declaration order determines destruction order.
-  // m_properties and m_materials must outlive m_store (which owns materials
-  // that hold raw pointers into the property registry).
-  // m_store must outlive m_engine (which holds raw pointers to materials).
-  property_handler m_properties;
-  material_handler m_materials;
-  object_store<Traits> m_store;
-  property_engine<Traits> m_engine;
+  // WARNING: Declaration order below is load-bearing — DO NOT REORDER.
+  // C++ destroys members in reverse declaration order.
+  // m_engine holds raw pointers to materials in m_store.
+  // m_store owns materials that hold raw pointers into m_properties.
+  // Reordering causes use-after-free during destruction.
+  property_handler m_properties;   // 1st: outlives everything
+  material_handler m_materials;    // 2nd: query map
+  object_store<Traits> m_store;    // 3rd: owns materials → refs into m_properties
+  property_engine<Traits> m_engine;// 4th: raw ptrs into m_store
   bool m_finalized{false};
 };
 

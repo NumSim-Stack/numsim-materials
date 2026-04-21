@@ -52,6 +52,11 @@ public:
     return para;
   }
 
+  /// Accumulates the increment into the specified tensor component.
+  /// NOTE: This mutates via +=, not assignment. Calling update() multiple
+  /// times per timestep (e.g., via update_property) will double-increment.
+  /// The numerical_diff_checker handles this by excluding the stepper's
+  /// callback during perturbation.
   void update() override {
     if constexpr (Rank == 1){
       m_tensor(m_indices[0]) += m_inc;

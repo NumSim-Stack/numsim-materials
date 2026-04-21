@@ -40,11 +40,21 @@ public:
   }
 
   /// Update a single property and all its upstream dependencies.
-  void update_property(const std::string& material, const std::string& property) {
-    auto key = material + "::" + property;
-    auto subgraph = collect_upstream(key);
+  /// Properties in @p exclude are skipped during evaluation.
+  void update_property(const std::string& material, const std::string& property,
+                       const std::unordered_set<const property_base*>& exclude = {}) {
+    auto* target = find_in_graph(material, property);
+    if (!target) return;
+    update_property(target, exclude);
+  }
+
+  /// Update a single property (by pointer) and all its upstream dependencies.
+  void update_property(const property_base* target,
+                       const std::unordered_set<const property_base*>& exclude = {}) {
+    auto subgraph = collect_upstream(target);
     for (auto* prop : m_property_execution_order) {
-      if (subgraph.contains(prop) && prop->traits().update)
+      if (subgraph.contains(prop) && prop->traits().update
+          && !exclude.contains(prop))
         prop->traits().update();
     }
   }
@@ -117,28 +127,36 @@ private:
     return id.owner + "::" + id.name;
   }
 
+  /// Lookup a property in the pointer-based graph (no string allocation).
+  property_base* find_in_graph(const std::string& material, const std::string& property) const {
+    auto key = material + "::" + property;
+    auto it = m_key_to_prop.find(key);
+    return it != m_key_to_prop.end() ? it->second : nullptr;
+  }
+
   void compute_execution_order(property_handler& properties,
                                 const std::vector<material_interface_type*>& interfaces) {
+    // --- Build phase uses strings (runs once at finalize) ---
     std::unordered_map<std::string, property_base*> key_to_prop;
     std::unordered_map<std::string, int> indegree;
-    std::unordered_map<std::string, std::vector<std::string>> edges;
-    std::unordered_map<std::string, std::vector<std::string>> reverse_edges;
+    std::unordered_map<std::string, std::vector<std::string>> str_edges;
+    std::unordered_map<std::string, std::vector<std::string>> str_reverse_edges;
 
     for (auto& [owner, props] : properties.data()) {
       for (auto& [name, prop] : props) {
         auto key = owner + "::" + name;
         key_to_prop[key] = prop.get();
         indegree.try_emplace(key, 0);
-        edges.try_emplace(key);
-        reverse_edges.try_emplace(key);
+        str_edges.try_emplace(key);
+        str_reverse_edges.try_emplace(key);
       }
     }
 
     auto add_edge = [&](const std::string& from, const std::string& to) {
-      auto& adj = edges[from];
+      auto& adj = str_edges[from];
       if (std::find(adj.begin(), adj.end(), to) == adj.end()) {
         adj.push_back(to);
-        reverse_edges[to].push_back(from);
+        str_reverse_edges[to].push_back(from);
         indegree[to]++;
       }
     };
@@ -174,6 +192,7 @@ private:
       }
     }
 
+    // --- Topological sort ---
     std::queue<std::string> ready;
     for (auto& [key, deg] : indegree)
       if (deg == 0) ready.push(key);
@@ -195,7 +214,7 @@ private:
         m_execution_order.push_back(by_name[mat_name]);
       }
 
-      for (auto& next : edges[key])
+      for (auto& next : str_edges[key])
         if (--indegree[next] == 0)
           ready.push(next);
     }
@@ -204,8 +223,15 @@ private:
       throw std::runtime_error("Circular dependency in property graph "
                                "(considering Global edges only)");
 
-    m_reverse_edges = std::move(reverse_edges);
+    // --- Convert to pointer-based structures for runtime ---
     m_key_to_prop = std::move(key_to_prop);
+    m_reverse_edges.clear();
+    for (auto& [key, upstreams] : str_reverse_edges) {
+      auto* prop = m_key_to_prop[key];
+      auto& ptr_upstreams = m_reverse_edges[prop];
+      for (auto& up_key : upstreams)
+        ptr_upstreams.push_back(m_key_to_prop[up_key]);
+    }
   }
 
   void collect_history_properties(property_handler& properties) {
@@ -216,21 +242,22 @@ private:
           m_history_properties.push_back(prop.get());
   }
 
-  std::unordered_set<property_base*> collect_upstream(const std::string& key) const {
+  /// Collect all upstream dependencies of a property (pointer-based, no string allocation).
+  std::unordered_set<property_base*> collect_upstream(const property_base* target) const {
     std::unordered_set<property_base*> result;
-    std::queue<std::string> queue;
-    std::unordered_set<std::string> visited;
+    std::queue<const property_base*> queue;
+    std::unordered_set<const property_base*> visited;
 
-    queue.push(key);
-    visited.insert(key);
+    queue.push(target);
+    visited.insert(target);
 
     while (!queue.empty()) {
-      auto current = queue.front();
+      auto* current = queue.front();
       queue.pop();
-      if (auto it = m_key_to_prop.find(current); it != m_key_to_prop.end())
-        result.insert(it->second);
-      if (auto rit = m_reverse_edges.find(current); rit != m_reverse_edges.end())
-        for (auto& upstream : rit->second)
+      result.insert(const_cast<property_base*>(current));
+      if (auto rit = m_reverse_edges.find(const_cast<property_base*>(current));
+          rit != m_reverse_edges.end())
+        for (auto* upstream : rit->second)
           if (!visited.contains(upstream)) {
             visited.insert(upstream);
             queue.push(upstream);
@@ -241,8 +268,8 @@ private:
 
   std::vector<material_interface_type*> m_execution_order;
   std::vector<property_base*> m_property_execution_order;
-  std::unordered_map<std::string, property_base*> m_key_to_prop;
-  std::unordered_map<std::string, std::vector<std::string>> m_reverse_edges;
+  std::unordered_map<std::string, property_base*> m_key_to_prop;  // for string-based find
+  std::unordered_map<property_base*, std::vector<property_base*>> m_reverse_edges;  // pointer-based
   std::vector<property_base*> m_history_properties;
 };
 
