@@ -18,7 +18,7 @@ set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)  # disable numsim-core's own example
 FetchContent_Declare(
   numsim-core
   GIT_REPOSITORY https://github.com/NumSim-Stack/numsim-core
-  GIT_TAG origin/main
+  GIT_TAG main
 )
 # To use a local numsim-core checkout, configure with:
 #   -DFETCHCONTENT_SOURCE_DIR_NUMSIM-CORE=/path/to/numsim-core
@@ -30,7 +30,7 @@ if(NOT tmech_FOUND)
   FetchContent_Declare(
     tmech
     GIT_REPOSITORY https://github.com/petlenz/tmech
-    GIT_TAG origin/main
+    GIT_TAG main
   )
   set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
   FetchContent_MakeAvailable(tmech)
