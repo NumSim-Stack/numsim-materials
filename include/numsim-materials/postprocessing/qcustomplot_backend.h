@@ -61,6 +61,11 @@ public:
 
   void refresh() override {
     m_plot->rescaleAxes();
+    // Force lower bounds to zero
+    if (m_plot->xAxis->range().lower > 0)
+      m_plot->xAxis->setRangeLower(0);
+    if (m_plot->yAxis->range().lower > 0)
+      m_plot->yAxis->setRangeLower(0);
     m_plot->replot();
     if (QApplication::instance()) {
       QApplication::processEvents();
@@ -70,8 +75,13 @@ public:
   }
 
   /// Set delay between frames in milliseconds (default 0).
-  /// Use ~20-50ms for visible animation.
   void set_frame_delay(int ms) noexcept { m_frame_delay_ms = ms; }
+
+  /// Set axis labels.
+  void set_labels(const std::string& x_label, const std::string& y_label) {
+    m_plot->xAxis->setLabel(QString::fromStdString(x_label));
+    m_plot->yAxis->setLabel(QString::fromStdString(y_label));
+  }
 
   /// Save the current plot to a PNG file.
   bool save_png(const std::string& filename, int width = 800, int height = 500) {
