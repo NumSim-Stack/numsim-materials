@@ -1,7 +1,6 @@
 #include <gtest/gtest.h>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_context.h"
-#include "numsim-materials/core/history_property.h"
 #include "numsim-materials/materials/tensor_component_stepper.h"
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/materials/scalar_stepper.h"
@@ -110,9 +109,7 @@ TEST(ScalarWeight, IdentityWeight) {
 
 // --- Curing simulation with backward Euler ---
 
-// TODO: scalar_stepper uses history_property — get_mutable<T> fails because
-// it finds a history_property, not a property<T>. Need a set_initial_value API.
-TEST(CuringSimulation, DISABLED_ConvergesToFullCure) {
+TEST(CuringSimulation, ConvergesToFullCure) {
   ctx_type ctx;
   param_type p;
 
@@ -149,11 +146,7 @@ TEST(CuringSimulation, DISABLED_ConvergesToFullCure) {
   ctx.finalize();
 
   // Initialize temperature to 80°C (353 K)
-  // scalar_stepper uses history_property — set initial value before first update
-  auto* temp_prop = ctx.find_property("temperature", "state");
-  auto* temp_hist = dynamic_cast<numsim_core::history_property<T, numsim::materials::property_traits>*>(temp_prop);
-  temp_hist->old_value() = T{353};
-  temp_hist->new_value() = T{353};
+  ctx.get_mutable<T>("temperature", "state") = T{353};
 
   T curing = 0;
   for (int i = 0; i < 20; ++i) {

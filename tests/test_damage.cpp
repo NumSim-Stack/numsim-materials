@@ -188,10 +188,9 @@ TEST_F(TangentCheckerTest, ExclusionWorks) {
       << "Stepper should NOT have run when excluded";
 }
 
-// TODO: Damage-regime tangent checker fails in GTest binary but passes in
-// test_material (same source, same compiler, same tmech). State values are
-// correct — the numerical differentiation produces different results.
-// Needs debugger investigation.
+// TODO: Passes in standalone test_material binary but fails in GTest.
+// Elastic steps match (1e-12), damage steps show ~100% error.
+// The get()/get_mutable() history fix didn't resolve it.
 TEST_F(TangentCheckerTest, DISABLED_MachinePrecisionAllSteps) {
   T max_rel_error = 0;
   for (int i = 0; i < 15; ++i) {

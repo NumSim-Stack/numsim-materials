@@ -18,7 +18,7 @@ set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)  # disable numsim-core's own example
 FetchContent_Declare(
   numsim-core
   GIT_REPOSITORY https://github.com/NumSim-Stack/numsim-core
-  GIT_TAG origin/feature/property-graph-and-factory
+  GIT_TAG origin/main
 )
 # To use a local numsim-core checkout, configure with:
 #   -DFETCHCONTENT_SOURCE_DIR_NUMSIM-CORE=/path/to/numsim-core
