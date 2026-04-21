@@ -48,7 +48,6 @@ public:
   }
 
   const auto& get_property_registry() const { return m_property_handler; }
-  auto& get_property_registry_mutable() { return m_property_handler; }
 
   void wire_inputs() {
     for (auto& input : m_typed_inputs) {
