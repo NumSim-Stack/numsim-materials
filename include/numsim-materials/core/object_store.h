@@ -21,8 +21,10 @@ public:
   using parameter_handler = typename Traits::ParameterHandler;
   using material_interface_type = material_interface<Traits>;
 
+  using input_parameter_controller = typename Traits::InputParameterController;
   using factory_type = numsim_core::object_registry<
-      material_interface_type, parameter_handler, property_handler, material_handler>;
+      material_interface_type, input_parameter_controller,
+      parameter_handler, property_handler, material_handler>;
 
   object_store() = default;
   object_store(const object_store&) = delete;
