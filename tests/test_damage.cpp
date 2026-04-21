@@ -191,6 +191,10 @@ TEST_F(TangentCheckerTest, ExclusionWorks) {
 // TODO: Passes in standalone test_material binary but fails in GTest.
 // Elastic steps match (1e-12), damage steps show ~100% error.
 // The get()/get_mutable() history fix didn't resolve it.
+// TODO: tmech::num_diff_sym_central produces transposed results for the
+// damage tangent in this GTest binary but works correctly in test_material.
+// Same source, same compiler, same tmech headers. Needs tmech-level debugging.
+// Non-symmetric num_diff_central produces correct results for all steps.
 TEST_F(TangentCheckerTest, DISABLED_MachinePrecisionAllSteps) {
   T max_rel_error = 0;
   for (int i = 0; i < 15; ++i) {
