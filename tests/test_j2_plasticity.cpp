@@ -6,9 +6,6 @@
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/materials/linear_isotropic_hardening.h"
 #include "numsim-materials/materials/small_strain_plasticity.h"
-#include "numsim-materials/materials/j2_constitutive_law.h"
-#include "numsim-materials/materials/plasticity_integrator.h"
-#include "numsim-materials/materials/rk_plasticity.h"
 #include "numsim-materials/solvers/backward_euler.h"
 #include "numsim-materials/solvers/butcher_tableau.h"
 #include "numsim-materials/postprocessing/numerical_diff_checker.h"
@@ -209,91 +206,7 @@ TEST_F(J2TangentTest, ConsistentTangentAllSteps) {
       << "Consistent tangent should match numerical derivative";
 }
 
-// --- Decomposed plasticity: j2_constitutive_law + plasticity_integrator ---
-
-class DecomposedJ2TangentTest : public ::testing::Test {
-protected:
-  void SetUp() override {
-    param_type p;
-
-    p.clear();
-    p.insert<std::string>("name", "stepper");
-    p.insert<T>("increment", T{0.05});
-    p.insert<std::vector<std::size_t>>("indices", {0, 0});
-    ctx.create<numsim::materials::tensor_component_stepper<2, policy>>(p);
-
-    p.clear();
-    p.insert<std::string>("name", "elastic");
-    p.insert<std::string>("strain_producer_name", "stepper");
-    p.insert<T>("K", T{166.67});
-    p.insert<T>("G", T{76.92});
-    ctx.create<numsim::materials::linear_elasticity<policy>>(p);
-
-    // Solver (direct-call mode — no "function" parameter)
-    p.clear();
-    p.insert<std::string>("name", "solver");
-    ctx.create<numsim::materials::backward_euler<policy>>(p);
-
-    // Integrator — owns history, drives solver
-    p.clear();
-    p.insert<std::string>("name", "j2");
-    p.insert<std::string>("law_source", "law");
-    p.insert<std::string>("elastic_source", "elastic");
-    p.insert<std::string>("solver_source", "solver");
-    p.insert<T>("G", T{76.92});
-    ctx.create<numsim::materials::plasticity_integrator<policy>>(p);
-
-    // Hardening (reads α from integrator via Local)
-    p.clear();
-    p.insert<std::string>("name", "hardening");
-    p.insert<std::string>("source", "j2");
-    p.insert<T>("K", T{1000.0});
-    ctx.create<numsim::materials::linear_isotropic_hardening<policy>>(p);
-
-    // Constitutive law (reads ε_p, α from integrator via Local)
-    p.clear();
-    p.insert<std::string>("name", "law");
-    p.insert<std::string>("elastic_source", "elastic");
-    p.insert<std::string>("hardening_source", "hardening");
-    p.insert<std::string>("strain_source", "stepper");
-    p.insert<std::string>("integrator_source", "j2");
-    p.insert<T>("G", T{76.92});
-    p.insert<T>("sigma_0", T{50.0});
-    ctx.create<numsim::materials::j2_constitutive_law<policy>>(p);
-
-    // Tangent checker
-    p.clear();
-    p.insert<std::string>("name", "checker");
-    p.insert<ctx_type*>("context", &ctx);
-    p.insert<std::string>("output_source", "j2::stress");
-    p.insert<std::string>("input_source", "stepper::strain");
-    p.insert<std::string>("analytical_source", "j2::tangent");
-    p.insert<std::vector<std::string>>("history_sources",
-        {"j2::plastic_strain", "j2::equivalent_plastic_strain"});
-    p.insert<T>("epsilon", T{1e-7});
-    ctx.create<numsim::materials::tangent_checker<policy>>(p);
-
-    ctx.finalize();
-  }
-
-  ctx_type ctx;
-};
-
-TEST_F(DecomposedJ2TangentTest, MachinePrecisionAllSteps) {
-  T max_rel_error = 0;
-  for (int i = 0; i < 20; ++i) {
-    ctx.update();
-    auto rel = ctx.get<T>("checker", "rel_error");
-    auto alpha = ctx.get<T>("j2", "equivalent_plastic_strain");
-    std::println("  decomposed step {:2d}: rel={:.2e} alpha={:.4e}", i, rel, alpha);
-    if (rel > max_rel_error) max_rel_error = rel;
-    ctx.commit();
-  }
-  EXPECT_LT(max_rel_error, 1e-6)
-      << "Decomposed tangent should match monolithic precision";
-}
-
-// --- RK plasticity: multi-stage return mapping ---
+// --- RK plasticity: multi-stage return mapping via tableau parameter ---
 
 class RKPlasticityTest : public ::testing::Test {
 protected:
@@ -328,7 +241,7 @@ protected:
     p.insert<T>("G", T{76.92});
     p.insert<T>("sigma_0", T{50.0});
     p.insert<const numsim::materials::butcher_tableau*>("tableau", &m_tab);
-    ctx.create<numsim::materials::j2_rk_plasticity<policy>>(p);
+    ctx.create<numsim::materials::j2_plasticity<policy>>(p);
 
     p.clear();
     p.insert<std::string>("name", "checker");

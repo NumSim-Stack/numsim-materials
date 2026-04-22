@@ -4,9 +4,7 @@
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/core/history_property.h"
 #include "numsim-materials/solvers/butcher_tableau.h"
-#include "numsim-materials/solvers/explicit_rk_integrator.h"
-#include "numsim-materials/solvers/dirk_integrator.h"
-#include "numsim-materials/solvers/implicit_rk_integrator.h"
+#include "numsim-materials/solvers/rk_integrator.h"
 #include "numsim-materials/materials/scalar_stepper.h"
 #include "numsim-materials/materials/curing_rate.h"
 
@@ -99,18 +97,18 @@ const T exact = std::exp(-1.0);  // y(1) = e^(-1) ≈ 0.367879...
 
 // --- Explicit RK tests ---
 
-using ERK = numsim::materials::explicit_rk_integrator<policy>;
+using RK = numsim::materials::rk_integrator<policy>;
 
 TEST(ExplicitRK, ForwardEulerConverges) {
   auto tab = numsim::materials::forward_euler();
-  auto y = run_decay<ERK>(100, tab);
+  auto y = run_decay<RK>(100, tab);
   EXPECT_NEAR(y, exact, 0.01) << "Forward Euler with 100 steps should be close";
 }
 
 TEST(ExplicitRK, ForwardEulerOrder1) {
   auto tab = numsim::materials::forward_euler();
-  auto err_10 = std::abs(run_decay<ERK>(10, tab) - exact);
-  auto err_20 = std::abs(run_decay<ERK>(20, tab) - exact);
+  auto err_10 = std::abs(run_decay<RK>(10, tab) - exact);
+  auto err_20 = std::abs(run_decay<RK>(20, tab) - exact);
   auto ratio = err_10 / err_20;
   std::println("  Forward Euler: err_10={:.6e} err_20={:.6e} ratio={:.2f} (expect ~2)",
                err_10, err_20, ratio);
@@ -119,8 +117,8 @@ TEST(ExplicitRK, ForwardEulerOrder1) {
 
 TEST(ExplicitRK, RK4Order4) {
   auto tab = numsim::materials::rk4();
-  auto err_10 = std::abs(run_decay<ERK>(10, tab) - exact);
-  auto err_20 = std::abs(run_decay<ERK>(20, tab) - exact);
+  auto err_10 = std::abs(run_decay<RK>(10, tab) - exact);
+  auto err_20 = std::abs(run_decay<RK>(20, tab) - exact);
   auto ratio = err_10 / err_20;
   std::println("  RK4: err_10={:.6e} err_20={:.6e} ratio={:.2f} (expect ~16)",
                err_10, err_20, ratio);
@@ -129,24 +127,23 @@ TEST(ExplicitRK, RK4Order4) {
 
 TEST(ExplicitRK, RK4HighAccuracy) {
   auto tab = numsim::materials::rk4();
-  auto y = run_decay<ERK>(100, tab);
+  auto y = run_decay<RK>(100, tab);
   EXPECT_NEAR(y, exact, 1e-10) << "RK4 with 100 steps should be very accurate";
 }
 
 // --- DIRK tests ---
 
-using DIRK = numsim::materials::dirk_integrator<policy>;
 
 TEST(DIRK, ImplicitEulerConverges) {
   auto tab = numsim::materials::implicit_euler();
-  auto y = run_decay<DIRK>(100, tab);
+  auto y = run_decay<RK>(100, tab);
   EXPECT_NEAR(y, exact, 0.01) << "Implicit Euler with 100 steps";
 }
 
 TEST(DIRK, ImplicitMidpointOrder2) {
   auto tab = numsim::materials::implicit_midpoint();
-  auto err_10 = std::abs(run_decay<DIRK>(10, tab) - exact);
-  auto err_20 = std::abs(run_decay<DIRK>(20, tab) - exact);
+  auto err_10 = std::abs(run_decay<RK>(10, tab) - exact);
+  auto err_20 = std::abs(run_decay<RK>(20, tab) - exact);
   auto ratio = err_10 / err_20;
   std::println("  Implicit midpoint: err_10={:.6e} err_20={:.6e} ratio={:.2f} (expect ~4)",
                err_10, err_20, ratio);
@@ -155,8 +152,8 @@ TEST(DIRK, ImplicitMidpointOrder2) {
 
 TEST(DIRK, CrankNicolsonOrder2) {
   auto tab = numsim::materials::crank_nicolson();
-  auto err_10 = std::abs(run_decay<DIRK>(10, tab) - exact);
-  auto err_20 = std::abs(run_decay<DIRK>(20, tab) - exact);
+  auto err_10 = std::abs(run_decay<RK>(10, tab) - exact);
+  auto err_20 = std::abs(run_decay<RK>(20, tab) - exact);
   auto ratio = err_10 / err_20;
   std::println("  Crank-Nicolson: err_10={:.6e} err_20={:.6e} ratio={:.2f} (expect ~4)",
                err_10, err_20, ratio);
@@ -165,12 +162,11 @@ TEST(DIRK, CrankNicolsonOrder2) {
 
 // --- Fully implicit RK tests ---
 
-using IRK = numsim::materials::implicit_rk_integrator<policy>;
 
 TEST(ImplicitRK, GaussLegendreOrder4) {
   auto tab = numsim::materials::gauss_legendre_4();
-  auto err_10 = std::abs(run_decay<IRK>(10, tab) - exact);
-  auto err_20 = std::abs(run_decay<IRK>(20, tab) - exact);
+  auto err_10 = std::abs(run_decay<RK>(10, tab) - exact);
+  auto err_20 = std::abs(run_decay<RK>(20, tab) - exact);
   auto ratio = err_10 / err_20;
   std::println("  Gauss-Legendre: err_10={:.6e} err_20={:.6e} ratio={:.2f} (expect ~16)",
                err_10, err_20, ratio);
@@ -179,7 +175,7 @@ TEST(ImplicitRK, GaussLegendreOrder4) {
 
 TEST(ImplicitRK, GaussLegendreHighAccuracy) {
   auto tab = numsim::materials::gauss_legendre_4();
-  auto y = run_decay<IRK>(50, tab);
+  auto y = run_decay<RK>(50, tab);
   EXPECT_NEAR(y, exact, 1e-10) << "Gauss-Legendre with 50 steps";
 }
 
@@ -241,7 +237,7 @@ T run_curing(int N, const numsim::materials::butcher_tableau& tab, T step_size =
 
 TEST(CuringRK, ExplicitRK4ConvergesToFullCure) {
   auto tab = numsim::materials::rk4();
-  auto z = run_curing<ERK>(50, tab);
+  auto z = run_curing<RK>(50, tab);
   std::println("  RK4 curing (500s): z = {:.6f}", z);
   EXPECT_GT(z, 0.90) << "RK4 should approach full cure";
 }
@@ -249,14 +245,14 @@ TEST(CuringRK, ExplicitRK4ConvergesToFullCure) {
 TEST(CuringRK, DIRKImplicitMidpointConverges) {
   auto tab = numsim::materials::implicit_midpoint();
   // Smaller step for implicit — stiff initial phase needs h < 1/df_dy
-  auto z = run_curing<DIRK>(500, tab, T{1});  // h=1, 500 steps
+  auto z = run_curing<RK>(500, tab, T{1});  // h=1, 500 steps
   std::println("  Implicit midpoint curing (500s, h=1): z = {:.6f}", z);
   EXPECT_GT(z, 0.90) << "Implicit midpoint should approach full cure";
 }
 
 TEST(CuringRK, FullyImplicitGaussLegendreConverges) {
   auto tab = numsim::materials::gauss_legendre_4();
-  auto z = run_curing<IRK>(500, tab, T{1});  // h=1, 500 steps
+  auto z = run_curing<RK>(500, tab, T{1});  // h=1, 500 steps
   std::println("  Gauss-Legendre curing (500s, h=1): z = {:.6f}", z);
   EXPECT_GT(z, 0.90) << "Gauss-Legendre should approach full cure";
 }
