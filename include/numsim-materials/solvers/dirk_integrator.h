@@ -2,7 +2,7 @@
 #define NUMSIM_MATERIALS_DIRK_INTEGRATOR_H
 
 #include <cmath>
-#include <vector>
+#include <Eigen/Dense>
 #include "numsim-materials/core/material_base.h"
 #include "numsim-materials/solvers/butcher_tableau.h"
 
@@ -61,45 +61,35 @@ public:
 
   void compute() {
     const auto& tab = *m_tableau;
+    const int s = tab.stages();
     const auto y_n = m_state.old_value();
-    std::vector<value_type> k(tab.stages, value_type{0});
+    Eigen::VectorXd k = Eigen::VectorXd::Zero(s);
 
-    for (int i = 0; i < tab.stages; ++i) {
-      // Explicit part: Σ_{j<i} a[i][j] * k[j]
-      auto explicit_sum = value_type{0};
-      for (int j = 0; j < i; ++j)
-        explicit_sum += tab.a[i][j] * k[j];
+    for (int i = 0; i < s; ++i) {
+      auto explicit_sum = tab.a.row(i).head(i).dot(k.head(i));
 
-      if (std::abs(tab.a[i][i]) < 1e-30) {
+      if (std::abs(tab.a(i, i)) < 1e-30) {
         // Explicit stage
-        auto y_trial = y_n + m_h * explicit_sum;
-        m_state.new_value() = y_trial;
+        m_state.new_value() = y_n + m_h * explicit_sum;
         m_rate.update_source();
         k[i] = m_rate.get();
       } else {
         // Implicit stage: solve k_i = f(y_n + h*(explicit_sum + a[i][i]*k_i))
         k[i] = value_type{0};
         for (int iter = 0; iter < m_max_iter; ++iter) {
-          auto y_trial = y_n + m_h * (explicit_sum + tab.a[i][i] * k[i]);
-          m_state.new_value() = y_trial;
+          m_state.new_value() = y_n + m_h * (explicit_sum + tab.a(i, i) * k[i]);
           m_rate.update_source();
 
-          auto f_val = m_rate.get();
-          auto residual = k[i] - f_val;
+          auto residual = k[i] - m_rate.get();
           if (std::abs(residual) < m_tol) break;
 
-          auto df_dy = m_drate.get();
-          auto jacobian = value_type{1} - m_h * tab.a[i][i] * df_dy;
+          auto jacobian = value_type{1} - m_h * tab.a(i, i) * m_drate.get();
           k[i] -= residual / jacobian;
         }
       }
     }
 
-    auto y_new = y_n;
-    for (int i = 0; i < tab.stages; ++i)
-      y_new += m_h * tab.b[i] * k[i];
-
-    m_state.new_value() = y_new;
+    m_state.new_value() = y_n + m_h * tab.b.dot(k);
   }
 
 private:

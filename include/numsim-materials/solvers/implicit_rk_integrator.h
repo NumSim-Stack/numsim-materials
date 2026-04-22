@@ -54,23 +54,17 @@ public:
 
   void compute() {
     const auto& tab = *m_tableau;
-    const int s = tab.stages;
+    const int s = tab.stages();
     const auto y_n = m_state.old_value();
 
     Eigen::VectorXd k = Eigen::VectorXd::Zero(s);
 
-    // Newton iteration on the coupled system:
-    //   R_i(k) = k_i - f(y_n + h * Σ_j a[i][j] * k[j]) = 0
     for (int iter = 0; iter < m_max_iter; ++iter) {
       Eigen::VectorXd R(s);
       Eigen::VectorXd df_val(s);
 
       for (int i = 0; i < s; ++i) {
-        auto y_trial = y_n;
-        for (int j = 0; j < s; ++j)
-          y_trial += m_h * tab.a[i][j] * k[j];
-
-        m_state.new_value() = y_trial;
+        m_state.new_value() = y_n + m_h * tab.a.row(i).dot(k);
         m_rate.update_source();
         R[i] = k[i] - m_rate.get();
         df_val[i] = m_drate.get();
@@ -78,20 +72,14 @@ public:
 
       if (R.lpNorm<Eigen::Infinity>() < m_tol) break;
 
-      // J[i][m] = δ_im - h * a[i][m] * df_val[i]
-      Eigen::MatrixXd J = Eigen::MatrixXd::Identity(s, s);
-      for (int i = 0; i < s; ++i)
-        for (int m = 0; m < s; ++m)
-          J(i, m) -= m_h * tab.a[i][m] * df_val[i];
+      // J = I - h * diag(df_val) * A
+      Eigen::MatrixXd J = Eigen::MatrixXd::Identity(s, s)
+          - m_h * df_val.asDiagonal() * tab.a;
 
       k -= J.partialPivLu().solve(R);
     }
 
-    auto y_new = y_n;
-    for (int i = 0; i < s; ++i)
-      y_new += m_h * tab.b[i] * k[i];
-
-    m_state.new_value() = y_new;
+    m_state.new_value() = y_n + m_h * tab.b.dot(k);
   }
 
 private:

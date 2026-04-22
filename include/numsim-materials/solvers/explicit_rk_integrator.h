@@ -1,7 +1,7 @@
 #ifndef NUMSIM_MATERIALS_EXPLICIT_RK_INTEGRATOR_H
 #define NUMSIM_MATERIALS_EXPLICIT_RK_INTEGRATOR_H
 
-#include <vector>
+#include <Eigen/Dense>
 #include "numsim-materials/core/material_base.h"
 #include "numsim-materials/solvers/butcher_tableau.h"
 
@@ -51,26 +51,18 @@ public:
 
   void compute() {
     const auto& tab = *m_tableau;
+    const int s = tab.stages();
     const auto y_n = m_state.old_value();
-    std::vector<value_type> k(tab.stages);
+    Eigen::VectorXd k = Eigen::VectorXd::Zero(s);
 
-    for (int i = 0; i < tab.stages; ++i) {
-      // y_trial = y_n + h * Σ_{j<i} a[i][j] * k[j]
-      auto y_trial = y_n;
-      for (int j = 0; j < i; ++j)
-        y_trial += m_h * tab.a[i][j] * k[j];
-
+    for (int i = 0; i < s; ++i) {
+      auto y_trial = y_n + m_h * tab.a.row(i).head(i).dot(k.head(i));
       m_state.new_value() = y_trial;
       m_rate.update_source();
       k[i] = m_rate.get();
     }
 
-    // y_{n+1} = y_n + h * Σ_i b[i] * k[i]
-    auto y_new = y_n;
-    for (int i = 0; i < tab.stages; ++i)
-      y_new += m_h * tab.b[i] * k[i];
-
-    m_state.new_value() = y_new;
+    m_state.new_value() = y_n + m_h * tab.b.dot(k);
   }
 
 private:
