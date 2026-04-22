@@ -8,7 +8,9 @@
 #include "numsim-materials/materials/small_strain_plasticity.h"
 #include "numsim-materials/materials/j2_constitutive_law.h"
 #include "numsim-materials/materials/plasticity_integrator.h"
+#include "numsim-materials/materials/rk_plasticity.h"
 #include "numsim-materials/solvers/backward_euler.h"
+#include "numsim-materials/solvers/butcher_tableau.h"
 #include "numsim-materials/postprocessing/numerical_diff_checker.h"
 
 namespace {
@@ -289,6 +291,104 @@ TEST_F(DecomposedJ2TangentTest, MachinePrecisionAllSteps) {
   }
   EXPECT_LT(max_rel_error, 1e-6)
       << "Decomposed tangent should match monolithic precision";
+}
+
+// --- RK plasticity: multi-stage return mapping ---
+
+class RKPlasticityTest : public ::testing::Test {
+protected:
+  void setup_with_tableau(const numsim::materials::butcher_tableau& tab) {
+    m_tab = tab;
+    param_type p;
+
+    p.clear();
+    p.insert<std::string>("name", "stepper");
+    p.insert<T>("increment", T{0.05});
+    p.insert<std::vector<std::size_t>>("indices", {0, 0});
+    ctx.create<numsim::materials::tensor_component_stepper<2, policy>>(p);
+
+    p.clear();
+    p.insert<std::string>("name", "elastic");
+    p.insert<std::string>("strain_producer_name", "stepper");
+    p.insert<T>("K", T{166.67});
+    p.insert<T>("G", T{76.92});
+    ctx.create<numsim::materials::linear_elasticity<policy>>(p);
+
+    p.clear();
+    p.insert<std::string>("name", "hardening");
+    p.insert<std::string>("source", "j2");
+    p.insert<T>("K", T{1000.0});
+    ctx.create<numsim::materials::linear_isotropic_hardening<policy>>(p);
+
+    p.clear();
+    p.insert<std::string>("name", "j2");
+    p.insert<std::string>("elastic_source", "elastic");
+    p.insert<std::string>("hardening_source", "hardening");
+    p.insert<std::string>("strain_source", "stepper");
+    p.insert<T>("G", T{76.92});
+    p.insert<T>("sigma_0", T{50.0});
+    p.insert<const numsim::materials::butcher_tableau*>("tableau", &m_tab);
+    ctx.create<numsim::materials::j2_rk_plasticity<policy>>(p);
+
+    p.clear();
+    p.insert<std::string>("name", "checker");
+    p.insert<ctx_type*>("context", &ctx);
+    p.insert<std::string>("output_source", "j2::stress");
+    p.insert<std::string>("input_source", "stepper::strain");
+    p.insert<std::string>("analytical_source", "j2::tangent");
+    p.insert<std::vector<std::string>>("history_sources",
+        {"j2::plastic_strain", "j2::equivalent_plastic_strain"});
+    p.insert<T>("epsilon", T{1e-7});
+    ctx.create<numsim::materials::tangent_checker<policy>>(p);
+
+    ctx.finalize();
+  }
+
+  ctx_type ctx;
+  numsim::materials::butcher_tableau m_tab;
+};
+
+TEST_F(RKPlasticityTest, ImplicitEulerMatchesMonolithic) {
+  setup_with_tableau(numsim::materials::implicit_euler());
+  T max_rel_error = 0;
+  for (int i = 0; i < 20; ++i) {
+    ctx.update();
+    auto rel = ctx.get<T>("checker", "rel_error");
+    auto alpha = ctx.get<T>("j2", "equivalent_plastic_strain");
+    std::println("  IE step {:2d}: rel={:.2e} alpha={:.4e}", i, rel, alpha);
+    if (rel > max_rel_error) max_rel_error = rel;
+    ctx.commit();
+  }
+  EXPECT_LT(max_rel_error, 0.1)
+      << "Implicit Euler RK should match monolithic J2";
+}
+
+TEST_F(RKPlasticityTest, SDIRK3TangentCheck) {
+  setup_with_tableau(numsim::materials::sdirk3());
+  T max_rel_error = 0;
+  for (int i = 0; i < 20; ++i) {
+    ctx.update();
+    auto rel = ctx.get<T>("checker", "rel_error");
+    auto alpha = ctx.get<T>("j2", "equivalent_plastic_strain");
+    std::println("  SDIRK3 step {:2d}: rel={:.2e} alpha={:.4e}", i, rel, alpha);
+    if (rel > max_rel_error) max_rel_error = rel;
+    ctx.commit();
+  }
+  EXPECT_LT(max_rel_error, 0.1)
+      << "SDIRK3 tangent should be consistent";
+}
+
+TEST_F(RKPlasticityTest, PlasticStrainAccumulates) {
+  setup_with_tableau(numsim::materials::implicit_euler());
+  T prev_alpha = 0;
+  for (int i = 0; i < 20; ++i) {
+    ctx.update();
+    auto alpha = ctx.get<T>("j2", "equivalent_plastic_strain");
+    EXPECT_GE(alpha, prev_alpha);
+    prev_alpha = alpha;
+    ctx.commit();
+  }
+  EXPECT_GT(prev_alpha, 0.0) << "Should accumulate plastic strain";
 }
 
 } // namespace
