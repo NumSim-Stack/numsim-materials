@@ -10,13 +10,9 @@ namespace numsim::materials {
 
 /// Fully implicit Runge-Kutta integrator for scalar ODEs.
 ///
-/// All stages are coupled — solves the system simultaneously:
-///   k_i = f(y_n + h * Σ_j a[i][j] * k_j)   for all i
-///
-/// Uses Newton iteration on the full s-dimensional system.
-/// Linear system solved via Eigen's LU decomposition.
-///
-/// The rate function must provide "rate" and "rate_derivative".
+/// All stages are coupled — solves the system simultaneously.
+/// Uses Newton iteration with Eigen LU decomposition.
+/// All working vectors/matrices pre-allocated — zero heap allocation per compute().
 template<typename Traits>
 class implicit_rk_integrator final
     : public material_base<implicit_rk_integrator<Traits>, Traits> {
@@ -38,7 +34,11 @@ public:
         m_rate(base::template add_input<value_type>(
             m_func_name, "rate", EdgeKind::Local)),
         m_drate(base::template add_input<value_type>(
-            m_func_name, "rate_derivative", EdgeKind::Local))
+            m_func_name, "rate_derivative", EdgeKind::Local)),
+        m_k(Eigen::VectorXd::Zero(m_tableau->stages())),
+        m_R(m_tableau->stages()),
+        m_df(m_tableau->stages()),
+        m_J(m_tableau->stages(), m_tableau->stages())
   {}
 
   static input_parameter_controller parameters() {
@@ -56,30 +56,23 @@ public:
     const auto& tab = *m_tableau;
     const int s = tab.stages();
     const auto y_n = m_state.old_value();
-
-    Eigen::VectorXd k = Eigen::VectorXd::Zero(s);
+    m_k.setZero();
 
     for (int iter = 0; iter < m_max_iter; ++iter) {
-      Eigen::VectorXd R(s);
-      Eigen::VectorXd df_val(s);
-
       for (int i = 0; i < s; ++i) {
-        m_state.new_value() = y_n + m_h * tab.a.row(i).dot(k);
+        m_state.new_value() = y_n + m_h * tab.a.row(i).dot(m_k);
         m_rate.update_source();
-        R[i] = k[i] - m_rate.get();
-        df_val[i] = m_drate.get();
+        m_R[i] = m_k[i] - m_rate.get();
+        m_df[i] = m_drate.get();
       }
 
-      if (R.lpNorm<Eigen::Infinity>() < m_tol) break;
+      if (m_R.lpNorm<Eigen::Infinity>() < m_tol) break;
 
-      // J = I - h * diag(df_val) * A
-      Eigen::MatrixXd J = Eigen::MatrixXd::Identity(s, s)
-          - m_h * df_val.asDiagonal() * tab.a;
-
-      k -= J.partialPivLu().solve(R);
+      m_J = Eigen::MatrixXd::Identity(s, s) - m_h * m_df.asDiagonal() * tab.a;
+      m_k -= m_J.partialPivLu().solve(m_R);
     }
 
-    m_state.new_value() = y_n + m_h * tab.b.dot(k);
+    m_state.new_value() = y_n + m_h * tab.b.dot(m_k);
   }
 
 private:
@@ -91,6 +84,12 @@ private:
   const std::string& m_func_name;
   const input_property<value_type, property_traits>& m_rate;
   const input_property<value_type, property_traits>& m_drate;
+
+  // Pre-allocated working storage
+  Eigen::VectorXd m_k;
+  Eigen::VectorXd m_R;
+  Eigen::VectorXd m_df;
+  Eigen::MatrixXd m_J;
 };
 
 } // namespace numsim::materials

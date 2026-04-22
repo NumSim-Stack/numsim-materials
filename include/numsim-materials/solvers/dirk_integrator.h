@@ -10,20 +10,9 @@ namespace numsim::materials {
 
 /// Diagonally Implicit Runge-Kutta (DIRK) integrator for scalar ODEs.
 ///
-/// Each stage with a[i][i] != 0 requires solving:
-///   k_i = f(y_n + h * (Σ_{j<i} a[i][j] * k[j] + a[i][i] * k_i))
-///
-/// Solved via Newton: residual = k_i - f(y_trial(k_i))
-///                    jacobian = 1 - h * a[i][i] * df/dy
-///
-/// The rate function must provide both "rate" (f) and "rate_derivative" (df/dy).
-///
-/// Outputs:
-///   "state" — scalar (history): integrated state y
-///
-/// Inputs (Local):
-///   function_source::rate            — f(y)
-///   function_source::rate_derivative — df/dy
+/// Each stage with a[i][i] != 0 requires a scalar Newton solve.
+/// The rate function must provide both "rate" and "rate_derivative".
+/// All working vectors pre-allocated — zero heap allocation per compute().
 template<typename Traits>
 class dirk_integrator final
     : public material_base<dirk_integrator<Traits>, Traits> {
@@ -45,7 +34,8 @@ public:
         m_rate(base::template add_input<value_type>(
             m_func_name, "rate", EdgeKind::Local)),
         m_drate(base::template add_input<value_type>(
-            m_func_name, "rate_derivative", EdgeKind::Local))
+            m_func_name, "rate_derivative", EdgeKind::Local)),
+        m_k(Eigen::VectorXd::Zero(m_tableau->stages()))
   {}
 
   static input_parameter_controller parameters() {
@@ -63,33 +53,31 @@ public:
     const auto& tab = *m_tableau;
     const int s = tab.stages();
     const auto y_n = m_state.old_value();
-    Eigen::VectorXd k = Eigen::VectorXd::Zero(s);
+    m_k.setZero();
 
     for (int i = 0; i < s; ++i) {
-      auto explicit_sum = tab.a.row(i).head(i).dot(k.head(i));
+      auto explicit_sum = tab.a.row(i).head(i).dot(m_k.head(i));
 
       if (std::abs(tab.a(i, i)) < 1e-30) {
-        // Explicit stage
         m_state.new_value() = y_n + m_h * explicit_sum;
         m_rate.update_source();
-        k[i] = m_rate.get();
+        m_k[i] = m_rate.get();
       } else {
-        // Implicit stage: solve k_i = f(y_n + h*(explicit_sum + a[i][i]*k_i))
-        k[i] = value_type{0};
+        m_k[i] = value_type{0};
         for (int iter = 0; iter < m_max_iter; ++iter) {
-          m_state.new_value() = y_n + m_h * (explicit_sum + tab.a(i, i) * k[i]);
+          m_state.new_value() = y_n + m_h * (explicit_sum + tab.a(i, i) * m_k[i]);
           m_rate.update_source();
 
-          auto residual = k[i] - m_rate.get();
+          auto residual = m_k[i] - m_rate.get();
           if (std::abs(residual) < m_tol) break;
 
           auto jacobian = value_type{1} - m_h * tab.a(i, i) * m_drate.get();
-          k[i] -= residual / jacobian;
+          m_k[i] -= residual / jacobian;
         }
       }
     }
 
-    m_state.new_value() = y_n + m_h * tab.b.dot(k);
+    m_state.new_value() = y_n + m_h * tab.b.dot(m_k);
   }
 
 private:
@@ -101,6 +89,7 @@ private:
   const std::string& m_func_name;
   const input_property<value_type, property_traits>& m_rate;
   const input_property<value_type, property_traits>& m_drate;
+  Eigen::VectorXd m_k;
 };
 
 } // namespace numsim::materials

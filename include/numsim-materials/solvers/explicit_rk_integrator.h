@@ -11,17 +11,7 @@ namespace numsim::materials {
 ///
 /// Integrates dy/dt = f(y) using an explicit Butcher tableau.
 /// The rate function is a separate material connected via Local edges.
-///
-/// Outputs:
-///   "state" — scalar (history): integrated state y
-///
-/// Inputs (Local):
-///   function_source::rate — f(y) from rate function material
-///
-/// Parameters:
-///   "function"   — name of rate function material
-///   "step_size"  — h (required)
-///   "tableau"    — butcher_tableau* passed via parameter handler
+/// All working vectors pre-allocated — zero heap allocation per compute().
 template<typename Traits>
 class explicit_rk_integrator final
     : public material_base<explicit_rk_integrator<Traits>, Traits> {
@@ -39,7 +29,8 @@ public:
         m_tableau(base::template get_parameter<const butcher_tableau*>("tableau")),
         m_func_name(base::template get_parameter<std::string>("function")),
         m_rate(base::template add_input<value_type>(
-            m_func_name, "rate", EdgeKind::Local))
+            m_func_name, "rate", EdgeKind::Local)),
+        m_k(Eigen::VectorXd::Zero(m_tableau->stages()))
   {}
 
   static input_parameter_controller parameters() {
@@ -53,16 +44,16 @@ public:
     const auto& tab = *m_tableau;
     const int s = tab.stages();
     const auto y_n = m_state.old_value();
-    Eigen::VectorXd k = Eigen::VectorXd::Zero(s);
+    m_k.setZero();
 
     for (int i = 0; i < s; ++i) {
-      auto y_trial = y_n + m_h * tab.a.row(i).head(i).dot(k.head(i));
+      auto y_trial = y_n + m_h * tab.a.row(i).head(i).dot(m_k.head(i));
       m_state.new_value() = y_trial;
       m_rate.update_source();
-      k[i] = m_rate.get();
+      m_k[i] = m_rate.get();
     }
 
-    m_state.new_value() = y_n + m_h * tab.b.dot(k);
+    m_state.new_value() = y_n + m_h * tab.b.dot(m_k);
   }
 
 private:
@@ -71,6 +62,7 @@ private:
   const butcher_tableau* m_tableau;
   const std::string& m_func_name;
   const input_property<value_type, property_traits>& m_rate;
+  Eigen::VectorXd m_k;
 };
 
 } // namespace numsim::materials
