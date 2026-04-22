@@ -6,6 +6,7 @@
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/materials/linear_isotropic_hardening.h"
 #include "numsim-materials/materials/small_strain_plasticity.h"
+#include "numsim-materials/materials/rk_plasticity.h"
 #include "numsim-materials/solvers/backward_euler.h"
 #include "numsim-materials/solvers/butcher_tableau.h"
 #include "numsim-materials/postprocessing/numerical_diff_checker.h"
@@ -241,7 +242,7 @@ protected:
     p.insert<T>("G", T{76.92});
     p.insert<T>("sigma_0", T{50.0});
     p.insert<const numsim::materials::butcher_tableau*>("tableau", &m_tab);
-    ctx.create<numsim::materials::j2_plasticity<policy>>(p);
+    ctx.create<numsim::materials::j2_rk_plasticity<policy>>(p);
 
     p.clear();
     p.insert<std::string>("name", "checker");
