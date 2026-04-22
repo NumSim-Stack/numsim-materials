@@ -2,6 +2,7 @@
 #define NUMSIM_MATERIALS_DIRK_INTEGRATOR_H
 
 #include <cmath>
+#include <vector>
 #include <Eigen/Dense>
 #include "numsim-materials/core/material_base.h"
 #include "numsim-materials/solvers/butcher_tableau.h"
@@ -12,7 +13,8 @@ namespace numsim::materials {
 ///
 /// Each stage with a[i][i] != 0 requires a scalar Newton solve.
 /// The rate function must provide both "rate" and "rate_derivative".
-/// All working vectors pre-allocated — zero heap allocation per compute().
+/// Stage types (explicit/implicit) determined once at construction.
+/// All working vectors pre-allocated.
 template<typename Traits>
 class dirk_integrator final
     : public material_base<dirk_integrator<Traits>, Traits> {
@@ -36,7 +38,16 @@ public:
         m_drate(base::template add_input<value_type>(
             m_func_name, "rate_derivative", EdgeKind::Local)),
         m_k(Eigen::VectorXd::Zero(m_tableau->stages()))
-  {}
+  {
+    // Pre-compute stage properties — constant for the lifetime of this material
+    const int s = m_tableau->stages();
+    m_is_implicit.resize(s);
+    m_diag.resize(s);
+    for (int i = 0; i < s; ++i) {
+      m_diag[i] = m_tableau->a(i, i);
+      m_is_implicit[i] = std::abs(m_diag[i]) >= 1e-30;
+    }
+  }
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
@@ -58,20 +69,21 @@ public:
     for (int i = 0; i < s; ++i) {
       auto explicit_sum = tab.a.row(i).head(i).dot(m_k.head(i));
 
-      if (std::abs(tab.a(i, i)) < 1e-30) {
+      if (!m_is_implicit[i]) {
         m_state.new_value() = y_n + m_h * explicit_sum;
         m_rate.update_source();
         m_k[i] = m_rate.get();
       } else {
         m_k[i] = value_type{0};
+        const auto aii = m_diag[i];
         for (int iter = 0; iter < m_max_iter; ++iter) {
-          m_state.new_value() = y_n + m_h * (explicit_sum + tab.a(i, i) * m_k[i]);
+          m_state.new_value() = y_n + m_h * (explicit_sum + aii * m_k[i]);
           m_rate.update_source();
 
           auto residual = m_k[i] - m_rate.get();
           if (std::abs(residual) < m_tol) break;
 
-          auto jacobian = value_type{1} - m_h * tab.a(i, i) * m_drate.get();
+          auto jacobian = value_type{1} - m_h * aii * m_drate.get();
           m_k[i] -= residual / jacobian;
         }
       }
@@ -90,6 +102,10 @@ private:
   const input_property<value_type, property_traits>& m_rate;
   const input_property<value_type, property_traits>& m_drate;
   Eigen::VectorXd m_k;
+
+  // Pre-computed stage properties
+  std::vector<bool> m_is_implicit;
+  std::vector<double> m_diag;
 };
 
 } // namespace numsim::materials
