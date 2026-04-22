@@ -36,6 +36,20 @@ if(NOT tmech_FOUND)
   FetchContent_MakeAvailable(tmech)
 endif()
 
+# --- Dependencies (Eigen for linear algebra) ---
+find_package(Eigen3 QUIET)
+if(NOT Eigen3_FOUND)
+  FetchContent_Declare(
+    eigen
+    GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
+    GIT_TAG 3.4.0
+    GIT_SHALLOW TRUE
+  )
+  set(EIGEN_BUILD_DOC OFF CACHE BOOL "" FORCE)
+  set(EIGEN_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+  FetchContent_MakeAvailable(eigen)
+endif()
+
 # --- Header-only library ---
 add_library(${PROJECT_NAME} INTERFACE)
 add_library(${PROJECT_NAME}::${PROJECT_NAME} ALIAS ${PROJECT_NAME})
@@ -58,6 +72,16 @@ if(TARGET tmech)
   endif()
 elseif(tmech_FOUND)
   target_link_libraries(${PROJECT_NAME} INTERFACE tmech::tmech)
+endif()
+
+# Eigen — header-only, same pattern
+if(TARGET Eigen3::Eigen)
+  target_link_libraries(${PROJECT_NAME} INTERFACE Eigen3::Eigen)
+elseif(TARGET eigen)
+  get_target_property(_eigen_inc eigen INTERFACE_INCLUDE_DIRECTORIES)
+  if(_eigen_inc)
+    target_include_directories(${PROJECT_NAME} INTERFACE ${_eigen_inc})
+  endif()
 endif()
 
 # Force C++23 globally — numsim-core headers use <print>/std::println
