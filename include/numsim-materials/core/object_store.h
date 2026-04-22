@@ -59,8 +59,8 @@ public:
   }
 
   /// Find by name.
-  material_interface_type* find(const std::string& name) const noexcept {
-    auto it = m_by_name.find(name);
+  material_interface_type* find(std::string_view name) const noexcept {
+    auto it = m_by_name.find(std::string(name));
     return it != m_by_name.end() ? it->second : nullptr;
   }
 

@@ -36,7 +36,7 @@ public:
         m_property_handler(prop_handler),
         m_name(m_parameter_handler.template get<std::string>("name")) {}
 
-  virtual ~material_interface() {}
+  virtual ~material_interface() = default;
   virtual void update() {}
 
   const std::string& name() const noexcept { return m_name; }
@@ -67,12 +67,23 @@ public:
   }
 
   /// Wire all material references. Called at finalize() before wire_inputs().
+  /// Collects ALL missing materials and reports them in one error.
   void wire_materials(material_handler& handler) {
+    std::vector<std::string> missing;
     for (auto& ref : m_material_refs) {
-      auto& any_ref = handler.get(ref->target_name());
-      auto& mat = std::any_cast<
-          std::reference_wrapper<material_interface> const&>(any_ref).get();
-      ref->wire(mat);
+      try {
+        auto& any_ref = handler.get(ref->target_name());
+        auto& mat = std::any_cast<
+            std::reference_wrapper<material_interface> const&>(any_ref).get();
+        ref->wire(mat);
+      } catch (...) {
+        missing.push_back(ref->target_name());
+      }
+    }
+    if (!missing.empty()) {
+      std::string msg = "wire_materials(): material '" + m_name + "' references missing materials:";
+      for (auto& name : missing) msg += " '" + name + "'";
+      throw std::runtime_error(msg);
     }
   }
 

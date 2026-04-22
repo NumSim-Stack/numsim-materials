@@ -189,7 +189,7 @@ void json_to_parameters(
 
   adapter::for_each_key(json, [&](const std::string& key) {
     if (key != "type" && !schema_keys.contains(key))
-      std::println("  warning: unknown parameter '{}' in JSON (not in schema)", key);
+      std::println(stderr, "  warning: unknown parameter '{}' in JSON (not in schema)", key);
   });
 
   // Read + insert + validate in one call

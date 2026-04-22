@@ -102,7 +102,7 @@ TEST_F(J2PlasticityTest, StressDoesNotExceedYieldSurface) {
     auto yield_stress = sigma_0 + H_mod * alpha;
 
     // σ_eq should not exceed σ_0 + H(α) (within tolerance)
-    EXPECT_LE(sig_eq, yield_stress + T{10.0})
+    EXPECT_LE(sig_eq, yield_stress + T{1.0})
         << "Step " << i << ": σ_eq=" << sig_eq << " > σ_y=" << yield_stress;
     ctx.commit();
   }

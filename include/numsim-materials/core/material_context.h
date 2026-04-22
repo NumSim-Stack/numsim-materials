@@ -1,5 +1,5 @@
-#ifndef MATERIAL_CONTEXT_H
-#define MATERIAL_CONTEXT_H
+#ifndef NUMSIM_MATERIALS_MATERIAL_CONTEXT_H
+#define NUMSIM_MATERIALS_MATERIAL_CONTEXT_H
 
 #include <fstream>
 #include <stdexcept>
@@ -201,4 +201,4 @@ private:
 
 } // namespace numsim::materials
 
-#endif // MATERIAL_CONTEXT_H
+#endif // NUMSIM_MATERIALS_MATERIAL_CONTEXT_H

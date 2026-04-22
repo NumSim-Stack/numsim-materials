@@ -1,6 +1,7 @@
 #ifndef NUMSIM_MATERIALS_MATERIAL_REF_H
 #define NUMSIM_MATERIALS_MATERIAL_REF_H
 
+#include <cassert>
 #include <stdexcept>
 #include <string>
 
@@ -38,8 +39,8 @@ public:
           "material_ref::wire(): material '" + m_name + "' is not of the requested type");
   }
 
-  const T& get() const noexcept { return *m_ptr; }
-  T& get() noexcept { return *m_ptr; }
+  const T& get() const noexcept { assert(m_ptr && "material_ref::get() called before wire()"); return *m_ptr; }
+  T& get() noexcept { assert(m_ptr && "material_ref::get() called before wire()"); return *m_ptr; }
 
 private:
   std::string m_name;

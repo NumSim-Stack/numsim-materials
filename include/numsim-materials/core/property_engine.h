@@ -122,10 +122,10 @@ public:
   }
 
   void dump() const {
-    std::println("=== Property execution order ({} properties) ===",
+    std::println(stderr, "=== Property execution order ({} properties) ===",
                  m_property_execution_order.size());
     for (auto* prop : m_property_execution_order)
-      std::println("  {}::{}{}", prop->traits().id.owner, prop->traits().id.name,
+      std::println(stderr, "  {}::{}{}", prop->traits().id.owner, prop->traits().id.name,
                    prop->traits().update ? "" : " (no callback)");
   }
 
