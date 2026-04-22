@@ -1,6 +1,8 @@
 #ifndef NUMSIM_MATERIALS_MATERIAL_INTERFACE_H
 #define NUMSIM_MATERIALS_MATERIAL_INTERFACE_H
 
+#include <any>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -10,12 +12,13 @@
 #include "numsim-materials/core/history_property.h"
 #include "numsim-materials/core/input_types.h"
 #include "numsim-materials/core/property_registry_interface.h"
+#include "numsim-materials/core/material_ref.h"
 #include "numsim-materials/core/traits.h"
 
 namespace numsim::materials {
 
 /// Virtual base for all materials in the framework.
-/// Provides property registration, typed input wiring, solver support,
+/// Provides property registration, typed input wiring, material references,
 /// and the update() entry point.
 template <typename Traits>
 class material_interface {
@@ -23,6 +26,7 @@ public:
   using value_type = typename Traits::value_type;
   using input_parameter_controller = typename Traits::InputParameterController;
   using property_handler = typename Traits::PropertyHandler;
+  using material_handler = typename Traits::MaterialHandler;
   using property_registry_type = property_registry_interface<property_handler, property_traits>;
   using parameter_handler = typename Traits::ParameterHandler;
 
@@ -49,6 +53,7 @@ public:
 
   const auto& get_property_registry() const { return m_property_handler; }
 
+  /// Wire all property inputs. Called at finalize().
   void wire_inputs() {
     for (auto& input : m_typed_inputs) {
       auto prop = m_property_handler.find(input->source_owner(), input->source_name());
@@ -58,6 +63,16 @@ public:
             input->source_name() + "' not found (required by material '" +
             m_name + "')");
       input->wire(**prop);
+    }
+  }
+
+  /// Wire all material references. Called at finalize() before wire_inputs().
+  void wire_materials(material_handler& handler) {
+    for (auto& ref : m_material_refs) {
+      auto& any_ref = handler.get(ref->target_name());
+      auto& mat = std::any_cast<
+          std::reference_wrapper<material_interface> const&>(any_ref).get();
+      ref->wire(mat);
     }
   }
 
@@ -99,12 +114,22 @@ protected:
     return ref;
   }
 
+  /// Add a lazy reference to another material, resolved at finalize().
+  template <typename T>
+  material_ref<T, Traits>& add_material_ref(std::string name) {
+    auto ptr = std::make_unique<material_ref<T, Traits>>(std::move(name));
+    auto& ref = *ptr;
+    m_material_refs.push_back(std::move(ptr));
+    return ref;
+  }
+
   parameter_handler m_parameter_handler;
   property_registry_type m_property_handler;
   std::string m_name;
 
 private:
   std::vector<std::unique_ptr<input_wire_base>> m_typed_inputs;
+  std::vector<std::unique_ptr<material_ref_base<Traits>>> m_material_refs;
 };
 
 } // namespace numsim::materials

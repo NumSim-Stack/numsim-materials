@@ -63,6 +63,8 @@ public:
     if (m_finalized) return;
     m_materials.final_queries();
     for (auto* mat : m_store.interfaces())
+      mat->wire_materials(m_materials);
+    for (auto* mat : m_store.interfaces())
       mat->wire_inputs();
     m_engine.build(m_properties, m_store.interfaces());
     check_integrity();
