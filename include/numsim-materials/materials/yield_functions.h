@@ -33,6 +33,11 @@ struct j2_yield_function {
     return -T{3} * G - dH;
   }
 
+  /// Yield normal = flow normal for associative J2.
+  tensor2 yield_normal(const tensor2& sig_dev, T sig_eq) const {
+    return flow_normal(sig_dev, sig_eq);
+  }
+
   tensor2 flow_normal(const tensor2& sig_dev, T sig_eq) const {
     return T{1.5} * sig_dev / sig_eq;
   }

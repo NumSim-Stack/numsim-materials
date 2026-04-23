@@ -100,9 +100,14 @@ public:
     m_alpha.new_value() = alpha_n + dlambda;
     m_stress = tmech::dcontract(C_e, m_strain.get() - m_eps_p.new_value());
 
+    // Tangent: evaluate at converged state for correct N and sig_eq
+    // (for J2 radial return, converged = trial; for DP non-associative, they differ)
     m_H.update_source();
+    auto converged = plasticity_detail::evaluate_at_state<value_type, Dim>(
+        m_yf, m_strain.get(), m_eps_p.new_value(), C_e, m_sigma_0, m_H.get());
     m_tangent = plasticity_detail::compute_tangent<value_type, Dim>(
-        m_yf, ts.eval.N, ts.eval.sig_eq, dlambda, m_G, m_dH.get(), C_e);
+        m_yf, converged.sig_dev, converged.N, converged.sig_eq,
+        dlambda, m_G, m_dH.get(), C_e);
   }
 
 private:

@@ -68,11 +68,17 @@ trial_state<T, Dim> compute_trial(
 }
 
 /// Compute the algorithmic tangent via implicit function theorem.
+///
+/// For non-associative flow (DP), the yield normal (dF/dsigma) differs
+/// from the flow normal (dG/dsigma = N). The residual gradient uses
+/// the yield normal: dr/deps = (dF/dsigma) : C_e.
+/// The stress correction uses the flow normal: dsigma/ddlambda = -2G*N.
 template<typename T, std::size_t Dim, typename YieldFunction>
 tmech::tensor<T, Dim, 4> compute_tangent(
     const YieldFunction& yf,
-    const tmech::tensor<T, Dim, 2>& N_trial,
-    T sig_eq_trial,
+    const tmech::tensor<T, Dim, 2>& sig_dev,
+    const tmech::tensor<T, Dim, 2>& N,
+    T sig_eq,
     T total_dlambda,
     T G, T dH_val,
     const tmech::tensor<T, Dim, 4>& C_e)
@@ -80,14 +86,19 @@ tmech::tensor<T, Dim, 4> compute_tangent(
   using tensor2 = tmech::tensor<T, Dim, 2>;
   using tensor4 = tmech::tensor<T, Dim, 4>;
 
+  // Yield normal (dF/dsigma) — may differ from flow normal N for non-associative
+  const tensor2 M{yf.yield_normal(sig_dev, sig_eq)};
+
   const auto dr_ddlambda = yf.jacobian(G, dH_val);
-  const tensor2 dr_deps{tmech::dcontract(N_trial, C_e)};
+  // dr/deps uses YIELD normal M, not flow normal N
+  const tensor2 dr_deps{tmech::dcontract(M, C_e)};
   const tensor2 dlambda_deps{-dr_deps / dr_ddlambda};
 
-  const tensor4 dN_dsig{yf.flow_normal_stress_derivative(N_trial, sig_eq_trial)};
+  // dsigma/deps uses FLOW normal N
+  const tensor4 dN_dsig{yf.flow_normal_stress_derivative(N, sig_eq)};
   const tensor4 dN_deps{tmech::dcontract(dN_dsig, C_e)};
   const tensor4 dsig_deps{C_e - T{2} * G * total_dlambda * dN_deps};
-  const tensor2 dsig_ddlambda{-T{2} * G * N_trial};
+  const tensor2 dsig_ddlambda{-T{2} * G * N};
 
   return dsig_deps + tmech::otimes(dsig_ddlambda, dlambda_deps);
 }

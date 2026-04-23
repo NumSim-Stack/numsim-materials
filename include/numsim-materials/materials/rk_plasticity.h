@@ -167,8 +167,12 @@ public:
     m_stress = tmech::dcontract(C_e, eps - eps_p_new);
 
     m_H.update_source();
+    // Evaluate at converged state for correct tangent (non-associative)
+    auto converged = plasticity_detail::evaluate_at_state<value_type, Dim>(
+        m_yf, eps, eps_p_new, C_e, m_sigma_0, m_H.get());
     m_tangent = plasticity_detail::compute_tangent<value_type, Dim>(
-        m_yf, ts.eval.N, ts.eval.sig_eq, total_dlambda, m_G, m_dH.get(), C_e);
+        m_yf, converged.sig_dev, converged.N, converged.sig_eq,
+        total_dlambda, m_G, m_dH.get(), C_e);
   }
 
 private:

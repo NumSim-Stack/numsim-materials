@@ -48,7 +48,14 @@ struct drucker_prager_yield_function {
     return -G - dH;
   }
 
-  /// Flow normal: N = s/(2*sqrt(J2)) + beta/3 * I (non-associative)
+  /// Yield normal: dF/dsigma = s/(2*sqrt(J2)) + alpha/3 * I
+  /// Different from flow normal when non-associative (alpha != beta).
+  tensor2 yield_normal(const tensor2& sig_dev, T sqrt_j2) const {
+    const auto I = tmech::eye<T, Dim, 2>();
+    return sig_dev / (T{2} * sqrt_j2) + (alpha / T{3}) * I;
+  }
+
+  /// Flow normal: N = dG/dsigma = s/(2*sqrt(J2)) + beta/3 * I (non-associative)
   tensor2 flow_normal(const tensor2& sig_dev, T sqrt_j2) const {
     const auto I = tmech::eye<T, Dim, 2>();
     return sig_dev / (T{2} * sqrt_j2) + (beta / T{3}) * I;
