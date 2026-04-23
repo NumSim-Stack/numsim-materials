@@ -21,7 +21,7 @@ struct j2_yield_function {
     return std::sqrt(T{1.5} * tmech::dcontract(sig_dev, sig_dev));
   }
 
-  T trial_yield(T sig_eq, T sigma_0, T H) const {
+  T trial_yield(const tensor2& /*sig*/, T sig_eq, T sigma_0, T H) const {
     return sig_eq - sigma_0 - H;
   }
 

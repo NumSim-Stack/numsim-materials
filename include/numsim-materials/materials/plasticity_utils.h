@@ -35,7 +35,7 @@ state_eval<T, Dim> evaluate_at_state(
   const auto trace_sig = tmech::trace(se.sig);
   se.sig_dev = se.sig - (trace_sig / T{Dim}) * I;
   se.sig_eq = yf.equivalent_stress(se.sig_dev);
-  se.F = yf.trial_yield(se.sig_eq, sigma_0, H_val);
+  se.F = yf.trial_yield(se.sig, se.sig_eq, sigma_0, H_val);
 
   if (se.sig_eq > T{1e-30})
     se.N = yf.flow_normal(se.sig_dev, se.sig_eq);

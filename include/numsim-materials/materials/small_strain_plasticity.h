@@ -52,7 +52,10 @@ public:
             m_hardening_source, "hardening_stress", EdgeKind::Local)),
         m_dH(base::template add_input<value_type>(
             m_hardening_source, "hardening_modulus", EdgeKind::Local))
-  {}
+  {
+    if (base::m_parameter_handler.contains("yield_function"))
+      m_yf = base::template get_parameter<yield_fn>("yield_function");
+  }
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
