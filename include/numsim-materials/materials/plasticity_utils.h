@@ -5,18 +5,54 @@
 
 namespace numsim::materials::plasticity_detail {
 
-/// Trial state computed from current strain and plastic strain.
+/// Stress state evaluation at a given (ε_p, α) state.
+/// Used by both compute_trial() and the RK stage loop.
 template<typename T, std::size_t Dim>
-struct trial_state {
+struct state_eval {
   using tensor2 = tmech::tensor<T, Dim, 2>;
-  tensor2 sig_trial;
+  tensor2 sig;
   tensor2 sig_dev;
   tensor2 N;
   T sig_eq;
+  T F;
+};
+
+/// Evaluate stress, deviatoric, equivalent stress, flow normal, and yield
+/// function at a given state. No yield check — caller decides what to do.
+template<typename T, std::size_t Dim, typename YieldFunction>
+state_eval<T, Dim> evaluate_at_state(
+    const tmech::tensor<T, Dim, 2>& eps,
+    const tmech::tensor<T, Dim, 2>& eps_p,
+    const tmech::tensor<T, Dim, 4>& C_e,
+    T sigma_0, T H_val)
+{
+  using tensor2 = tmech::tensor<T, Dim, 2>;
+  const auto I = tmech::eye<T, Dim, 2>();
+
+  state_eval<T, Dim> se;
+  se.sig = tmech::dcontract(C_e, eps - eps_p);
+
+  const auto trace_sig = tmech::trace(se.sig);
+  se.sig_dev = se.sig - (trace_sig / T{Dim}) * I;
+  se.sig_eq = YieldFunction::equivalent_stress(se.sig_dev);
+  se.F = YieldFunction::trial_yield(se.sig_eq, sigma_0, H_val);
+
+  if (se.sig_eq > T{1e-30})
+    se.N = YieldFunction::flow_normal(se.sig_dev, se.sig_eq);
+  else
+    se.N = tensor2{};
+
+  return se;
+}
+
+/// Trial state — wraps state_eval with a yield check.
+template<typename T, std::size_t Dim>
+struct trial_state {
+  state_eval<T, Dim> eval;
   bool yielding;
 };
 
-/// Compute the trial stress state and check yield.
+/// Compute trial stress state and check yield.
 template<typename T, std::size_t Dim, typename YieldFunction>
 trial_state<T, Dim> compute_trial(
     const tmech::tensor<T, Dim, 2>& eps,
@@ -24,24 +60,9 @@ trial_state<T, Dim> compute_trial(
     const tmech::tensor<T, Dim, 4>& C_e,
     T sigma_0, T H_val)
 {
-  using tensor2 = tmech::tensor<T, Dim, 2>;
-  const auto I = tmech::eye<T, Dim, 2>();
-
   trial_state<T, Dim> ts;
-  ts.sig_trial = tmech::dcontract(C_e, eps - eps_p_old);
-
-  const auto trace_sig = tmech::trace(ts.sig_trial);
-  ts.sig_dev = ts.sig_trial - (trace_sig / T{Dim}) * I;
-  ts.sig_eq = YieldFunction::equivalent_stress(ts.sig_dev);
-
-  const auto F = YieldFunction::trial_yield(ts.sig_eq, sigma_0, H_val);
-  ts.yielding = F > T{0};
-
-  if (ts.sig_eq > T{1e-30})
-    ts.N = YieldFunction::flow_normal(ts.sig_dev, ts.sig_eq);
-  else
-    ts.N = tensor2{};
-
+  ts.eval = evaluate_at_state<T, Dim, YieldFunction>(eps, eps_p_old, C_e, sigma_0, H_val);
+  ts.yielding = ts.eval.F > T{0};
   return ts;
 }
 

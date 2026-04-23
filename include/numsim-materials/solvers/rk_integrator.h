@@ -41,6 +41,9 @@ public:
         m_func_name(base::template get_parameter<std::string>("function")),
         m_rate(base::template add_input<value_type>(
             m_func_name, "rate", EdgeKind::Local)),
+        // rate_derivative only needed for implicit stages — not created for
+        // explicit tableaux (the rate function may not provide it).
+        // Safe: compute_explicit() never dereferences m_drate.
         m_drate(m_tableau->is_explicit()
             ? nullptr
             : &base::template add_input<value_type>(

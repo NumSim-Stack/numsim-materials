@@ -84,8 +84,6 @@ public:
     const auto& eps = m_strain.get();
     const auto alpha_n = m_alpha.old_value();
     const auto eps_p_n = m_eps_p.old_value();
-    const auto I = tmech::eye<value_type, Dim, 2>();
-
     m_alpha.new_value() = alpha_n;
     m_H.update_source();
 
@@ -93,7 +91,7 @@ public:
         eps, eps_p_n, C_e, m_sigma_0, m_H.get());
 
     if (!ts.yielding) {
-      m_stress = ts.sig_trial;
+      m_stress = ts.eval.sig;
       m_tangent = C_e;
       m_eps_p.new_value() = eps_p_n;
       m_alpha.new_value() = alpha_n;
@@ -116,47 +114,40 @@ public:
       }
 
       if (!m_is_implicit[i]) {
-        const tensor2 sig_i{tmech::dcontract(C_e, eps - eps_p_acc)};
-        const auto tr_i = tmech::trace(sig_i);
-        const tensor2 dev_i{sig_i - (tr_i / value_type{Dim}) * I};
-        const auto seq_i = yield_fn::equivalent_stress(dev_i);
-
+        // Explicit stage
         m_alpha.new_value() = alpha_acc;
         m_H.update_source();
-        const auto F_i = yield_fn::trial_yield(seq_i, m_sigma_0, m_H.get());
+        auto se = plasticity_detail::evaluate_at_state<value_type, Dim, yield_fn>(
+            eps, eps_p_acc, C_e, m_sigma_0, m_H.get());
 
-        if (F_i > value_type{0} && seq_i > value_type{1e-30}) {
-          m_N_stage[i] = yield_fn::flow_normal(dev_i, seq_i);
-          m_dlambda[i] = F_i / (value_type{3} * m_G + m_dH.get());
+        if (se.F > value_type{0} && se.sig_eq > value_type{1e-30}) {
+          m_N_stage[i] = se.N;
+          m_dlambda[i] = se.F / (value_type{3} * m_G + m_dH.get());
         } else {
           m_N_stage[i] = tensor2{};
           m_dlambda[i] = value_type{0};
         }
       } else {
+        // Implicit stage: Newton on F = 0
         const auto aii = m_diag[i];
         m_dlambda[i] = value_type{0};
 
         for (int iter = 0; iter < m_max_iter; ++iter) {
-          tensor2 eps_p_i{eps_p_acc + aii * m_dlambda[i] * ts.N};
+          tensor2 eps_p_i{eps_p_acc + aii * m_dlambda[i] * ts.eval.N};
           auto alpha_i = alpha_acc + aii * m_dlambda[i];
-
-          const tensor2 sig_i{tmech::dcontract(C_e, eps - eps_p_i)};
-          const auto tr_i = tmech::trace(sig_i);
-          const tensor2 dev_i{sig_i - (tr_i / value_type{Dim}) * I};
-          const auto seq_i = yield_fn::equivalent_stress(dev_i);
 
           m_alpha.new_value() = alpha_i;
           m_H.update_source();
+          auto se = plasticity_detail::evaluate_at_state<value_type, Dim, yield_fn>(
+              eps, eps_p_i, C_e, m_sigma_0, m_H.get());
 
-          const auto F_i = yield_fn::trial_yield(seq_i, m_sigma_0, m_H.get());
-          if (std::abs(F_i) < m_tol) {
-            if (seq_i > value_type{1e-30})
-              m_N_stage[i] = yield_fn::flow_normal(dev_i, seq_i);
+          if (std::abs(se.F) < m_tol) {
+            m_N_stage[i] = se.N;
             break;
           }
 
           const auto dF_i = -aii * (value_type{3} * m_G + m_dH.get());
-          m_dlambda[i] -= F_i / dF_i;
+          m_dlambda[i] -= se.F / dF_i;
         }
       }
     }
@@ -177,7 +168,7 @@ public:
 
     m_H.update_source();
     m_tangent = plasticity_detail::compute_tangent<value_type, Dim, yield_fn>(
-        ts.N, ts.sig_eq, total_dlambda, m_G, m_dH.get(), C_e);
+        ts.eval.N, ts.eval.sig_eq, total_dlambda, m_G, m_dH.get(), C_e);
   }
 
 private:
