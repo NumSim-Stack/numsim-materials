@@ -72,8 +72,8 @@ public:
     m_alpha.new_value() = alpha_n;
     m_H.update_source();
 
-    auto ts = plasticity_detail::compute_trial<value_type, Dim, yield_fn>(
-        m_strain.get(), m_eps_p.old_value(), C_e, m_sigma_0, m_H.get());
+    auto ts = plasticity_detail::compute_trial<value_type, Dim>(
+        m_yf, m_strain.get(), m_eps_p.old_value(), C_e, m_sigma_0, m_H.get());
 
     if (!ts.yielding) {
       m_stress = ts.eval.sig;
@@ -87,8 +87,8 @@ public:
     auto eval = [&](value_type dl) -> std::pair<value_type, value_type> {
       m_alpha.new_value() = alpha_n + dl;
       m_H.update_source();
-      return {yield_fn::residual(ts.eval.sig_eq, dl, m_G, m_sigma_0, m_H.get()),
-              yield_fn::jacobian(m_G, m_dH.get())};
+      return {m_yf.residual(ts.eval.sig_eq, dl, m_G, m_sigma_0, m_H.get()),
+              m_yf.jacobian(m_G, m_dH.get())};
     };
 
     const auto dlambda = m_solver.get().solve(eval);
@@ -98,8 +98,8 @@ public:
     m_stress = tmech::dcontract(C_e, m_strain.get() - m_eps_p.new_value());
 
     m_H.update_source();
-    m_tangent = plasticity_detail::compute_tangent<value_type, Dim, yield_fn>(
-        ts.eval.N, ts.eval.sig_eq, dlambda, m_G, m_dH.get(), C_e);
+    m_tangent = plasticity_detail::compute_tangent<value_type, Dim>(
+        m_yf, ts.eval.N, ts.eval.sig_eq, dlambda, m_G, m_dH.get(), C_e);
   }
 
 private:
@@ -119,6 +119,7 @@ private:
   const input_property<tensor2, property_traits>& m_strain;
   const input_property<value_type, property_traits>& m_H;
   const input_property<value_type, property_traits>& m_dH;
+  yield_fn m_yf{};
 };
 
 template<typename Traits>

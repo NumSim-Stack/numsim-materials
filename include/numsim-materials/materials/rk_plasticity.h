@@ -87,8 +87,8 @@ public:
     m_alpha.new_value() = alpha_n;
     m_H.update_source();
 
-    auto ts = plasticity_detail::compute_trial<value_type, Dim, yield_fn>(
-        eps, eps_p_n, C_e, m_sigma_0, m_H.get());
+    auto ts = plasticity_detail::compute_trial<value_type, Dim>(
+        m_yf, eps, eps_p_n, C_e, m_sigma_0, m_H.get());
 
     if (!ts.yielding) {
       m_stress = ts.eval.sig;
@@ -117,12 +117,12 @@ public:
         // Explicit stage
         m_alpha.new_value() = alpha_acc;
         m_H.update_source();
-        auto se = plasticity_detail::evaluate_at_state<value_type, Dim, yield_fn>(
-            eps, eps_p_acc, C_e, m_sigma_0, m_H.get());
+        auto se = plasticity_detail::evaluate_at_state<value_type, Dim>(
+            m_yf, eps, eps_p_acc, C_e, m_sigma_0, m_H.get());
 
         if (se.F > value_type{0} && se.sig_eq > value_type{1e-30}) {
           m_N_stage[i] = se.N;
-          m_dlambda[i] = se.F / (value_type{3} * m_G + m_dH.get());
+          m_dlambda[i] = -se.F / m_yf.jacobian(m_G, m_dH.get());
         } else {
           m_N_stage[i] = tensor2{};
           m_dlambda[i] = value_type{0};
@@ -138,15 +138,15 @@ public:
 
           m_alpha.new_value() = alpha_i;
           m_H.update_source();
-          auto se = plasticity_detail::evaluate_at_state<value_type, Dim, yield_fn>(
-              eps, eps_p_i, C_e, m_sigma_0, m_H.get());
+          auto se = plasticity_detail::evaluate_at_state<value_type, Dim>(
+              m_yf, eps, eps_p_i, C_e, m_sigma_0, m_H.get());
 
           if (std::abs(se.F) < m_tol) {
             m_N_stage[i] = se.N;
             break;
           }
 
-          const auto dF_i = -aii * (value_type{3} * m_G + m_dH.get());
+          const auto dF_i = aii * m_yf.jacobian(m_G, m_dH.get());
           m_dlambda[i] -= se.F / dF_i;
         }
       }
@@ -167,8 +167,8 @@ public:
     m_stress = tmech::dcontract(C_e, eps - eps_p_new);
 
     m_H.update_source();
-    m_tangent = plasticity_detail::compute_tangent<value_type, Dim, yield_fn>(
-        ts.eval.N, ts.eval.sig_eq, total_dlambda, m_G, m_dH.get(), C_e);
+    m_tangent = plasticity_detail::compute_tangent<value_type, Dim>(
+        m_yf, ts.eval.N, ts.eval.sig_eq, total_dlambda, m_G, m_dH.get(), C_e);
   }
 
 private:
@@ -191,6 +191,7 @@ private:
   const input_property<value_type, property_traits>& m_H;
   const input_property<value_type, property_traits>& m_dH;
 
+  yield_fn m_yf{};
   std::vector<value_type> m_dlambda;
   std::vector<tensor2> m_N_stage;
   std::vector<bool> m_is_implicit;
