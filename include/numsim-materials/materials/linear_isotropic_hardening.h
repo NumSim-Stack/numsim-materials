@@ -5,14 +5,14 @@
 
 namespace numsim::materials {
 
-/// Linear isotropic hardening: H(α) = K * α
+/// Linear isotropic hardening: H(κ) = K * κ
 ///
 /// Outputs:
-///   "hardening_stress"    — scalar: K * α
-///   "hardening_modulus"   — scalar: dH/dα = K (constant)
+///   "hardening_stress"    — scalar: K * κ
+///   "hardening_modulus"   — scalar: dH/dκ = K (constant)
 ///
 /// Inputs:
-///   source::equivalent_plastic_strain — scalar α from plasticity material
+///   source::equivalent_plastic_strain — scalar κ from plasticity material
 template <typename Traits>
 class linear_isotropic_hardening final
     : public material_base<linear_isotropic_hardening<Traits>, Traits> {
@@ -29,7 +29,7 @@ public:
         m_dH(base::template add_output<value_type>("hardening_modulus")),
         m_K(base::template get_parameter<value_type>("K")),
         m_source(base::template get_parameter<std::string>("source")),
-        m_alpha(base::template add_input<value_type>(
+        m_kappa(base::template add_input<value_type>(
             m_source, "equivalent_plastic_strain", EdgeKind::Local))
   {}
 
@@ -41,8 +41,8 @@ public:
   }
 
   void compute() {
-    const auto alpha = m_alpha.get();
-    m_H = m_K * alpha;
+    const auto kappa = m_kappa.get();
+    m_H = m_K * kappa;
     m_dH = m_K;
   }
 
@@ -51,7 +51,7 @@ private:
   value_type& m_dH;
   const value_type& m_K;
   const std::string& m_source;
-  const input_property<value_type, property_traits>& m_alpha;
+  const input_property<value_type, property_traits>& m_kappa;
 };
 
 } // namespace numsim::materials

@@ -20,7 +20,7 @@ using ctx_type = numsim::materials::material_context<policy>;
 using param_type = policy::ParameterHandler;
 using tensor2 = tmech::tensor<T, 3, 2>;
 using dp_yield = numsim::materials::drucker_prager_yield_function<T, 3>;
-using dp_plasticity = numsim::materials::small_strain_plasticity<policy, dp_yield>;
+using dp_plasticity = numsim::materials::drucker_prager_plasticity<policy>;
 
 class DruckerPragerTest : public ::testing::Test {
 protected:
@@ -51,7 +51,7 @@ protected:
     ctx.create<numsim::materials::linear_isotropic_hardening<policy>>(p);
 
     // Drucker-Prager yield function with friction and dilatancy
-    dp_yield yf(dp_alpha, dp_beta);
+    dp_yield yf(dp_eta, dp_beta, K);
 
     p.clear();
     p.insert<std::string>("name", "dp");
@@ -72,8 +72,8 @@ protected:
   T G{76.92};
   T cohesion{20.0};   // cohesion k
   T H_mod{500.0};
-  T dp_alpha{0.1};    // friction
-  T dp_beta{0.05};    // dilatancy (non-associative: beta != alpha)
+  T dp_eta{0.1};      // friction (pressure coefficient)
+  T dp_beta{0.05};    // dilatancy (non-associative: beta != eta)
 };
 
 TEST_F(DruckerPragerTest, ElasticBeforeYield) {
@@ -155,7 +155,7 @@ protected:
     p.insert<T>("K", T{500.0});
     ctx.create<numsim::materials::linear_isotropic_hardening<policy>>(p);
 
-    dp_yield yf(T{0.1}, T{0.05});
+    dp_yield yf(T{0.1}, T{0.05}, T{166.67});
 
     p.clear();
     p.insert<std::string>("name", "dp");
@@ -195,7 +195,7 @@ TEST_F(DPTangentTest, ConsistentTangent) {
     if (rel > max_rel_error) max_rel_error = rel;
     ctx.commit();
   }
-  EXPECT_LT(max_rel_error, 0.15)
+  EXPECT_LT(max_rel_error, 1e-6)
       << "DP consistent tangent should match numerical derivative";
 }
 
@@ -228,7 +228,7 @@ T run_dp_max_tangent_error(T increment, int steps) {
   p.insert<T>("K", T{500.0});
   ctx.create<numsim::materials::linear_isotropic_hardening<policy>>(p);
 
-  dp_yield yf(T{0.1}, T{0.05});
+  dp_yield yf(T{0.1}, T{0.05}, T{166.67});
 
   p.clear();
   p.insert<std::string>("name", "dp");
@@ -264,14 +264,10 @@ T run_dp_max_tangent_error(T increment, int steps) {
   return max_rel;
 }
 
-// TODO: The DP tangent has a constant ~1% error independent of step size.
-// Root cause: compute_tangent uses 2G·N (J2 shortcut) instead of C:N
-// (full elasticity tensor contraction). The volumetric pressure correction
-// K·β is missing. Fix requires generalizing compute_tangent to use C:N.
 TEST(DPConvergence, TangentErrorIsBounded) {
   auto err = run_dp_max_tangent_error(T{0.02}, 15);
   std::println("  DP tangent error: {:.4e}", err);
-  EXPECT_LT(err, 0.02) << "DP tangent error should be small (known ~1% bias)";
+  EXPECT_LT(err, 1e-3) << "DP consistent tangent should match numerical derivative";
 }
 
 } // namespace

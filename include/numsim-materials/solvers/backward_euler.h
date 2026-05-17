@@ -82,17 +82,24 @@ public:
 
   /// Direct call: another material provides eval(x) → {residual, jacobian}.
   /// Used when the caller drives the iteration (e.g., plasticity return mapping).
+  /// Sets m_converged to indicate whether the iteration converged.
+  /// The returned value is clamped to be non-negative — for plasticity, a
+  /// negative plastic-multiplier increment is unphysical (backward plastic flow).
   template<typename Eval>
-  value_type solve(Eval&& eval, value_type x0 = value_type{0}) const {
+  value_type solve(Eval&& eval, value_type x0 = value_type{0}) {
     auto x = x0;
     for (int i = 0; i < m_max_iter; ++i) {
       auto [r, dr] = eval(x);
-      if (std::abs(r) < m_tol) return x;
-      if (std::abs(dr) < value_type{1e-30}) return x;
+      if (std::abs(r) < m_tol) { m_converged = true; return std::max(x, value_type{0}); }
+      if (std::abs(dr) < value_type{1e-30}) { m_converged = false; return std::max(x, value_type{0}); }
       x -= r / dr;
     }
-    return x;
+    m_converged = false;
+    return std::max(x, value_type{0});
   }
+
+  /// Whether the last solve() call converged.
+  bool converged() const { return m_converged; }
 
 private:
   value_type& m_delta;
@@ -101,6 +108,7 @@ private:
   const int& m_max_iter;
   const input_property<value_type, property_traits>* m_residual{nullptr};
   const input_property<value_type, property_traits>* m_jacobian{nullptr};
+  bool m_converged{true};
 };
 
 } // namespace numsim::materials

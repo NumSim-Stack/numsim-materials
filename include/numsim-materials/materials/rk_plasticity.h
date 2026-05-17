@@ -36,7 +36,7 @@ public:
             "stress", &rk_plasticity::compute)),
         m_tangent(base::template add_output<tensor4>("tangent")),
         m_eps_p(base::template add_history_output<tensor2>("plastic_strain")),
-        m_alpha(base::template add_history_output<value_type>("equivalent_plastic_strain")),
+        m_kappa(base::template add_history_output<value_type>("equivalent_plastic_strain")),
         m_G(base::template get_parameter<value_type>("G")),
         m_sigma_0(base::template get_parameter<value_type>("sigma_0")),
         m_tol(base::template get_parameter<value_type>("tolerance")),
@@ -82,9 +82,9 @@ public:
   void compute() {
     const auto& C_e = m_C_e.get();
     const auto& eps = m_strain.get();
-    const auto alpha_n = m_alpha.old_value();
+    const auto kappa_n = m_kappa.old_value();
     const auto eps_p_n = m_eps_p.old_value();
-    m_alpha.new_value() = alpha_n;
+    m_kappa.new_value() = kappa_n;
     m_H.update_source();
 
     auto ts = plasticity_detail::compute_trial<value_type, Dim>(
@@ -94,7 +94,7 @@ public:
       m_stress = ts.eval.sig;
       m_tangent = C_e;
       m_eps_p.new_value() = eps_p_n;
-      m_alpha.new_value() = alpha_n;
+      m_kappa.new_value() = kappa_n;
       return;
     }
 
@@ -107,15 +107,15 @@ public:
 
     for (int i = 0; i < s; ++i) {
       tensor2 eps_p_acc{eps_p_n};
-      auto alpha_acc = alpha_n;
+      auto kappa_acc = kappa_n;
       for (int j = 0; j < i; ++j) {
         eps_p_acc = eps_p_acc + tab.a(i, j) * m_dlambda[j] * m_N_stage[j];
-        alpha_acc += tab.a(i, j) * m_dlambda[j];
+        kappa_acc += tab.a(i, j) * m_dlambda[j];
       }
 
       if (!m_is_implicit[i]) {
         // Explicit stage
-        m_alpha.new_value() = alpha_acc;
+        m_kappa.new_value() = kappa_acc;
         m_H.update_source();
         auto se = plasticity_detail::evaluate_at_state<value_type, Dim>(
             m_yf, eps, eps_p_acc, C_e, m_sigma_0, m_H.get());
@@ -134,9 +134,9 @@ public:
 
         for (int iter = 0; iter < m_max_iter; ++iter) {
           tensor2 eps_p_i{eps_p_acc + aii * m_dlambda[i] * ts.eval.N};
-          auto alpha_i = alpha_acc + aii * m_dlambda[i];
+          auto kappa_i = kappa_acc + aii * m_dlambda[i];
 
-          m_alpha.new_value() = alpha_i;
+          m_kappa.new_value() = kappa_i;
           m_H.update_source();
           auto se = plasticity_detail::evaluate_at_state<value_type, Dim>(
               m_yf, eps, eps_p_i, C_e, m_sigma_0, m_H.get());
@@ -146,7 +146,7 @@ public:
             break;
           }
 
-          const auto dF_i = aii * m_yf.jacobian(m_G, m_dH.get());
+          const auto dF_i = aii * m_yf.jacobian(m_yf.effective_modulus(m_G), m_dH.get());
           m_dlambda[i] -= se.F / dF_i;
         }
       }
@@ -154,16 +154,16 @@ public:
 
     // Final update
     tensor2 eps_p_new{eps_p_n};
-    auto alpha_new = alpha_n;
+    auto kappa_new = kappa_n;
     auto total_dlambda = value_type{0};
     for (int i = 0; i < s; ++i) {
       eps_p_new = eps_p_new + tab.b[i] * m_dlambda[i] * m_N_stage[i];
-      alpha_new += tab.b[i] * m_dlambda[i];
+      kappa_new += tab.b[i] * m_dlambda[i];
       total_dlambda += tab.b[i] * m_dlambda[i];
     }
 
     m_eps_p.new_value() = eps_p_new;
-    m_alpha.new_value() = alpha_new;
+    m_kappa.new_value() = kappa_new;
     m_stress = tmech::dcontract(C_e, eps - eps_p_new);
 
     m_H.update_source();
@@ -172,14 +172,14 @@ public:
         m_yf, eps, eps_p_new, C_e, m_sigma_0, m_H.get());
     m_tangent = plasticity_detail::compute_tangent<value_type, Dim>(
         m_yf, converged.sig_dev, converged.N, converged.sig_eq,
-        total_dlambda, m_G, m_dH.get(), C_e);
+        total_dlambda, m_dH.get(), C_e);
   }
 
 private:
   tensor2& m_stress;
   tensor4& m_tangent;
   history_property<tensor2>& m_eps_p;
-  history_property<value_type>& m_alpha;
+  history_property<value_type>& m_kappa;
 
   const value_type& m_G;
   const value_type& m_sigma_0;

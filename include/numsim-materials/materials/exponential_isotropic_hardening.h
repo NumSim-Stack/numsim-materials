@@ -6,14 +6,14 @@
 
 namespace numsim::materials {
 
-/// Exponential saturation hardening: H(α) = K_inf * (1 - exp(-delta * α))
+/// Exponential saturation hardening: H(κ) = K_inf * (1 - exp(-delta * κ))
 ///
 /// Outputs:
-///   "hardening_stress"    — scalar: K_inf * (1 - exp(-delta * α))
-///   "hardening_modulus"   — scalar: dH/dα = K_inf * delta * exp(-delta * α)
+///   "hardening_stress"    — scalar: K_inf * (1 - exp(-delta * κ))
+///   "hardening_modulus"   — scalar: dH/dκ = K_inf * delta * exp(-delta * κ)
 ///
 /// Inputs:
-///   source::equivalent_plastic_strain — scalar α from plasticity material
+///   source::equivalent_plastic_strain — scalar κ from plasticity material
 template <typename Traits>
 class exponential_isotropic_hardening final
     : public material_base<exponential_isotropic_hardening<Traits>, Traits> {
@@ -31,7 +31,7 @@ public:
         m_K_inf(base::template get_parameter<value_type>("K_inf")),
         m_delta(base::template get_parameter<value_type>("delta")),
         m_source(base::template get_parameter<std::string>("source")),
-        m_alpha(base::template add_input<value_type>(
+        m_kappa(base::template add_input<value_type>(
             m_source, "equivalent_plastic_strain", EdgeKind::Local))
   {}
 
@@ -44,8 +44,8 @@ public:
   }
 
   void compute() {
-    const auto alpha = m_alpha.get();
-    const auto exp_term = std::exp(-m_delta * alpha);
+    const auto kappa = m_kappa.get();
+    const auto exp_term = std::exp(-m_delta * kappa);
     m_H = m_K_inf * (value_type{1} - exp_term);
     m_dH = m_K_inf * m_delta * exp_term;
   }
@@ -56,7 +56,7 @@ private:
   const value_type& m_K_inf;
   const value_type& m_delta;
   const std::string& m_source;
-  const input_property<value_type, property_traits>& m_alpha;
+  const input_property<value_type, property_traits>& m_kappa;
 };
 
 } // namespace numsim::materials
