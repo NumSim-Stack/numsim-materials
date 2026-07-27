@@ -150,7 +150,8 @@ private:
       return {m_yf.residual(phi_trial, dl, G_eff, m_sigma_0, m_H.get()),
               m_yf.jacobian(G_eff, m_dH.get())};
     };
-    return m_solver.get().solve(eval);
+    // Non-negative: Δλ < 0 would be backward plastic flow (KKT).
+    return m_solver.get().solve_nonnegative(eval);
   }
 
   /// Smooth-cone return Newton: phi = modified_sig_eq, G_eff from yield function.

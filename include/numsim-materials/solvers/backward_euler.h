@@ -83,19 +83,34 @@ public:
   /// Direct call: another material provides eval(x) → {residual, jacobian}.
   /// Used when the caller drives the iteration (e.g., plasticity return mapping).
   /// Sets m_converged to indicate whether the iteration converged.
-  /// The returned value is clamped to be non-negative — for plasticity, a
-  /// negative plastic-multiplier increment is unphysical (backward plastic flow).
+  ///
+  /// This is a general scalar Newton solver: the root is returned as found,
+  /// including negative roots. Callers needing the plasticity KKT constraint
+  /// Δγ ≥ 0 must ask for it explicitly via solve_nonnegative().
   template<typename Eval>
   value_type solve(Eval&& eval, value_type x0 = value_type{0}) {
     auto x = x0;
     for (int i = 0; i < m_max_iter; ++i) {
       auto [r, dr] = eval(x);
-      if (std::abs(r) < m_tol) { m_converged = true; return std::max(x, value_type{0}); }
-      if (std::abs(dr) < value_type{1e-30}) { m_converged = false; return std::max(x, value_type{0}); }
+      if (std::abs(r) < m_tol) { m_converged = true; return x; }
+      if (std::abs(dr) < value_type{1e-30}) { m_converged = false; return x; }
       x -= r / dr;
     }
     m_converged = false;
-    return std::max(x, value_type{0});
+    return x;
+  }
+
+  /// solve() with the plasticity non-negativity projection applied.
+  ///
+  /// For a return mapping, a negative plastic-multiplier increment is
+  /// unphysical (backward plastic flow), so the converged root is clamped.
+  /// The clamp is deliberately NOT applied on the failure paths: a
+  /// non-converged iterate is returned raw so that a failed solve cannot be
+  /// mistaken for a plausible non-negative value. Check converged().
+  template<typename Eval>
+  value_type solve_nonnegative(Eval&& eval, value_type x0 = value_type{0}) {
+    const auto x = solve(std::forward<Eval>(eval), x0);
+    return m_converged ? std::max(x, value_type{0}) : x;
   }
 
   /// Whether the last solve() call converged.

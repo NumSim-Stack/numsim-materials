@@ -158,4 +158,53 @@ TEST(CuringSimulation, ConvergesToFullCure) {
   EXPECT_GT(curing, 0.99) << "Curing should approach 1.0 after 20 steps at 80°C";
 }
 
+// --- backward_euler::solve is a general scalar Newton (no hidden clamp) ---
+
+numsim::materials::backward_euler<policy>& make_solver(ctx_type& ctx, int max_iter = 100) {
+  param_type p;
+  p.insert<std::string>("name", "solver");
+  p.insert<int>("max_iter", max_iter);
+  auto& s = ctx.create<numsim::materials::backward_euler<policy>>(p);
+  ctx.finalize();
+  return s;
+}
+
+TEST(BackwardEulerSolve, ReturnsNegativeRootUnclamped) {
+  ctx_type ctx;
+  auto& solver = make_solver(ctx);
+
+  // r(x) = x + 1  ->  root at x = -1
+  auto eval = [](T x) { return std::pair<T, T>{x + T{1}, T{1}}; };
+
+  const auto x = solver.solve(eval);
+  EXPECT_TRUE(solver.converged());
+  EXPECT_NEAR(x, T{-1}, 1e-12)
+      << "solve() is a general scalar Newton — a negative root must survive";
+}
+
+TEST(BackwardEulerSolve, NonnegativeVariantClampsConvergedRoot) {
+  ctx_type ctx;
+  auto& solver = make_solver(ctx);
+
+  auto eval = [](T x) { return std::pair<T, T>{x + T{1}, T{1}}; };
+
+  const auto x = solver.solve_nonnegative(eval);
+  EXPECT_TRUE(solver.converged());
+  EXPECT_DOUBLE_EQ(x, T{0}) << "the plasticity KKT projection is opt-in and does clamp";
+}
+
+TEST(BackwardEulerSolve, FailurePathIsNotClamped) {
+  ctx_type ctx;
+  auto& solver = make_solver(ctx, /*max_iter=*/5);
+
+  // Residual never reaches tol, and the huge derivative keeps x pinned near x0,
+  // so the un-converged iterate stays negative.
+  auto eval = [](T) { return std::pair<T, T>{T{1}, T{1e10}}; };
+
+  const auto x = solver.solve_nonnegative(eval, T{-1});
+  EXPECT_FALSE(solver.converged());
+  EXPECT_LT(x, T{0})
+      << "a failed solve must return the raw iterate, not a plausible-looking 0";
+}
+
 } // namespace
