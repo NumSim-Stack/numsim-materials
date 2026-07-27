@@ -13,6 +13,7 @@ add_numsim_test(test_damage test_damage.cpp)
 add_numsim_test(test_j2_plasticity test_j2_plasticity.cpp)
 add_numsim_test(test_rk_integrator test_rk_integrator.cpp)
 add_numsim_test(test_drucker_prager test_drucker_prager.cpp)
+add_numsim_test(test_unknown_layout test_unknown_layout.cpp)
 
 # Data dumper for plotting (not a test — standalone executable)
 add_executable(plot_data plot_data.cpp)
