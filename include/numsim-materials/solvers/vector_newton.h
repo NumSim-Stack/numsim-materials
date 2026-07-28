@@ -1,0 +1,275 @@
+#ifndef NUMSIM_MATERIALS_VECTOR_NEWTON_H
+#define NUMSIM_MATERIALS_VECTOR_NEWTON_H
+
+#include <algorithm>
+#include <cmath>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
+#include <Eigen/Dense>
+#include "numsim-materials/core/material_base.h"
+#include "numsim-materials/solvers/unknown_layout.h"
+
+namespace numsim::materials {
+
+/// Coupled Newton solver for R(x) = 0 with a mixed scalar/tensor unknown set.
+///
+/// The vector analogue of backward_euler::solve. Topology mirrors it: the
+/// solver PRODUCES the unknowns as output properties and CONSUMES the residual
+/// entries and Jacobian blocks as Local inputs, so the function material reads
+/// the trial state back through the graph.
+///
+/// Properties, by convention from the unknown names:
+///   produces  <solver>::<name>                       (one per unknown)
+///   consumes  <function>::residual_<name>
+///             <function>::jacobian_<name_i>_<name_j>
+///
+/// Every piece carries its own layout (see unknown_layout.h); the solver only
+/// sees layout_base and never touches Mandel packing itself.
+///
+/// Deliberately has NO hidden projection. backward_euler::solve once clamped
+/// every result to non-negative, which silently corrupted any signed unknown;
+/// a caller needing a KKT projection must apply it explicitly.
+template<typename Traits>
+class vector_newton final
+    : public material_base<vector_newton<Traits>, Traits> {
+public:
+  using base = material_base<vector_newton<Traits>, Traits>;
+  using value_type = typename base::value_type;
+  using input_parameter_controller = typename base::input_parameter_controller;
+  static constexpr auto Dim = base::Dim;
+
+  using scalar_k = scalar_unknown<value_type>;
+  using sym_k    = sym_tensor_unknown<value_type, Dim>;
+
+  using vector_t = Eigen::Matrix<value_type, Eigen::Dynamic, 1>;
+  using matrix_t = Eigen::Matrix<value_type, Eigen::Dynamic, Eigen::Dynamic>;
+
+  template<typename... Args>
+  explicit vector_newton(Args&&... args)
+      : base(std::forward<Args>(args)...),
+        m_func(base::template get_parameter<std::string>("function")),
+        m_tol(base::template get_parameter<value_type>("tolerance")),
+        m_lin_tol(base::template get_parameter<value_type>("linear_tolerance")),
+        m_max_iter(base::template get_parameter<int>("max_iter"))
+  {
+    const auto& specs =
+        base::template get_parameter<std::vector<unknown_spec>>("unknowns");
+    if (specs.empty())
+      throw std::runtime_error("vector_newton '" + std::string(base::name()) +
+                               "': 'unknowns' must not be empty");
+
+    std::vector<block_ref> zeros;
+    if (base::m_parameter_handler.contains("zero_blocks"))
+      zeros = base::template get_parameter<std::vector<block_ref>>("zero_blocks");
+
+    const auto n = specs.size();
+    m_jacobian.resize(n);
+    for (auto& row : m_jacobian) row.resize(n);
+
+    // State outputs + residual inputs.
+    for (const auto& s : specs) add_state_and_residual(s);
+
+    // Jacobian blocks: dense by default, so a forgotten block is a wiring
+    // error rather than a silently-wrong Jacobian. Sparsity is opt-in.
+    for (std::size_t i = 0; i < n; ++i)
+      for (std::size_t j = 0; j < n; ++j) {
+        const auto is_zero =
+            std::find(zeros.begin(), zeros.end(),
+                      block_ref{specs[i].name, specs[j].name}) != zeros.end();
+        if (!is_zero) add_block(specs[i], specs[j], i, j);
+      }
+
+    m_N = 0;
+    for (const auto& s : m_state) m_N += s->rows();
+    m_x.setZero(m_N);
+    m_R.setZero(m_N);
+    m_dx.setZero(m_N);
+    m_J.setZero(m_N, m_N);
+
+    // Graph-driven mode: bind solve() to the first unknown so that a downstream
+    // update_source() on it drives the iteration, as backward_euler does with
+    // "delta".
+    if (auto p = base::m_property_handler.find(base::m_name, specs.front().name))
+      (*p)->traits().update = [this]() { this->update(); };
+  }
+
+  static input_parameter_controller parameters() {
+    input_parameter_controller para{base::parameters()};
+    para.template insert<std::string>("function").template add<is_required>();
+    para.template insert<std::vector<unknown_spec>>("unknowns")
+        .template add<is_required>();
+    para.template insert<value_type>("tolerance")
+        .template add<set_default>(value_type{1e-10});
+    // Backward-error tolerance for the linear solve; guards a singular Jacobian.
+    para.template insert<value_type>("linear_tolerance")
+        .template add<set_default>(value_type{1e-8});
+    para.template insert<int>("max_iter").template add<set_default>(50);
+    return para;
+  }
+
+  /// Run the coupled Newton iteration. The converged unknowns are left in the
+  /// output properties; check converged() before trusting them.
+  void update() override { solve(); }
+
+  void solve() {
+    m_converged = false;
+    gather_state(m_x);   // seed from whatever the properties currently hold
+
+    // Evaluate-first: the residual AFTER the final update is the one tested, so
+    // a solve that converges on its last allowed update is reported converged.
+    for (int iter = 0; iter <= m_max_iter; ++iter) {
+      scatter_state(m_x);
+      gather_residual();
+
+      if (m_R.template lpNorm<Eigen::Infinity>() < m_tol) {
+        m_converged = true;
+        gather_jacobian();      // factorize at the CONVERGED point so that
+        m_lu.compute(m_J);      // solve_with_factorization() is usable (#12)
+        return;
+      }
+      if (iter == m_max_iter) return;
+
+      gather_jacobian();
+      m_lu.compute(m_J);
+      m_dx = m_lu.solve(m_R);
+
+      // Guard a singular / rank-deficient Jacobian. A backward-error check is
+      // cheaper than rank-revealing pivoting every iteration and catches the
+      // same failures; finiteness alone would not.
+      if (!m_dx.allFinite()) return;
+      const auto rn = m_R.template lpNorm<Eigen::Infinity>();
+      const auto back_err =
+          (m_J * m_dx - m_R).template lpNorm<Eigen::Infinity>();
+      if (back_err > m_lin_tol * rn) return;
+
+      m_x -= m_dx;
+    }
+  }
+
+  bool converged() const noexcept { return m_converged; }
+
+  /// Size of the flat system.
+  std::size_t size() const noexcept { return m_N; }
+
+  /// Reuse the Jacobian factorization from the converged solve, so a consistent
+  /// tangent dx/deps can be assembled by solving J * (dx/deps) = -dR/deps
+  /// without ever forming an inverse.
+  template<typename Rhs>
+  auto solve_with_factorization(const Rhs& rhs) const {
+    return m_lu.solve(rhs);
+  }
+
+private:
+  // --- construction helpers ------------------------------------------------
+
+  void add_state_and_residual(const unknown_spec& s) {
+    switch (s.kind) {
+      case unknown_kind::scalar:     emplace_state<scalar_k>(s.name); break;
+      case unknown_kind::sym_tensor: emplace_state<sym_k>(s.name);    break;
+    }
+  }
+
+  template<typename U>
+  void emplace_state(const std::string& name) {
+    auto& ref = base::template add_output<typename U::value_type>(name);
+    m_state.push_back(
+        std::make_unique<state_layout<value_type, U>>(ref));
+
+    const auto& in = base::template add_input<typename U::value_type>(
+        m_func, "residual_" + name, EdgeKind::Local);
+    m_residual.push_back(
+        std::make_unique<residual_layout<value_type, U>>(in));
+  }
+
+  // Bounded runtime -> compile-time dispatch on the kind PAIR. The pair matters:
+  // (scalar, sym) and (sym, scalar) are both rank-2 tensors but pack as a row
+  // and a column respectively, so the value type alone cannot disambiguate.
+  void add_block(const unknown_spec& si, const unknown_spec& sj,
+                 std::size_t i, std::size_t j) {
+    switch (si.kind) {
+      case unknown_kind::scalar:     add_block_j<scalar_k>(sj, si.name, i, j); break;
+      case unknown_kind::sym_tensor: add_block_j<sym_k>(sj, si.name, i, j);    break;
+    }
+  }
+
+  template<typename UI>
+  void add_block_j(const unknown_spec& sj, const std::string& name_i,
+                   std::size_t i, std::size_t j) {
+    switch (sj.kind) {
+      case unknown_kind::scalar:
+        emplace_block<UI, scalar_k>(name_i, sj.name, i, j); break;
+      case unknown_kind::sym_tensor:
+        emplace_block<UI, sym_k>(name_i, sj.name, i, j); break;
+    }
+  }
+
+  template<typename UI, typename UJ>
+  void emplace_block(const std::string& name_i, const std::string& name_j,
+                     std::size_t i, std::size_t j) {
+    using block_t = jacobian_block_layout<value_type, UI, UJ>;
+    const auto& in = base::template add_input<typename block_t::value_type>(
+        m_func, "jacobian_" + name_i + "_" + name_j, EdgeKind::Local);
+    m_jacobian[i][j] = std::make_unique<block_t>(in);
+  }
+
+  // --- serialization -------------------------------------------------------
+
+  void scatter_state(const vector_t& x) {
+    std::size_t r = 0;
+    for (auto& s : m_state) { s->scatter(x.data(), r); r += s->rows(); }
+  }
+
+  void gather_state(vector_t& x) {
+    if (x.size() != static_cast<Eigen::Index>(m_N)) x.setZero(m_N);
+    std::size_t r = 0;
+    for (auto& s : m_state) { s->gather(x.data(), r, 0, m_N); r += s->rows(); }
+  }
+
+  void gather_residual() {
+    std::size_t r = 0;
+    for (auto& L : m_residual) {
+      L->update_source();
+      L->gather(m_R.data(), r, 0, m_N);
+      r += L->rows();
+    }
+  }
+
+  void gather_jacobian() {
+    m_J.setZero();   // absent blocks stay structurally zero
+    std::size_t r = 0;
+    for (std::size_t i = 0; i < m_state.size(); ++i) {
+      std::size_t c = 0;
+      for (std::size_t j = 0; j < m_state.size(); ++j) {
+        if (auto& B = m_jacobian[i][j]) {
+          B->update_source();
+          B->gather(m_J.data(), r, c, m_N);
+        }
+        c += m_state[j]->rows();
+      }
+      r += m_state[i]->rows();
+    }
+  }
+
+private:
+  const std::string& m_func;
+  const value_type& m_tol;
+  const value_type& m_lin_tol;
+  const int& m_max_iter;
+
+  std::vector<std::unique_ptr<state_layout_base<value_type>>> m_state;
+  std::vector<std::unique_ptr<layout_base<value_type>>> m_residual;
+  std::vector<std::vector<std::unique_ptr<layout_base<value_type>>>> m_jacobian;
+
+  std::size_t m_N{0};
+  vector_t m_x, m_R, m_dx;
+  matrix_t m_J;
+  Eigen::PartialPivLU<matrix_t> m_lu;
+  bool m_converged{false};
+};
+
+} // namespace numsim::materials
+
+#endif // NUMSIM_MATERIALS_VECTOR_NEWTON_H

@@ -1,0 +1,402 @@
+#include <gtest/gtest.h>
+#include <cmath>
+#include <string>
+#include <vector>
+#include <tmech/tmech.h>
+#include "numsim-materials/core/material_context.h"
+#include "numsim-materials/solvers/vector_newton.h"
+
+// nlohmann/json is an optional dependency (see README), so the JSON round-trip
+// below degrades to nothing rather than making the suite fail to build.
+#if __has_include(<nlohmann/json.hpp>)
+#define NUMSIM_HAVE_JSON 1
+#include <nlohmann/json.hpp>
+#include "numsim-materials/default_materials.h"
+#include "numsim-materials/io/json_material_factory.h"
+#endif
+
+namespace {
+
+using namespace numsim::materials;
+
+using policy = material_policy_default;
+using T = policy::value_type;
+using ctx_type = material_context<policy>;
+using param_type = policy::ParameterHandler;
+using tensor2 = tmech::tensor<T, 3, 2>;
+using tensor4 = tmech::tensor<T, 3, 4>;
+using solver_type = vector_newton<policy>;
+
+// ---------------------------------------------------------------------------
+// Test function material: two coupled scalar unknowns.
+// ---------------------------------------------------------------------------
+//
+// Mirrors autocatalytic_reaction's coupling: it reads the solver's trial state
+// over Local edges (which the topological sort excludes, breaking the cycle)
+// and publishes residual/Jacobian pieces the solver gathers.
+//
+// The compute callback is bound to exactly ONE property; the others are plain
+// outputs. The solver calls update_source() on every input it holds, and only
+// the bound one fires, so compute runs once per gather rather than once per
+// piece.
+
+enum class system_mode { linear, nonlinear, singular };
+
+class scalar_system_2 final : public material_base<scalar_system_2, policy> {
+public:
+  using base = material_base<scalar_system_2, policy>;
+
+  template<typename... Args>
+  explicit scalar_system_2(Args&&... args)
+      : base(std::forward<Args>(args)...),
+        m_rx(base::add_output<T>("residual_x", &scalar_system_2::compute)),
+        m_ry(base::add_output<T>("residual_y")),
+        m_jxx(base::add_output<T>("jacobian_x_x")),
+        m_jxy(base::add_output<T>("jacobian_x_y")),
+        m_jyx(base::add_output<T>("jacobian_y_x")),
+        m_jyy(base::add_output<T>("jacobian_y_y")),
+        m_mode(static_cast<system_mode>(base::get_parameter<int>("mode"))),
+        m_a(base::get_parameter<T>("a")),
+        m_b(base::get_parameter<T>("b")),
+        m_solver(base::get_parameter<std::string>("solver_name")),
+        m_x(base::add_input<T>(m_solver, "x", EdgeKind::Local)),
+        m_y(base::add_input<T>(m_solver, "y", EdgeKind::Local)) {}
+
+  static input_parameter_controller parameters() {
+    input_parameter_controller para{base::parameters()};
+    para.insert<std::string>("solver_name").add<is_required>();
+    para.insert<int>("mode").add<set_default>(0);
+    para.insert<T>("a").add<set_default>(T{0});
+    para.insert<T>("b").add<set_default>(T{0});
+    return para;
+  }
+
+  void compute() {
+    const auto x = m_x.get();
+    const auto y = m_y.get();
+    switch (m_mode) {
+      case system_mode::linear:
+        // [2 1; 1 3] (x,y) = (a,b) — SPD, so Newton lands in one update.
+        m_rx = 2 * x + y - m_a;   m_jxx = 2;  m_jxy = 1;
+        m_ry = x + 3 * y - m_b;   m_jyx = 1;  m_jyy = 3;
+        break;
+      case system_mode::nonlinear:
+        // x^2 + y = a ; x + y^2 = b — genuinely iterates.
+        m_rx = x * x + y - m_a;   m_jxx = 2 * x;  m_jxy = 1;
+        m_ry = x + y * y - m_b;   m_jyx = 1;      m_jyy = 2 * y;
+        break;
+      case system_mode::singular:
+        // Two identical Jacobian rows AND inconsistent right-hand sides
+        // (a != b), so the residual can never vanish. A rank-deficient but
+        // *consistent* system is not a failure case — the solver would
+        // legitimately land on a point of the solution manifold.
+        m_rx = x + y - m_a;   m_jxx = 1;  m_jxy = 1;
+        m_ry = x + y - m_b;   m_jyx = 1;  m_jyy = 1;
+        break;
+    }
+  }
+
+private:
+  T& m_rx; T& m_ry;
+  T& m_jxx; T& m_jxy; T& m_jyx; T& m_jyy;
+  system_mode m_mode;
+  const T& m_a;
+  const T& m_b;
+  const std::string& m_solver;
+  const input_property<T, property_traits>& m_x;
+  const input_property<T, property_traits>& m_y;
+};
+
+/// Build a context with the 2-scalar system driven by vector_newton.
+struct scalar_fixture {
+  ctx_type ctx;
+  solver_type* solver{nullptr};
+
+  scalar_fixture(system_mode mode, T a, T b, int max_iter = 50) {
+    param_type p;
+
+    p.clear();
+    p.insert<std::string>("name", "solver");
+    p.insert<std::string>("function", "sys");
+    p.insert<int>("max_iter", max_iter);
+    p.insert<std::vector<unknown_spec>>(
+        "unknowns", {{"x", unknown_kind::scalar}, {"y", unknown_kind::scalar}});
+    solver = &ctx.create<solver_type>(p);
+
+    p.clear();
+    p.insert<std::string>("name", "sys");
+    p.insert<std::string>("solver_name", "solver");
+    p.insert<int>("mode", static_cast<int>(mode));
+    p.insert<T>("a", a);
+    p.insert<T>("b", b);
+    ctx.create<scalar_system_2>(p);
+
+    ctx.finalize();
+  }
+};
+
+// ---------------------------------------------------------------------------
+// #14 acceptance
+// ---------------------------------------------------------------------------
+
+TEST(VectorNewton, LinearSystemIsExact) {
+  scalar_fixture f(system_mode::linear, 5.0, 10.0);
+  f.solver->solve();
+
+  ASSERT_TRUE(f.solver->converged());
+  // [2 1; 1 3] x = (5,10) -> x = (1,3)
+  EXPECT_NEAR(f.ctx.get<T>("solver", "x"), 1.0, 1e-12);
+  EXPECT_NEAR(f.ctx.get<T>("solver", "y"), 3.0, 1e-12);
+  EXPECT_EQ(f.solver->size(), 2u);
+}
+
+TEST(VectorNewton, NonlinearSystemConvergesToAnalyticRoot) {
+  // x = 1, y = 2  ->  a = 1 + 2 = 3, b = 1 + 4 = 5
+  scalar_fixture f(system_mode::nonlinear, 3.0, 5.0);
+
+  // A single Newton update cannot reach the root of a genuinely nonlinear
+  // system, so this exercises the loop rather than a one-step linear solve.
+  scalar_fixture one_step(system_mode::nonlinear, 3.0, 5.0, /*max_iter=*/1);
+  one_step.solver->solve();
+  EXPECT_FALSE(one_step.solver->converged())
+      << "must take more than one update — otherwise the test is vacuous";
+
+  f.solver->solve();
+  ASSERT_TRUE(f.solver->converged());
+  EXPECT_NEAR(f.ctx.get<T>("solver", "x"), 1.0, 1e-9);
+  EXPECT_NEAR(f.ctx.get<T>("solver", "y"), 2.0, 1e-9);
+}
+
+TEST(VectorNewton, SingularJacobianReportsFailure) {
+  scalar_fixture f(system_mode::singular, 4.0, 7.0);   // inconsistent: a != b
+  f.solver->solve();
+
+  EXPECT_FALSE(f.solver->converged())
+      << "a rank-deficient Jacobian must not be reported as a converged solve";
+  const auto x = f.ctx.get<T>("solver", "x");
+  const auto y = f.ctx.get<T>("solver", "y");
+  EXPECT_TRUE(std::isfinite(x) && std::isfinite(y))
+      << "and must not scatter NaN/inf into the state";
+}
+
+TEST(VectorNewton, MaxIterExhaustedReportsFailure) {
+  scalar_fixture f(system_mode::nonlinear, 3.0, 5.0, /*max_iter=*/0);
+  f.solver->solve();
+  EXPECT_FALSE(f.solver->converged());
+}
+
+TEST(VectorNewton, ConvergesOnExactlyMaxIter) {
+  // The linear system needs exactly one update. With evaluate-first ordering
+  // the residual after that update is still tested, so max_iter == 1 must be
+  // reported converged — this is the off-by-one guard.
+  scalar_fixture f(system_mode::linear, 5.0, 10.0, /*max_iter=*/1);
+  f.solver->solve();
+
+  EXPECT_TRUE(f.solver->converged())
+      << "a solve converging on its last allowed update must not be reported failed";
+  EXPECT_NEAR(f.ctx.get<T>("solver", "x"), 1.0, 1e-12);
+}
+
+TEST(VectorNewton, GraphDrivenUpdateDrivesTheIteration) {
+  // #12: ctx.update() reaches the solver through the graph rather than a
+  // direct solve() call.
+  scalar_fixture f(system_mode::linear, 5.0, 10.0);
+  f.ctx.update();
+
+  EXPECT_TRUE(f.solver->converged());
+  EXPECT_NEAR(f.ctx.get<T>("solver", "x"), 1.0, 1e-12);
+  EXPECT_NEAR(f.ctx.get<T>("solver", "y"), 3.0, 1e-12);
+}
+
+// ---------------------------------------------------------------------------
+// #15 acceptance: mixed scalar + symmetric tensor
+// ---------------------------------------------------------------------------
+//
+//   R_g = g + tr(B) - a          (scalar)
+//   R_B = B - g*P                (symmetric tensor)
+//
+// Closed form: B = g*P and g(1 + tr P) = a, so g = a / (1 + tr P).
+// Exercises all four block shapes: 1x1, 1x6 row, 6x1 column, 6x6.
+
+class mixed_system final : public material_base<mixed_system, policy> {
+public:
+  using base = material_base<mixed_system, policy>;
+
+  template<typename... Args>
+  explicit mixed_system(Args&&... args)
+      : base(std::forward<Args>(args)...),
+        m_rg(base::add_output<T>("residual_g", &mixed_system::compute)),
+        m_rB(base::add_output<tensor2>("residual_B")),
+        m_jgg(base::add_output<T>("jacobian_g_g")),
+        m_jgB(base::add_output<tensor2>("jacobian_g_B")),
+        m_jBg(base::add_output<tensor2>("jacobian_B_g")),
+        m_jBB(base::add_output<tensor4>("jacobian_B_B")),
+        m_a(base::get_parameter<T>("a")),
+        m_solver(base::get_parameter<std::string>("solver_name")),
+        m_g(base::add_input<T>(m_solver, "g", EdgeKind::Local)),
+        m_B(base::add_input<tensor2>(m_solver, "B", EdgeKind::Local)) {
+    m_P = tensor2{0.5, 0.2, 0.1,
+                  0.2, 0.7, 0.3,
+                  0.1, 0.3, 0.9};
+  }
+
+  static input_parameter_controller parameters() {
+    input_parameter_controller para{base::parameters()};
+    para.insert<std::string>("solver_name").add<is_required>();
+    para.insert<T>("a").add<set_default>(T{1});
+    return para;
+  }
+
+  const tensor2& P() const noexcept { return m_P; }
+
+  void compute() {
+    const auto g = m_g.get();
+    const auto& B = m_B.get();
+    const auto I = tmech::eye<T, 3, 2>();
+    const auto IIsym = tensor4{
+        (tmech::otimesu(I, I) + tmech::otimesl(I, I)) * T{0.5}};
+
+    m_rg = g + tmech::trace(B) - m_a;
+    m_rB = B - g * m_P;
+
+    m_jgg = T{1};
+    m_jgB = tensor2{I};        // d(tr B)/dB = I, packed as a 1x6 row
+    m_jBg = tensor2{-m_P};     // dR_B/dg,     packed as a 6x1 column
+    m_jBB = IIsym;             // dR_B/dB
+  }
+
+private:
+  T& m_rg;
+  tensor2& m_rB;
+  T& m_jgg;
+  tensor2& m_jgB;
+  tensor2& m_jBg;
+  tensor4& m_jBB;
+  const T& m_a;
+  const std::string& m_solver;
+  const input_property<T, property_traits>& m_g;
+  const input_property<tensor2, property_traits>& m_B;
+  tensor2 m_P{};
+};
+
+TEST(VectorNewton, MixedScalarAndSymmetricTensorSystem) {
+  ctx_type ctx;
+  param_type p;
+  const T a = 2.0;
+
+  p.clear();
+  p.insert<std::string>("name", "solver");
+  p.insert<std::string>("function", "sys");
+  p.insert<std::vector<unknown_spec>>(
+      "unknowns", {{"g", unknown_kind::scalar}, {"B", unknown_kind::sym_tensor}});
+  auto& solver = ctx.create<solver_type>(p);
+
+  p.clear();
+  p.insert<std::string>("name", "sys");
+  p.insert<std::string>("solver_name", "solver");
+  p.insert<T>("a", a);
+  auto& sys = ctx.create<mixed_system>(p);
+
+  ctx.finalize();
+
+  EXPECT_EQ(solver.size(), 7u) << "1 scalar + 1 symmetric 3D tensor";
+
+  solver.solve();
+  ASSERT_TRUE(solver.converged());
+
+  const auto trP = tmech::trace(sys.P());
+  const T g_ref = a / (T{1} + trP);
+  const tensor2 B_ref = g_ref * sys.P();
+
+  EXPECT_NEAR(ctx.get<T>("solver", "g"), g_ref, 1e-10);
+  const auto& B = ctx.get<tensor2>("solver", "B");
+  for (std::size_t i = 0; i < 3; ++i)
+    for (std::size_t j = 0; j < 3; ++j)
+      EXPECT_NEAR(B(i, j), B_ref(i, j), 1e-10) << "B(" << i << "," << j << ")";
+}
+
+TEST(VectorNewton, StructurallyZeroBlockIsSkipped) {
+  // Declaring the (x,y) block zero is a lie for this system, so the Newton
+  // direction is only approximate — it degrades to a fixed-point iteration.
+  // It still converges, because the residual is what is driven to zero and the
+  // remaining lower-triangular J is nonsingular. That is the point: an omitted
+  // block changes the path, not the answer.
+  ctx_type ctx;
+  param_type p;
+
+  p.clear();
+  p.insert<std::string>("name", "solver");
+  p.insert<std::string>("function", "sys");
+  p.insert<std::vector<unknown_spec>>(
+      "unknowns", {{"x", unknown_kind::scalar}, {"y", unknown_kind::scalar}});
+  p.insert<std::vector<block_ref>>("zero_blocks", {{"x", "y"}});
+  auto& solver = ctx.create<solver_type>(p);
+
+  p.clear();
+  p.insert<std::string>("name", "sys");
+  p.insert<std::string>("solver_name", "solver");
+  p.insert<int>("mode", static_cast<int>(system_mode::linear));
+  p.insert<T>("a", 5.0);
+  p.insert<T>("b", 10.0);
+  ctx.create<scalar_system_2>(p);
+
+  ctx.finalize();
+  solver.solve();
+
+  // Lower-triangular J is still nonsingular, so the fixed-point iteration
+  // converges — to the true root, since the residual is what is driven to zero.
+  ASSERT_TRUE(solver.converged());
+  EXPECT_NEAR(ctx.get<T>("solver", "x"), 1.0, 1e-9);
+  EXPECT_NEAR(ctx.get<T>("solver", "y"), 3.0, 1e-9);
+}
+
+// ---------------------------------------------------------------------------
+// JSON round-trip
+// ---------------------------------------------------------------------------
+
+#ifdef NUMSIM_HAVE_JSON
+TEST(VectorNewtonJson, ConfigMatchesHandWiredSetup) {
+  register_default_materials<policy>();
+  material_factory<policy>::instance()
+      .template register_type<scalar_system_2>("scalar_system_2");
+
+  const auto json = nlohmann::json::parse(R"({
+    "materials": [
+      {"type": "vector_newton", "name": "solver",
+       "function": "sys",
+       "tolerance": 1e-12,
+       "max_iter": 50,
+       "unknowns": [
+         {"name": "x", "kind": "scalar"},
+         {"name": "y", "kind": "scalar"}
+       ]},
+      {"type": "scalar_system_2", "name": "sys",
+       "solver_name": "solver", "mode": 0, "a": 5.0, "b": 10.0}
+    ]
+  })");
+
+  ctx_type ctx;
+  for (const auto& mat : json["materials"]) create_from_json(ctx, mat);
+  ctx.finalize();
+  ctx.update();
+
+  // Same system as LinearSystemIsExact, reached through the JSON path.
+  EXPECT_NEAR(ctx.get<T>("solver", "x"), 1.0, 1e-12);
+  EXPECT_NEAR(ctx.get<T>("solver", "y"), 3.0, 1e-12);
+}
+
+TEST(VectorNewtonJson, RejectsUnrecognisedKind) {
+  register_default_materials<policy>();
+
+  const auto json = nlohmann::json::parse(R"({
+    "type": "vector_newton", "name": "solver", "function": "sys",
+    "unknowns": [{"name": "x", "kind": "nonsuch"}]
+  })");
+
+  ctx_type ctx;
+  EXPECT_THROW(create_from_json(ctx, json), std::runtime_error)
+      << "an unrecognised kind must fail loudly, not default to scalar";
+}
+#endif
+
+} // namespace

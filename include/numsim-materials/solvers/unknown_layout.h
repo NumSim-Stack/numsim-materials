@@ -2,10 +2,12 @@
 #define NUMSIM_MATERIALS_UNKNOWN_LAYOUT_H
 
 #include <cstddef>
+#include <string>
 #include <type_traits>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/input_types.h"
 #include "numsim-materials/core/property_traits.h"
+#include "numsim-materials/core/unknown_spec.h"
 
 /// Serialization layer between tmech tensors and the flat Eigen system solved
 /// by vector_newton.
@@ -52,6 +54,9 @@ struct sym_tensor_unknown {
   static constexpr std::size_t width = (Dim == 2 ? 3 : 6);
   static constexpr std::size_t dim   = Dim;
 };
+
+// The runtime counterparts (unknown_kind, unknown_spec, block_ref) live in
+// core/unknown_spec.h so the JSON layer can read them without pulling in tmech.
 
 namespace layout_detail {
 
