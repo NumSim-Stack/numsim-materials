@@ -70,6 +70,7 @@ cmake --build build -j$(nproc)
 | `NUMSIM_BUILD_TESTS` | ON | Build GTest unit tests |
 | `NUMSIM_BUILD_EXAMPLES` | ON | Build examples |
 | `ENABLE_PLOTTING` | OFF | Qt6 + QCustomPlot live plotting |
+| `NUMSIM_USE_SYSTEM_TMECH` | OFF | Use an installed tmech instead of fetching it |
 
 ### Run tests
 
@@ -83,7 +84,9 @@ cd build && ctest --output-on-failure
 
 - C++23 (GCC 14+ or Clang 18+)
 - [numsim-core](https://github.com/NumSim-Stack/numsim-core) — fetched automatically via CMake
-- [tmech](https://github.com/petlenz/tmech) — tensor library (`find_package(tmech REQUIRED)`)
+- [tmech](https://github.com/petlenz/tmech) — tensor library; fetched automatically via CMake
+  (set `NUMSIM_USE_SYSTEM_TMECH=ON` to use an installed copy instead, or
+  `-DFETCHCONTENT_SOURCE_DIR_TMECH=/path/to/tmech` for a local checkout)
 - [nlohmann/json](https://github.com/nlohmann/json) — for JSON configuration (optional)
 - Qt6 + QCustomPlot — for live plotting (optional)
 
