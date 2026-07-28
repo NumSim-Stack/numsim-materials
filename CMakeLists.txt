@@ -25,14 +25,29 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(numsim-core)
 
 # --- Dependencies (tmech tensor library) ---
-find_package(tmech QUIET)
-if(NOT tmech_FOUND)
+# Fetched by default rather than found. find_package(tmech) succeeds against
+# ANY installed version, including one predating features used here (the Mandel
+# adaptor tag in solvers/unknown_layout.h), and tmech's config exposes no
+# version constraint that could express the difference — so a stale system
+# install would silently win and fail at compile time.
+option(NUMSIM_USE_SYSTEM_TMECH "Use an installed tmech instead of fetching it" OFF)
+
+if(NUMSIM_USE_SYSTEM_TMECH)
+  find_package(tmech REQUIRED)
+else()
+  # tmech defaults TMECH_BUILD_TESTS and TMECH_BUILD_EXAMPLES to ON; as a
+  # subproject we want neither. (TMECH_INSTALL already defaults off when tmech
+  # is not the top-level project.)
+  set(TMECH_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(TMECH_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+  set(TMECH_BUILD_BENCHMARK OFF CACHE BOOL "" FORCE)
   FetchContent_Declare(
     tmech
     GIT_REPOSITORY https://github.com/petlenz/tmech
     GIT_TAG master
   )
-  set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  # To use a local tmech checkout, configure with:
+  #   -DFETCHCONTENT_SOURCE_DIR_TMECH=/path/to/tmech
   FetchContent_MakeAvailable(tmech)
 endif()
 
