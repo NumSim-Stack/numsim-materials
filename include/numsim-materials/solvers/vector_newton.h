@@ -133,6 +133,7 @@ public:
     // a solve that converges on its last allowed update is reported converged.
     for (int iter = 0; iter <= m_max_iter; ++iter) {
       scatter_state(m_x);
+      refresh_sources();
       gather_residual();
 
       if (m_R.template lpNorm<Eigen::Infinity>() < m_tol) {
@@ -304,15 +305,27 @@ private:
     for (auto& s : m_state) { s->gather(x.data(), r, 0, m_N); r += s->rows(); }
   }
 
-  /// Re-evaluate the function material, then pack the residual.
+  /// Re-evaluate the function material once for the current iterate.
   ///
-  /// update_source() fires the update callback of the specific property it is
-  /// called on, so this walks every residual input rather than picking one:
-  /// the material is free to bind its compute to whichever of its outputs it
-  /// likes, and guessing wrong would silently gather stale values. The calls
-  /// that do not carry a callback are an empty std::function check.
-  void gather_residual() {
+  /// update_source() fires the update callback of the SPECIFIC property it is
+  /// called on, so this must touch every input, not a chosen one. A material
+  /// may bind its compute to any of its outputs — including a Jacobian block —
+  /// and narrowing this to the residual inputs makes such a material silently
+  /// gather default-constructed values: with R == 0 the solver then reports
+  /// convergence at whatever the initial iterate happened to be.
+  ///
+  /// Inputs whose source carries no callback cost an empty std::function
+  /// check, and in the normal case exactly one callback fires, so compute runs
+  /// once per iteration rather than once per gather.
+  void refresh_sources() {
     for (auto& L : m_residual) L->update_source();
+    for (auto& row : m_jacobian)
+      for (auto& B : row)
+        if (B) B->update_source();
+  }
+
+  /// Pack the residual. Pure serialization — refresh_sources() has already run.
+  void gather_residual() {
     std::size_t r = 0;
     for (auto& L : m_residual) {
       L->gather(m_R.data(), r, 0, m_N);
@@ -320,11 +333,7 @@ private:
     }
   }
 
-  /// Pack the Jacobian. Deliberately does NOT call update_source(): the
-  /// material computes residual and Jacobian together, gather_residual() has
-  /// just run it at this same iterate, so the blocks are already current.
-  /// Re-triggering here would re-run compute once per block — N^2 times per
-  /// iteration — for no change in the result.
+  /// Pack the Jacobian. Pure serialization, as above.
   void gather_jacobian() {
     m_J.setZero();   // absent blocks stay structurally zero
     std::size_t r = 0;

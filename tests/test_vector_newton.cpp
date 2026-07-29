@@ -542,6 +542,80 @@ TEST(VectorNewtonValidation, MistypedProducerPropertyFailsToWire) {
 }
 
 // ---------------------------------------------------------------------------
+// Callback placement must not matter
+// ---------------------------------------------------------------------------
+//
+// update_source() fires the callback of the specific property it is called on.
+// A material is free to bind its compute to any of its outputs, so the solver
+// must not depend on that binding landing on a residual property.
+
+class jacobian_bound_system final
+    : public material_base<jacobian_bound_system, policy> {
+public:
+  using base = material_base<jacobian_bound_system, policy>;
+
+  template<typename... Args>
+  explicit jacobian_bound_system(Args&&... args)
+      : base(std::forward<Args>(args)...),
+        m_rx(base::add_output<T>("residual_x")),
+        m_ry(base::add_output<T>("residual_y")),
+        // compute is bound to a JACOBIAN block, not a residual.
+        m_jxx(base::add_output<T>("jacobian_x_x", &jacobian_bound_system::compute)),
+        m_jxy(base::add_output<T>("jacobian_x_y")),
+        m_jyx(base::add_output<T>("jacobian_y_x")),
+        m_jyy(base::add_output<T>("jacobian_y_y")),
+        m_solver(base::get_parameter<std::string>("solver_name")),
+        m_x(base::add_input<T>(m_solver, "x", EdgeKind::Local)),
+        m_y(base::add_input<T>(m_solver, "y", EdgeKind::Local)) {}
+
+  static input_parameter_controller parameters() {
+    input_parameter_controller para{base::parameters()};
+    para.insert<std::string>("solver_name").add<is_required>();
+    return para;
+  }
+
+  void compute() {
+    const auto x = m_x.get();
+    const auto y = m_y.get();
+    m_rx = 2 * x + y - T{5};   m_jxx = 2;  m_jxy = 1;
+    m_ry = x + 3 * y - T{10};  m_jyx = 1;  m_jyy = 3;
+  }
+
+private:
+  T& m_rx; T& m_ry;
+  T& m_jxx; T& m_jxy; T& m_jyx; T& m_jyy;
+  const std::string& m_solver;
+  const input_property<T, property_traits>& m_x;
+  const input_property<T, property_traits>& m_y;
+};
+
+TEST(VectorNewton, WorksWhenComputeIsBoundToAJacobianBlock) {
+  ctx_type ctx;
+  param_type p;
+
+  p.clear();
+  p.insert<std::string>("name", "solver");
+  p.insert<std::string>("function", "sys");
+  p.insert<std::vector<unknown_spec>>(
+      "unknowns", {{"x", unknown_kind::scalar}, {"y", unknown_kind::scalar}});
+  auto& solver = ctx.create<solver_type>(p);
+
+  p.clear();
+  p.insert<std::string>("name", "sys");
+  p.insert<std::string>("solver_name", "solver");
+  ctx.create<jacobian_bound_system>(p);
+
+  ctx.finalize();
+  solver.solve();
+
+  ASSERT_TRUE(solver.converged())
+      << "the solver must re-evaluate regardless of which output carries the "
+         "material's compute callback";
+  EXPECT_NEAR(ctx.get<T>("solver", "x"), 1.0, 1e-12);
+  EXPECT_NEAR(ctx.get<T>("solver", "y"), 3.0, 1e-12);
+}
+
+// ---------------------------------------------------------------------------
 // JSON round-trip
 // ---------------------------------------------------------------------------
 
