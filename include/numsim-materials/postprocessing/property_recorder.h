@@ -1,9 +1,11 @@
 #ifndef NUMSIM_MATERIALS_PROPERTY_RECORDER_H
 #define NUMSIM_MATERIALS_PROPERTY_RECORDER_H
 
+#include <cstddef>
 #include <fstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <tmech/tmech.h>
@@ -47,22 +49,28 @@ public:
   using tensor2 = tmech::tensor<value_type, Dim, 2>;
 
   template <typename... Args>
-  property_recorder(Args&&... args)
-      : base(std::forward<Args>(args)...),
-        m_scalar_source_strs(base::template get_parameter<std::vector<std::string>>(
-            "scalar_sources")),
-        m_tensor_source_strs(base::template get_parameter<std::vector<std::string>>(
-            "tensor_sources")) {
-    if (m_scalar_source_strs.empty() && m_tensor_source_strs.empty())
+  property_recorder(Args&&... args) : base(std::forward<Args>(args)...) {
+    // The source lists are only needed to build the inputs + columns here, so
+    // bind them as ctor locals (they live in the material's own copied
+    // parameter_handler; keeping long-lived reference members buys nothing).
+    auto const& scalar_srcs =
+        base::template get_parameter<std::vector<std::string>>("scalar_sources");
+    auto const& tensor_srcs =
+        base::template get_parameter<std::vector<std::string>>("tensor_sources");
+
+    if (scalar_srcs.empty() && tensor_srcs.empty())
       throw std::runtime_error(
           "property_recorder '" + base::name() +
           "': at least one of scalar_sources / tensor_sources must be set.");
 
-    // Drive update() each step via a dummy output (as property_plot does).
+    // Drive update() each step via a dummy output. The property engine evaluates
+    // EVERY property in topological order (no consumed-only / dead-code pruning),
+    // so this consumer-less output's callback fires once per ctx.update() — the
+    // invariant the whole recorder (and property_plot) relies on.
     base::template add_output<int>("_record_tick", &property_recorder::update);
 
     // Scalar sources → one column each.
-    for (auto const& s : m_scalar_source_strs) {
+    for (auto const& s : scalar_srcs) {
       auto src = connection_source::parse(s);
       m_scalar_inputs.push_back(
           &base::template add_input<value_type>(src.material, src.property,
@@ -70,7 +78,7 @@ public:
       m_buffer.declare_column(sanitize(s));
     }
     // Tensor sources → Dim*Dim component columns `<name>_ij`.
-    for (auto const& s : m_tensor_source_strs) {
+    for (auto const& s : tensor_srcs) {
       auto src = connection_source::parse(s);
       m_tensor_inputs.push_back(
           &base::template add_input<tensor2>(src.material, src.property,
@@ -115,6 +123,10 @@ public:
       throw std::runtime_error("property_recorder '" + base::name() +
                                "': cannot open '" + path + "' for writing.");
     writer.write(m_buffer, os);
+    os.flush();
+    if (!os) // disk-full / write error would otherwise leave a silent truncation
+      throw std::runtime_error("property_recorder '" + base::name() +
+                               "': write to '" + path + "' failed.");
   }
 
 private:
@@ -143,8 +155,6 @@ private:
     return out;
   }
 
-  std::vector<std::string> const& m_scalar_source_strs;
-  std::vector<std::string> const& m_tensor_source_strs;
   std::vector<const input_property<value_type, property_traits>*> m_scalar_inputs;
   std::vector<const input_property<tensor2, property_traits>*> m_tensor_inputs;
   record_buffer m_buffer;

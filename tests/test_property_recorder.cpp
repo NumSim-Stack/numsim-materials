@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <locale>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -116,6 +117,35 @@ TEST(PropertyRecorder, CsvWriterRoundTrips) {
     }
   }
   EXPECT_FALSE(std::getline(is, line)) << "trailing content after last row";
+}
+
+// A source string with no alphanumerics, or two sources that sanitize to the
+// same column name, must be rejected — otherwise CSV emits nameless/ambiguous
+// columns and VTK emits shadowed (silently overwritten) point-data arrays.
+TEST(PropertyRecorder, RejectsCollidingColumnNames) {
+  ctx_type ctx;
+  param_type p;
+  p.insert<std::string>("name", "rec");
+  // Two sources that map to the same sanitized column name ("a_b").
+  p.insert<std::vector<std::string>>("scalar_sources", {"a::b", "a::b"});
+  EXPECT_THROW(ctx.create<property_recorder<policy>>(p), std::runtime_error);
+}
+
+// H1/M1: number formatting must be independent of the stream's locale AND its
+// sticky float flags. to_chars ignores both; the old `os << v` honored both and
+// silently corrupted CSV/VTK (comma decimal separator / fixed-notation clipping).
+TEST(PropertyRecorder, DoubleFormattingIgnoresLocaleAndFlags) {
+  struct comma_numpunct : std::numpunct<char> {
+    char do_decimal_point() const override { return ','; }
+  };
+  std::ostringstream os;
+  os.imbue(std::locale(os.getloc(), new comma_numpunct));
+  os << std::fixed; // sticky flag that would clip small magnitudes with <<
+  numsim::materials::detail::write_double(os, 3.5);
+  os << '|';
+  numsim::materials::detail::write_double(os, 1e-20);
+  // '.' decimal separator (not ','), and shortest round-trip (not fixed-clipped).
+  EXPECT_EQ(os.str(), "3.5|1e-20");
 }
 
 TEST(PropertyRecorder, VtkWriterEmitsWellFormedPolyData) {
