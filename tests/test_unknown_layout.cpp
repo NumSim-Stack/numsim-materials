@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include <memory>
 #include <vector>
+#include <Eigen/Dense>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/property.h"
 #include "numsim-materials/core/input_types.h"
@@ -90,8 +91,8 @@ TEST(UnknownLayout, ScatterGatherRoundTripsMixedState) {
   T flat_out[7]{};
   s0.gather(flat_out, 0, 0, 7);
   s1.gather(flat_out, 1, 0, 7);
-  for (int i = 0; i < 7; ++i)
-    EXPECT_NEAR(flat_out[i], flat_in[i], 1e-14) << "component " << i;
+  EXPECT_TRUE((Eigen::Map<const Eigen::Vector<T, 7>>(flat_out)
+                   .isApprox(Eigen::Map<const Eigen::Vector<T, 7>>(flat_in), 1e-14)));
 }
 
 // --- isometry across the bridge -------------------------------------------
@@ -107,8 +108,8 @@ TEST(UnknownLayout, PackingPreservesTheInnerProduct) {
   la.gather(ma, 0, 0, 6);
   lb.gather(mb, 0, 0, 6);
 
-  T dot = 0;
-  for (int i = 0; i < 6; ++i) dot += ma[i] * mb[i];
+  const T dot = Eigen::Map<const Eigen::Vector<T, 6>>(ma).dot(
+      Eigen::Map<const Eigen::Vector<T, 6>>(mb));
   EXPECT_NEAR(dot, tmech::dcontract(A, B), 1e-12)
       << "A:B must equal mandel(A).mandel(B) — this is what Voigt fails";
 }
@@ -137,10 +138,10 @@ TEST(UnknownLayout, MajorAsymmetricBlockLandsUntransposed) {
   T ref[36]{};
   tmech::convert_tensor_to_mandel(D, ref);
 
-  for (std::size_t i = 0; i < 6; ++i)
-    for (std::size_t j = 0; j < 6; ++j)
-      EXPECT_NEAR(J[(1 + i) + (1 + j) * N], ref[i * 6 + j], 1e-14)
-          << "block entry (" << i << "," << j << ")";
+  const Eigen::Map<const Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>> full(
+      J, N, N);
+  EXPECT_TRUE((full.block(1, 1, 6, 6).isApprox(
+      Eigen::Map<const Eigen::Matrix<T, 6, 6, Eigen::RowMajor>>(ref), 1e-14)));
 
   ASSERT_NE(ref[1], ref[6]) << "test tensor must be major-asymmetric to be a real guard";
 }
@@ -163,21 +164,17 @@ TEST(UnknownLayout, Rank4BlockReproducesTheTensorAction) {
 
   // M is column-major here, so index (i,j) is M[i + j*6].
   T my[6]{};
-  for (std::size_t i = 0; i < 6; ++i) {
-    T s = 0;
-    for (std::size_t j = 0; j < 6; ++j) s += M[i + j * 6] * mx[j];
-    my[i] = s;
-  }
+  Eigen::Map<Eigen::Vector<T, 6>> my_view(my);
+  my_view = Eigen::Map<const Eigen::Matrix<T, 6, 6>>(M) *
+            Eigen::Map<const Eigen::Vector<T, 6>>(mx);
 
   tensor2 y{};
   state_layout<T, sym_k> ly(y);
   ly.scatter(my, 0);
 
   const tensor2 y_ref = tmech::dcontract(D, X);
-  for (std::size_t i = 0; i < Dim; ++i)
-    for (std::size_t j = 0; j < Dim; ++j)
-      EXPECT_NEAR(y(i, j), y_ref(i, j), 1e-12)
-          << "D:X must equal unmandel(M * mandel(X)) at (" << i << "," << j << ")";
+  EXPECT_TRUE(tmech::almost_equal(y, y_ref, 1e-12))
+      << "D:X must equal unmandel(M * mandel(X))";
 }
 
 // --- row vs column orientation from the SAME tensor type -------------------
@@ -203,10 +200,17 @@ TEST(UnknownLayout, ScalarTensorBlocksAreTransposedPlacements) {
   T ref[6]{};
   tmech::convert_tensor_to_mandel(G, ref);
 
-  for (std::size_t k = 0; k < 6; ++k) {
-    EXPECT_NEAR(J[0 + (1 + k) * N], ref[k], 1e-14) << "row entry " << k;
-    EXPECT_NEAR(J[(1 + k) + 0 * N], ref[k], 1e-14) << "column entry " << k;
-  }
+  // Read back through a plain dense Map of the WHOLE buffer — no custom stride,
+  // no fixed-size vector type. Validating with the same strided view the library
+  // uses would be self-consistent even when both sides are wrong, which is
+  // exactly how a row-stride bug slipped past this test once.
+  const Eigen::Map<const Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>> full(
+      J, N, N);
+  const Eigen::Map<const Eigen::Vector<T, 6>> expected(ref);
+  EXPECT_TRUE((full.block(0, 1, 1, 6).transpose().isApprox(expected, 1e-14)))
+      << "row placement";
+  EXPECT_TRUE((full.block(1, 0, 6, 1).isApprox(expected, 1e-14)))
+      << "column placement";
 }
 
 // --- scalar/scalar block ---------------------------------------------------
@@ -238,7 +242,8 @@ TEST(UnknownLayout, ResidualLayoutPacksIntoASegment) {
 
   T ref[6]{};
   tmech::convert_tensor_to_mandel(R, ref);
-  for (int k = 0; k < 6; ++k) EXPECT_NEAR(flat[1 + k], ref[k], 1e-14);
+  EXPECT_TRUE((Eigen::Map<const Eigen::Vector<T, 6>>(flat + 1)
+                   .isApprox(Eigen::Map<const Eigen::Vector<T, 6>>(ref), 1e-14)));
   EXPECT_DOUBLE_EQ(flat[0], 0.0) << "must not write outside its own segment";
 }
 
@@ -265,12 +270,7 @@ TEST(UnknownLayout, StrainDerivativeScatterInvertsBlockGather) {
   ASSERT_EQ(in.cols(), 6u);
   in.scatter_block(buf, 2, 1, N);
 
-  for (std::size_t i = 0; i < Dim; ++i)
-    for (std::size_t j = 0; j < Dim; ++j)
-      for (std::size_t k = 0; k < Dim; ++k)
-        for (std::size_t l = 0; l < Dim; ++l)
-          EXPECT_NEAR(back(i, j, k, l), D(i, j, k, l), 1e-13)
-              << "(" << i << j << k << l << ")";
+  EXPECT_TRUE(tmech::almost_equal(back, D, 1e-13));
 }
 
 TEST(UnknownLayout, StrainDerivativeScatterRowCase) {
@@ -290,9 +290,7 @@ TEST(UnknownLayout, StrainDerivativeScatterRowCase) {
   ASSERT_EQ(in.cols(), 6u);
   in.scatter_block(buf, 3, 1, N);
 
-  for (std::size_t i = 0; i < Dim; ++i)
-    for (std::size_t j = 0; j < Dim; ++j)
-      EXPECT_NEAR(back(i, j), G(i, j), 1e-13) << "(" << i << "," << j << ")";
+  EXPECT_TRUE(tmech::almost_equal(back, G, 1e-13));
 }
 
 } // namespace

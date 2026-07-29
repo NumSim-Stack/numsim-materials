@@ -251,10 +251,13 @@ public:
         m_g(base::template add_input<value_type>(m_solver, "g", EdgeKind::Local)),
         m_B(base::template add_input<t2>(m_solver, "B", EdgeKind::Local)) {
     // Any fixed symmetric tensor will do; only tr(P) enters the closed form.
-    for (std::size_t i = 0; i < D; ++i)
-      for (std::size_t j = 0; j < D; ++j)
-        m_P(i, j) = (i == j) ? value_type(0.5) + value_type(i) * value_type(0.2)
-                             : value_type(0.1) * value_type(i + j);
+    if constexpr (D == 2)
+      m_P = t2{0.5, 0.1,
+               0.1, 0.7};
+    else
+      m_P = t2{0.5, 0.1, 0.2,
+               0.1, 0.7, 0.3,
+               0.2, 0.3, 0.9};
   }
 
   static input_parameter_controller parameters() {
@@ -332,10 +335,7 @@ TEST(VectorNewton, MixedScalarAndSymmetricTensorSystem) {
   const tensor2 B_ref = g_ref * sys.P();
 
   EXPECT_NEAR(ctx.get<T>("solver", "g"), g_ref, 1e-10);
-  const auto& B = ctx.get<tensor2>("solver", "B");
-  for (std::size_t i = 0; i < 3; ++i)
-    for (std::size_t j = 0; j < 3; ++j)
-      EXPECT_NEAR(B(i, j), B_ref(i, j), 1e-10) << "B(" << i << "," << j << ")";
+  EXPECT_TRUE(tmech::almost_equal(ctx.get<tensor2>("solver", "B"), B_ref, 1e-10));
 }
 
 TEST(VectorNewton, NonlinearMixedSystemActuallyIterates) {
@@ -404,10 +404,7 @@ TEST(VectorNewton, NonlinearMixedSystemActuallyIterates) {
   EXPECT_NEAR(g, g_ref, 1e-12);
 
   const tensor2 B_ref = g_ref * sys.P() - (c * g_ref * g_ref) * tmech::eye<T, 3, 2>();
-  const auto& B = ctx.get<tensor2>("solver", "B");
-  for (std::size_t i = 0; i < 3; ++i)
-    for (std::size_t j = 0; j < 3; ++j)
-      EXPECT_NEAR(B(i, j), B_ref(i, j), 1e-12) << "B(" << i << "," << j << ")";
+  EXPECT_TRUE(tmech::almost_equal(ctx.get<tensor2>("solver", "B"), B_ref, 1e-12));
 }
 
 TEST(VectorNewton, MixedSystemIn2D) {
@@ -447,10 +444,7 @@ TEST(VectorNewton, MixedSystemIn2D) {
   const t2d B_ref = g_ref * sys.P();
 
   EXPECT_NEAR(ctx.get<T>("solver", "g"), g_ref, 1e-10);
-  const auto& B = ctx.get<t2d>("solver", "B");
-  for (std::size_t i = 0; i < 2; ++i)
-    for (std::size_t j = 0; j < 2; ++j)
-      EXPECT_NEAR(B(i, j), B_ref(i, j), 1e-10) << "B(" << i << "," << j << ")";
+  EXPECT_TRUE(tmech::almost_equal(ctx.get<t2d>("solver", "B"), B_ref, 1e-10));
 }
 
 TEST(VectorNewton, StructurallyZeroBlockIsSkipped) {
@@ -609,22 +603,16 @@ TEST(VectorNewtonTangent, MatchesTheAnalyticStrainDerivative) {
 
   // dg/deps = I / (1 + trP)
   const tensor2 dg_ref = tmech::eye<T, 3, 2>() / denom;
-  const auto& dg = ctx.get<tensor2>("solver", "d_g_d_strain");
-  for (std::size_t i = 0; i < 3; ++i)
-    for (std::size_t j = 0; j < 3; ++j)
-      EXPECT_NEAR(dg(i, j), dg_ref(i, j), 1e-12)
-          << "dg/deps(" << i << "," << j << ")";
+  EXPECT_TRUE(tmech::almost_equal(
+      ctx.get<tensor2>("solver", "d_g_d_strain"), dg_ref, 1e-12))
+      << "dg/deps must equal I/(1+trP)";
 
   // dB/deps = (P (x) I) / (1 + trP) — minor-symmetric, major-asymmetric
   const tensor4 dB_ref =
       tmech::otimes(sys.P(), tmech::eye<T, 3, 2>()) / denom;
-  const auto& dB = ctx.get<tensor4>("solver", "d_B_d_strain");
-  for (std::size_t i = 0; i < 3; ++i)
-    for (std::size_t j = 0; j < 3; ++j)
-      for (std::size_t k = 0; k < 3; ++k)
-        for (std::size_t l = 0; l < 3; ++l)
-          EXPECT_NEAR(dB(i, j, k, l), dB_ref(i, j, k, l), 1e-12)
-              << "dB/deps(" << i << j << k << l << ")";
+  EXPECT_TRUE(tmech::almost_equal(
+      ctx.get<tensor4>("solver", "d_B_d_strain"), dB_ref, 1e-12))
+      << "dB/deps must equal (P (x) I)/(1+trP)";
 
   // Guard against the reference being accidentally symmetric, which would make
   // the transpose check above vacuous.

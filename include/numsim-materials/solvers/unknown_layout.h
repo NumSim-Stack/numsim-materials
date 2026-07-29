@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <string>
 #include <type_traits>
+#include <Eigen/Dense>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/input_types.h"
 #include "numsim-materials/core/property_traits.h"
@@ -108,6 +109,36 @@ template<typename T, std::size_t Dim>
 inline void unpack4(const T* src, tmech::tensor<T, Dim, 4>& out) {
   const tmech::adaptor<const T, Dim, 4, tmech::mandel<Dim>> view(src);
   out = view;
+}
+
+/// Strided Eigen views onto a sub-block of a column-major buffer, used instead
+/// of hand-written index arithmetic so the row-major (tmech) to column-major
+/// (Eigen) conversion is declarative.
+///
+/// A single ROW must be viewed as a vector with INNER stride ld, not as a 1 x C
+/// matrix with outer stride: Eigen treats a fixed-size Matrix<T,1,C> as a vector
+/// at compile time, linearizes it with inner stride 1, and silently ignores the
+/// outer stride — writing the row contiguously instead of across the buffer.
+template<typename T, std::size_t C, typename Ptr>
+inline auto row_view(Ptr* base, std::size_t ld) {
+  using scalar_t = std::remove_const_t<Ptr>;
+  using vec_t = Eigen::Matrix<scalar_t, int(C), 1>;
+  using mapped_t =
+      std::conditional_t<std::is_const_v<Ptr>, const vec_t, vec_t>;
+  return Eigen::Map<mapped_t, Eigen::Unaligned, Eigen::InnerStride<>>(
+      base, Eigen::InnerStride<>(static_cast<Eigen::Index>(ld)));
+}
+
+/// A genuine two-dimensional block (R, C both > 1), where outer stride is the
+/// correct notion.
+template<typename T, std::size_t R, std::size_t C, typename Ptr>
+inline auto block_view(Ptr* base, std::size_t ld) {
+  using scalar_t = std::remove_const_t<Ptr>;
+  using mat_t = Eigen::Matrix<scalar_t, int(R), int(C)>;
+  using mapped_t =
+      std::conditional_t<std::is_const_v<Ptr>, const mat_t, mat_t>;
+  return Eigen::Map<mapped_t, Eigen::Unaligned, Eigen::OuterStride<>>(
+      base, Eigen::OuterStride<>(static_cast<Eigen::Index>(ld)));
 }
 
 } // namespace layout_detail
@@ -253,27 +284,27 @@ public:
   void gather(T* dst, std::size_t r0, std::size_t c0,
               std::size_t ld) const override {
     if constexpr (UI::rank == 0 && UJ::rank == 0) {
-      // 1x1
+      // 1x1 — a single scalar, nothing to lay out.
       dst[r0 + c0 * ld] = m_in.get();
+    } else if constexpr (UJ::rank == 0) {
+      // Rx1 column: the destination slots are CONTIGUOUS, so tmech can pack
+      // straight into them. No scratch, no copy.
+      layout_detail::pack(m_in.get(), dst + r0 + c0 * ld);
     } else if constexpr (UI::rank == 0) {
-      // 1xC row: a rank-2 tensor packed as a Mandel vector, laid along a row
+      // 1xC row: pack with tmech, then let Eigen place it across the stride.
       T buf[C];
       layout_detail::pack(m_in.get(), buf);
-      for (std::size_t j = 0; j < C; ++j) dst[r0 + (c0 + j) * ld] = buf[j];
-    } else if constexpr (UJ::rank == 0) {
-      // Rx1 column — same tensor type as the row case, transposed placement
-      T buf[R];
-      layout_detail::pack(m_in.get(), buf);
-      for (std::size_t i = 0; i < R; ++i) dst[(r0 + i) + c0 * ld] = buf[i];
+      layout_detail::row_view<T, C>(dst + r0 + c0 * ld, ld) =
+          Eigen::Map<const Eigen::Matrix<T, int(C), 1>>(buf);
     } else {
-      // RxC: tmech packs rank-4 ROW-major (buf[i*C+j]); the destination is
-      // column-major with stride ld. Doing this transposition here is the whole
-      // reason the solver never touches Mandel.
+      // RxC: tmech packs rank-4 ROW-major, the destination is column-major with
+      // stride ld. Expressing that as a Map-to-Map assignment lets Eigen do the
+      // storage-order conversion, instead of hand-written index arithmetic —
+      // which is precisely where a transpose slip would hide.
       T buf[R * C];
       layout_detail::pack(m_in.get(), buf);
-      for (std::size_t i = 0; i < R; ++i)
-        for (std::size_t j = 0; j < C; ++j)
-          dst[(r0 + i) + (c0 + j) * ld] = buf[i * C + j];
+      layout_detail::block_view<T, R, C>(dst + r0 + c0 * ld, ld) =
+          Eigen::Map<const Eigen::Matrix<T, int(R), int(C), Eigen::RowMajor>>(buf);
     }
   }
 
@@ -332,16 +363,16 @@ public:
     if constexpr (U::rank == 0) {
       // 1 x C row -> rank-2 tensor
       T buf[C];
-      for (std::size_t j = 0; j < C; ++j) buf[j] = src[r0 + (c0 + j) * ld];
+      Eigen::Map<Eigen::Matrix<T, int(C), 1>> contiguous(buf);
+      contiguous = layout_detail::row_view<T, C>(src + r0 + c0 * ld, ld);
       layout_detail::unpack2<T, Dim>(buf, m_ref);
     } else {
       // R x C block -> rank-4 tensor. tmech reads rank-4 Mandel storage
-      // ROW-major, the source is column-major with stride ld; this transposition
-      // is the mirror of the one jacobian_block_layout owns on the way out.
+      // ROW-major and the source is column-major with stride ld, so the Map
+      // assignment mirrors the conversion jacobian_block_layout does outbound.
       T buf[R * C];
-      for (std::size_t i = 0; i < R; ++i)
-        for (std::size_t j = 0; j < C; ++j)
-          buf[i * C + j] = src[(r0 + i) + (c0 + j) * ld];
+      Eigen::Map<Eigen::Matrix<T, int(R), int(C), Eigen::RowMajor>> contiguous(buf);
+      contiguous = layout_detail::block_view<T, R, C>(src + r0 + c0 * ld, ld);
       layout_detail::unpack4<T, Dim>(buf, m_ref);
     }
   }
