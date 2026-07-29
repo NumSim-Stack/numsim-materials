@@ -40,7 +40,7 @@ using solver_type = vector_newton<policy>;
 // may bind wherever it likes. It does NOT re-fire for the Jacobian blocks,
 // since this one callback produces residual and Jacobian together.
 
-enum class system_mode { linear, nonlinear, singular };
+enum class system_mode { linear, nonlinear, singular, decoupled };
 
 class scalar_system_2 final : public material_base<scalar_system_2, policy> {
 public:
@@ -92,6 +92,12 @@ public:
         // legitimately land on a point of the solution manifold.
         m_rx = x + y - m_a;   m_jxx = 1;  m_jxy = 1;
         m_ry = x + y - m_b;   m_jyx = 1;  m_jyy = 1;
+        break;
+      case system_mode::decoupled:
+        // dR_x/dy is IDENTICALLY zero, so declaring that block zero is exact
+        // and the factorization stays the true Jacobian.
+        m_rx = 2 * x - m_a;       m_jxx = 2;  m_jxy = 0;
+        m_ry = x + 3 * y - m_b;   m_jyx = 1;  m_jyy = 3;
         break;
     }
   }
@@ -371,11 +377,15 @@ TEST(VectorNewton, MixedSystemIn2D) {
 }
 
 TEST(VectorNewton, StructurallyZeroBlockIsSkipped) {
-  // Declaring the (x,y) block zero is a lie for this system, so the Newton
-  // direction is only approximate — it degrades to a fixed-point iteration.
-  // It still converges, because the residual is what is driven to zero and the
-  // remaining lower-triangular J is nonsingular. That is the point: an omitted
-  // block changes the path, not the answer.
+  // The 'decoupled' system has dR_x/dy identically zero, so declaring that
+  // block zero is EXACT — it costs a property and a packing step, and leaves
+  // the assembled J equal to the true Jacobian.
+  //
+  // That exactness is the whole contract. 'zero_blocks' must never be used to
+  // approximate a nonzero block away: the Newton iteration would still find the
+  // root (R == 0 pins it), but the implicit-function-theorem linearization
+  // J * dx/deps = -dR/deps inverts J as the actual derivative, so an
+  // approximated J silently corrupts the consistent tangent.
   ctx_type ctx;
   param_type p;
 
@@ -390,7 +400,7 @@ TEST(VectorNewton, StructurallyZeroBlockIsSkipped) {
   p.clear();
   p.insert<std::string>("name", "sys");
   p.insert<std::string>("solver_name", "solver");
-  p.insert<int>("mode", static_cast<int>(system_mode::linear));
+  p.insert<int>("mode", static_cast<int>(system_mode::decoupled));
   p.insert<T>("a", 5.0);
   p.insert<T>("b", 10.0);
   ctx.create<scalar_system_2>(p);
@@ -398,11 +408,18 @@ TEST(VectorNewton, StructurallyZeroBlockIsSkipped) {
   ctx.finalize();
   solver.solve();
 
-  // Lower-triangular J is still nonsingular, so the fixed-point iteration
-  // converges — to the true root, since the residual is what is driven to zero.
+  // 2x = 5 -> x = 2.5 ; x + 3y = 10 -> y = 2.5. Exact in one update, because
+  // the assembled J is the true Jacobian despite the omitted block.
   ASSERT_TRUE(solver.converged());
-  EXPECT_NEAR(ctx.get<T>("solver", "x"), 1.0, 1e-9);
-  EXPECT_NEAR(ctx.get<T>("solver", "y"), 3.0, 1e-9);
+  EXPECT_NEAR(ctx.get<T>("solver", "x"), 2.5, 1e-12);
+  EXPECT_NEAR(ctx.get<T>("solver", "y"), 2.5, 1e-12);
+
+  // The factorization must be usable as the IFT tangent: solving J*z = e_0
+  // reproduces the first column of J^-1, which for [[2,0],[1,3]] is (0.5, -1/6).
+  Eigen::VectorXd e0(2); e0 << 1.0, 0.0;
+  const Eigen::VectorXd z = solver.solve_with_factorization(e0);
+  EXPECT_NEAR(z(0), 0.5, 1e-12);
+  EXPECT_NEAR(z(1), -1.0 / 6.0, 1e-12);
 }
 
 // ---------------------------------------------------------------------------

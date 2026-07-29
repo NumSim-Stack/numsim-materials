@@ -77,6 +77,20 @@ public:
 
     // Jacobian blocks: dense by default, so a forgotten block is a wiring
     // error rather than a silently-wrong Jacobian. Sparsity is opt-in.
+    //
+    // 'zero_blocks' asserts that a block is IDENTICALLY zero — as when two
+    // yield surfaces genuinely do not interact. It must not be used to
+    // approximate a nonzero block away. The Newton iteration would tolerate
+    // that (an inexact J costs iterations, not accuracy, because the root is
+    // pinned by R == 0), but the linearization would not: the consistent
+    // tangent comes from the implicit function theorem,
+    //
+    //     J * dx/deps = -dR/deps,   J = dR/dx at the converged point
+    //
+    // which inverts J as the actual derivative. A zeroed-out nonzero block
+    // therefore yields a silently wrong dx/deps — and so a wrong dsigma/deps,
+    // costing quadratic convergence in the global Newton. See
+    // solve_with_factorization(), which hands back exactly this J.
     for (std::size_t i = 0; i < n; ++i)
       for (std::size_t j = 0; j < n; ++j) {
         const auto is_zero =
@@ -168,7 +182,12 @@ public:
 
   /// Reuse the Jacobian factorization from the converged solve, so a consistent
   /// tangent dx/deps can be assembled by solving J * (dx/deps) = -dR/deps
-  /// without ever forming an inverse.
+  /// without ever forming an inverse. Accepts a multi-column right-hand side,
+  /// so the whole N x 6 strain derivative can be solved in one call.
+  ///
+  /// The result is only the consistent tangent if J is the EXACT dR/dx. In
+  /// particular any block named in 'zero_blocks' must be identically zero, not
+  /// an approximation — see the note at the block wiring in the constructor.
   ///
   /// Throws if the last solve did not converge. m_lu would otherwise still hold
   /// the factorization from some earlier iterate — or from an earlier call
