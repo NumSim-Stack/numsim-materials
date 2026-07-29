@@ -6,6 +6,8 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 #include <Eigen/Dense>
@@ -57,13 +59,14 @@ public:
   {
     const auto& specs =
         base::template get_parameter<std::vector<unknown_spec>>("unknowns");
-    if (specs.empty())
-      throw std::runtime_error("vector_newton '" + std::string(base::name()) +
-                               "': 'unknowns' must not be empty");
 
     std::vector<block_ref> zeros;
     if (base::m_parameter_handler.contains("zero_blocks"))
       zeros = base::template get_parameter<std::vector<block_ref>>("zero_blocks");
+
+    // Validate the name strings BEFORE creating any property. See the comment
+    // on check_names() — past this point a bad name is undiagnosable.
+    check_names(specs, zeros, base::name());
 
     const auto n = specs.size();
     m_jacobian.resize(n);
@@ -111,7 +114,15 @@ public:
   }
 
   /// Run the coupled Newton iteration. The converged unknowns are left in the
-  /// output properties; check converged() before trusting them.
+  /// output properties.
+  ///
+  /// On failure the output properties hold the last raw iterate — not a
+  /// projected or otherwise doctored value. That mirrors backward_euler::solve,
+  /// which also returns its raw iterate on the failure paths so that a failed
+  /// solve cannot be mistaken for a plausible answer. The difference here is
+  /// that those values sit in graph properties, which downstream materials will
+  /// read whether or not anyone consulted converged() — so a caller that cares
+  /// must check it and react, as small_strain_plasticity does by throwing.
   void update() override { solve(); }
 
   void solve() {
@@ -157,12 +168,77 @@ public:
   /// Reuse the Jacobian factorization from the converged solve, so a consistent
   /// tangent dx/deps can be assembled by solving J * (dx/deps) = -dR/deps
   /// without ever forming an inverse.
+  ///
+  /// Throws if the last solve did not converge. m_lu would otherwise still hold
+  /// the factorization from some earlier iterate — or from an earlier call
+  /// entirely — and quietly hand back a plausible-looking tangent built on it.
   template<typename Rhs>
   auto solve_with_factorization(const Rhs& rhs) const {
+    if (!m_converged)
+      throw std::runtime_error(
+          "vector_newton '" + std::string(base::name()) +
+          "': solve_with_factorization() requires a converged solve");
     return m_lu.solve(rhs);
   }
 
 private:
+  // --- input validation ----------------------------------------------------
+
+  /// Pre-check every name string before a single property is created.
+  ///
+  /// This has to run first because the property registry cannot report the
+  /// problem afterwards: add_property() silently returns the EXISTING property
+  /// when the name is already taken, and downcasts it to the requested type
+  /// (numsim-core property_registry_interface.h). So a duplicate unknown name
+  /// would alias two unknowns onto one storage slot while m_N still counts
+  /// them separately — and a duplicate whose kind differs would reinterpret a
+  /// property<double> as a property<tensor2>, which is undefined behaviour with
+  /// no diagnostic at all.
+  static void check_names(const std::vector<unknown_spec>& specs,
+                          const std::vector<block_ref>& zeros,
+                          std::string_view owner) {
+    const auto fail = [owner](const std::string& what) {
+      throw std::runtime_error("vector_newton '" + std::string(owner) +
+                               "': " + what);
+    };
+
+    if (specs.empty()) fail("'unknowns' must not be empty");
+
+    std::unordered_set<std::string> names;
+    for (const auto& s : specs) {
+      if (s.name.empty()) fail("unknown names must not be empty");
+      if (!names.insert(s.name).second)
+        fail("duplicate unknown name '" + s.name +
+             "' — names must be unique, or the two unknowns would silently "
+             "share one property");
+    }
+
+    // The wire-up derives property names by concatenation, so distinct unknown
+    // sets can collide through an underscore: unknowns {a, b_c, a_b, c} yield
+    // "jacobian_a_b_c" from both (a, b_c) and (a_b, c). Rather than forbid
+    // underscores — "back_stress" is a reasonable name — just require that
+    // every generated name comes out distinct.
+    std::unordered_set<std::string> generated;
+    const auto claim = [&](const std::string& prop) {
+      if (!generated.insert(prop).second)
+        fail("unknown names generate a colliding property name '" + prop +
+             "' — rename one of the unknowns");
+    };
+    for (const auto& si : specs) {
+      claim("residual_" + si.name);
+      for (const auto& sj : specs) claim("jacobian_" + si.name + "_" + sj.name);
+    }
+
+    // A typo here is not harmless: naming a block that the function material
+    // does supply would silently drop it from the Jacobian, which degrades
+    // convergence with no error anywhere.
+    for (const auto& [row, col] : zeros) {
+      if (!names.contains(row) || !names.contains(col))
+        fail("'zero_blocks' entry [" + row + ", " + col +
+             "] names an unknown that is not declared in 'unknowns'");
+    }
+  }
+
   // --- construction helpers ------------------------------------------------
 
   void add_state_and_residual(const unknown_spec& s) {
@@ -228,25 +304,34 @@ private:
     for (auto& s : m_state) { s->gather(x.data(), r, 0, m_N); r += s->rows(); }
   }
 
+  /// Re-evaluate the function material, then pack the residual.
+  ///
+  /// update_source() fires the update callback of the specific property it is
+  /// called on, so this walks every residual input rather than picking one:
+  /// the material is free to bind its compute to whichever of its outputs it
+  /// likes, and guessing wrong would silently gather stale values. The calls
+  /// that do not carry a callback are an empty std::function check.
   void gather_residual() {
+    for (auto& L : m_residual) L->update_source();
     std::size_t r = 0;
     for (auto& L : m_residual) {
-      L->update_source();
       L->gather(m_R.data(), r, 0, m_N);
       r += L->rows();
     }
   }
 
+  /// Pack the Jacobian. Deliberately does NOT call update_source(): the
+  /// material computes residual and Jacobian together, gather_residual() has
+  /// just run it at this same iterate, so the blocks are already current.
+  /// Re-triggering here would re-run compute once per block — N^2 times per
+  /// iteration — for no change in the result.
   void gather_jacobian() {
     m_J.setZero();   // absent blocks stay structurally zero
     std::size_t r = 0;
     for (std::size_t i = 0; i < m_state.size(); ++i) {
       std::size_t c = 0;
       for (std::size_t j = 0; j < m_state.size(); ++j) {
-        if (auto& B = m_jacobian[i][j]) {
-          B->update_source();
-          B->gather(m_J.data(), r, c, m_N);
-        }
+        if (auto& B = m_jacobian[i][j]) B->gather(m_J.data(), r, c, m_N);
         c += m_state[j]->rows();
       }
       r += m_state[i]->rows();
