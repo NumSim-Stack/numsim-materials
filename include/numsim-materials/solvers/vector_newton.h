@@ -55,7 +55,9 @@ public:
         m_func(base::template get_parameter<std::string>("function")),
         m_tol(base::template get_parameter<value_type>("tolerance")),
         m_lin_tol(base::template get_parameter<value_type>("linear_tolerance")),
-        m_max_iter(base::template get_parameter<int>("max_iter"))
+        m_max_iter(base::template get_parameter<int>("max_iter")),
+        m_strain_derivative(
+            base::template get_parameter<bool>("strain_derivative"))
   {
     const auto& specs =
         base::template get_parameter<std::vector<unknown_spec>>("unknowns");
@@ -66,7 +68,7 @@ public:
 
     // Validate the name strings BEFORE creating any property. See the comment
     // on check_names() — past this point a bad name is undiagnosable.
-    check_names(specs, zeros, base::name());
+    check_names(specs, zeros, base::name(), m_strain_derivative);
 
     const auto n = specs.size();
     m_jacobian.resize(n);
@@ -106,6 +108,12 @@ public:
     m_dx.setZero(m_N);
     m_J.setZero(m_N, m_N);
 
+    if (m_strain_derivative) {
+      m_W = sym_k::width;
+      m_dR_de.setZero(m_N, m_W);
+      m_dx_de.setZero(m_N, m_W);
+    }
+
     // Graph-driven mode: bind solve() to the first unknown so that a downstream
     // update_source() on it drives the iteration, as backward_euler does with
     // "delta".
@@ -124,6 +132,10 @@ public:
     para.template insert<value_type>("linear_tolerance")
         .template add<set_default>(value_type{1e-8});
     para.template insert<int>("max_iter").template add<set_default>(50);
+    // Opt-in: wires d_residual_<name>_d_strain inputs and produces
+    // d_<name>_d_strain outputs, solved from the converged factorization.
+    para.template insert<bool>("strain_derivative")
+        .template add<set_default>(false);
     return para;
   }
 
@@ -154,6 +166,7 @@ public:
         m_converged = true;
         gather_jacobian();      // factorize at the CONVERGED point so that
         m_lu.compute(m_J);      // solve_with_factorization() is usable (#12)
+        if (m_strain_derivative) compute_strain_derivative();
         return;
       }
       if (iter == m_max_iter) return;
@@ -216,7 +229,7 @@ private:
   /// no diagnostic at all.
   static void check_names(const std::vector<unknown_spec>& specs,
                           const std::vector<block_ref>& zeros,
-                          std::string_view owner) {
+                          std::string_view owner, bool strain_derivative) {
     const auto fail = [owner](const std::string& what) {
       throw std::runtime_error("vector_newton '" + std::string(owner) +
                                "': " + what);
@@ -247,6 +260,18 @@ private:
     for (const auto& si : specs) {
       claim("residual_" + si.name);
       for (const auto& sj : specs) claim("jacobian_" + si.name + "_" + sj.name);
+      if (strain_derivative) claim("d_residual_" + si.name + "_d_strain");
+    }
+
+    // The solver's own outputs share one owner with the state properties, so
+    // they need their own uniqueness check — an unknown literally named
+    // "d_g_d_strain" would otherwise collide with the derivative of "g".
+    if (strain_derivative) {
+      auto owned = names;   // the state property names
+      for (const auto& s : specs)
+        if (!owned.insert("d_" + s.name + "_d_strain").second)
+          fail("unknown name 'd_" + s.name +
+               "_d_strain' collides with a generated strain-derivative output");
     }
 
     // A typo here is not harmless: naming a block that the function material
@@ -278,6 +303,21 @@ private:
         m_func, "residual_" + name, EdgeKind::Local);
     m_residual.push_back(
         std::make_unique<residual_layout<value_type, U>>(in));
+
+    if (m_strain_derivative) {
+      // dR_I/deps has the shape of a Jacobian block whose column kind is the
+      // strain, so the existing block layout already serializes it; only the
+      // scatter direction on the output side is new.
+      using de_block = jacobian_block_layout<value_type, U, sym_k>;
+      const auto& din = base::template add_input<typename de_block::value_type>(
+          m_func, "d_residual_" + name + "_d_strain", EdgeKind::Local);
+      m_dR_de_layout.push_back(std::make_unique<de_block>(din));
+
+      auto& dout = base::template add_output<typename de_block::value_type>(
+          "d_" + name + "_d_strain");
+      m_dx_de_layout.push_back(
+          std::make_unique<strain_derivative_layout<value_type, Dim, U>>(dout));
+    }
   }
 
   // Bounded runtime -> compile-time dispatch on the kind PAIR. The pair matters:
@@ -341,6 +381,36 @@ private:
     for (auto& row : m_jacobian)
       for (auto& B : row)
         if (B) B->update_source();
+    for (auto& L : m_dR_de_layout) L->update_source();
+  }
+
+  /// Consistent tangent contribution, by the implicit function theorem.
+  ///
+  ///     R(x(eps), eps) = 0   =>   J * dx/deps = -dR/deps
+  ///
+  /// Runs only after convergence, reusing the factorization of J at the
+  /// converged point — so no inverse is ever formed, and the N x W system is a
+  /// single multi-column back-substitution.
+  ///
+  /// The material completes the chain rule itself:
+  ///     dsigma/deps = dsigma/deps|_x + (dsigma/dx) : (dx/deps)
+  ///
+  /// Correct only if J is the EXACT dR/dx — see the note on 'zero_blocks'.
+  void compute_strain_derivative() {
+    m_dR_de.setZero();
+    std::size_t r = 0;
+    for (auto& L : m_dR_de_layout) {
+      L->gather(m_dR_de.data(), r, 0, m_N);
+      r += L->rows();
+    }
+
+    m_dx_de.noalias() = -m_lu.solve(m_dR_de);
+
+    r = 0;
+    for (auto& L : m_dx_de_layout) {
+      L->scatter_block(m_dx_de.data(), r, 0, m_N);
+      r += L->rows();
+    }
   }
 
   /// Pack the residual. Pure serialization — refresh_sources() has already run.
@@ -376,9 +446,15 @@ private:
   std::vector<std::unique_ptr<layout_base<value_type>>> m_residual;
   std::vector<std::vector<std::unique_ptr<layout_base<value_type>>>> m_jacobian;
 
+  const bool& m_strain_derivative;
+  std::vector<std::unique_ptr<layout_base<value_type>>> m_dR_de_layout;
+  std::vector<std::unique_ptr<block_scatter_base<value_type>>> m_dx_de_layout;
+
   std::size_t m_N{0};
+  std::size_t m_W{0};
   vector_t m_x, m_R, m_dx;
   matrix_t m_J;
+  matrix_t m_dR_de, m_dx_de;
   Eigen::PartialPivLU<matrix_t> m_lu;
   bool m_converged{false};
 };

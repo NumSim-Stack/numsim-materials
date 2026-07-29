@@ -93,6 +93,7 @@ json_reader_registry<JsonType> make_default_json_registry() {
   reg.template add<double>();
   reg.template add<float>();
   reg.template add<int>();
+  reg.template add<bool>();
   reg.template add<std::string>();
 
   // Vectors

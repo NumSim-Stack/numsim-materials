@@ -242,4 +242,57 @@ TEST(UnknownLayout, ResidualLayoutPacksIntoASegment) {
   EXPECT_DOUBLE_EQ(flat[0], 0.0) << "must not write outside its own segment";
 }
 
+// --- scatter: the inverse of gather ---------------------------------------
+
+TEST(UnknownLayout, StrainDerivativeScatterInvertsBlockGather) {
+  // rank-4 case: gather a minor-symmetric, major-ASYMMETRIC block into a
+  // strided column-major buffer, scatter it back, and require the tensor to
+  // come out unchanged. Both transpositions must cancel exactly.
+  const auto P = make_sym(1.1, 2.2, 3.3, 0.6, 0.5, 0.4);
+  const auto Q = make_sym(2.0, -1.0, 0.7, -0.3, 1.2, -0.8);
+  const tensor4 D = tmech::otimes(P, Q);
+
+  wired_input<tensor4> w(D);
+  jacobian_block_layout<T, sym_k, sym_k> out(w.in);
+
+  constexpr std::size_t N = 8;                 // non-square stride on purpose
+  T buf[N * N]{};
+  out.gather(buf, 2, 1, N);                    // non-zero offsets too
+
+  tensor4 back{};
+  strain_derivative_layout<T, Dim, sym_k> in(back);
+  ASSERT_EQ(in.rows(), 6u);
+  ASSERT_EQ(in.cols(), 6u);
+  in.scatter_block(buf, 2, 1, N);
+
+  for (std::size_t i = 0; i < Dim; ++i)
+    for (std::size_t j = 0; j < Dim; ++j)
+      for (std::size_t k = 0; k < Dim; ++k)
+        for (std::size_t l = 0; l < Dim; ++l)
+          EXPECT_NEAR(back(i, j, k, l), D(i, j, k, l), 1e-13)
+              << "(" << i << j << k << l << ")";
+}
+
+TEST(UnknownLayout, StrainDerivativeScatterRowCase) {
+  // scalar unknown -> a 1 x 6 row unpacks to a rank-2 tensor.
+  const auto G = make_sym(1.1, 2.2, 3.3, 0.6, 0.5, 0.4);
+
+  wired_input<tensor2> w(G);
+  jacobian_block_layout<T, scalar_k, sym_k> out(w.in);
+
+  constexpr std::size_t N = 7;
+  T buf[N * N]{};
+  out.gather(buf, 3, 1, N);
+
+  tensor2 back{};
+  strain_derivative_layout<T, Dim, scalar_k> in(back);
+  ASSERT_EQ(in.rows(), 1u);
+  ASSERT_EQ(in.cols(), 6u);
+  in.scatter_block(buf, 3, 1, N);
+
+  for (std::size_t i = 0; i < Dim; ++i)
+    for (std::size_t j = 0; j < Dim; ++j)
+      EXPECT_NEAR(back(i, j), G(i, j), 1e-13) << "(" << i << "," << j << ")";
+}
+
 } // namespace

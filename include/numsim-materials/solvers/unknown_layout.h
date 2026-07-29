@@ -101,6 +101,15 @@ inline void unpack2(const T* src, tmech::tensor<T, Dim, 2>& out) {
   out = view;
 }
 
+/// Unpack a contiguous ROW-MAJOR Mandel matrix into a rank-4 tmech tensor.
+/// The inverse of pack() for rank 4; the result is minor-symmetric by
+/// construction, since that is all Mandel's 36-of-81 storage can represent.
+template<typename T, std::size_t Dim>
+inline void unpack4(const T* src, tmech::tensor<T, Dim, 4>& out) {
+  const tmech::adaptor<const T, Dim, 4, tmech::mandel<Dim>> view(src);
+  out = view;
+}
+
 } // namespace layout_detail
 
 // ---------------------------------------------------------------------------
@@ -272,6 +281,73 @@ public:
 
 private:
   const input_type& m_in;
+};
+
+// ---------------------------------------------------------------------------
+// Strain-derivative layouts — the scatter direction
+// ---------------------------------------------------------------------------
+
+/// Writes a rows() x cols() block of a flat column-major buffer back into a
+/// bound tensor. The inverse of layout_base::gather, and the piece the
+/// implicit-function-theorem tangent needs: dx/deps comes out of the linear
+/// solve as an N x W matrix and has to become per-unknown tensors again.
+template<typename T>
+class block_scatter_base {
+public:
+  virtual ~block_scatter_base() = default;
+  virtual std::size_t rows() const noexcept = 0;
+  virtual std::size_t cols() const noexcept = 0;
+  virtual void scatter_block(const T* src, std::size_t r0, std::size_t c0,
+                             std::size_t ld) = 0;
+};
+
+/// dx_I/deps for one unknown.
+///
+/// Its shape is that of a Jacobian block whose column kind is the (symmetric)
+/// strain, so the rank is U::rank + 2: a scalar unknown gives a rank-2 tensor
+/// laid along a 1 x W row, a symmetric-tensor unknown gives a rank-4 tensor in
+/// a W x W block. Unlike jacobian_block_layout this binds to a MUTABLE output
+/// reference, because the solver produces this quantity rather than consuming
+/// it.
+template<typename T, std::size_t Dim, typename U>
+class strain_derivative_layout final : public block_scatter_base<T> {
+  static_assert(layout_detail::is_unknown_kind<U>::value,
+                "strain_derivative_layout: U must be scalar_unknown or "
+                "sym_tensor_unknown");
+
+  using strain_kind = sym_tensor_unknown<T, Dim>;
+  static constexpr std::size_t R = U::width;
+  static constexpr std::size_t C = strain_kind::width;
+
+public:
+  using value_type = layout_detail::block_value_t<T, U, strain_kind>;
+
+  explicit strain_derivative_layout(value_type& ref) noexcept : m_ref(ref) {}
+
+  std::size_t rows() const noexcept override { return R; }
+  std::size_t cols() const noexcept override { return C; }
+
+  void scatter_block(const T* src, std::size_t r0, std::size_t c0,
+                     std::size_t ld) override {
+    if constexpr (U::rank == 0) {
+      // 1 x C row -> rank-2 tensor
+      T buf[C];
+      for (std::size_t j = 0; j < C; ++j) buf[j] = src[r0 + (c0 + j) * ld];
+      layout_detail::unpack2<T, Dim>(buf, m_ref);
+    } else {
+      // R x C block -> rank-4 tensor. tmech reads rank-4 Mandel storage
+      // ROW-major, the source is column-major with stride ld; this transposition
+      // is the mirror of the one jacobian_block_layout owns on the way out.
+      T buf[R * C];
+      for (std::size_t i = 0; i < R; ++i)
+        for (std::size_t j = 0; j < C; ++j)
+          buf[i * C + j] = src[(r0 + i) + (c0 + j) * ld];
+      layout_detail::unpack4<T, Dim>(buf, m_ref);
+    }
+  }
+
+private:
+  value_type& m_ref;
 };
 
 } // namespace numsim::materials

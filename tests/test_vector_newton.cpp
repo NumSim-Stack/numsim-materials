@@ -500,6 +500,138 @@ TEST(VectorNewton, StructurallyZeroBlockIsSkipped) {
 }
 
 // ---------------------------------------------------------------------------
+// Consistent tangent via the implicit function theorem
+// ---------------------------------------------------------------------------
+//
+//   R_g = g + tr(B) - a - tr(eps)      R_B = B - g*P
+//
+// so B = g*P, tr(B) = g*trP, and g = (a + tr eps) / (1 + trP). Hence
+//
+//   dg/deps = I / (1 + trP)            dB/deps = (P (x) I) / (1 + trP)
+//
+// Chosen so the scalar row of dR/deps is nonzero while the tensor block is
+// zero, and so dB/deps is minor-symmetric but major-ASYMMETRIC (P != I) — the
+// case a transpose slip would hide in.
+
+class strain_coupled_system final
+    : public material_base<strain_coupled_system, policy> {
+public:
+  using base = material_base<strain_coupled_system, policy>;
+
+  template<typename... Args>
+  explicit strain_coupled_system(Args&&... args)
+      : base(std::forward<Args>(args)...),
+        m_rg(base::add_output<T>("residual_g", &strain_coupled_system::compute)),
+        m_rB(base::add_output<tensor2>("residual_B")),
+        m_jgg(base::add_output<T>("jacobian_g_g")),
+        m_jgB(base::add_output<tensor2>("jacobian_g_B")),
+        m_jBg(base::add_output<tensor2>("jacobian_B_g")),
+        m_jBB(base::add_output<tensor4>("jacobian_B_B")),
+        m_dRg(base::add_output<tensor2>("d_residual_g_d_strain")),
+        m_dRB(base::add_output<tensor4>("d_residual_B_d_strain")),
+        m_a(base::get_parameter<T>("a")),
+        m_solver(base::get_parameter<std::string>("solver_name")),
+        m_g(base::add_input<T>(m_solver, "g", EdgeKind::Local)),
+        m_B(base::add_input<tensor2>(m_solver, "B", EdgeKind::Local)) {
+    m_P = tensor2{0.5, 0.2, 0.1,
+                  0.2, 0.7, 0.3,
+                  0.1, 0.3, 0.9};
+    m_eps = tensor2{0.03, 0.01, 0.00,
+                    0.01, 0.05, 0.02,
+                    0.00, 0.02, 0.07};
+  }
+
+  static input_parameter_controller parameters() {
+    input_parameter_controller para{base::parameters()};
+    para.insert<std::string>("solver_name").add<is_required>();
+    para.insert<T>("a").add<set_default>(T{2});
+    return para;
+  }
+
+  const tensor2& P() const noexcept { return m_P; }
+  const tensor2& eps() const noexcept { return m_eps; }
+
+  void compute() {
+    const auto g = m_g.get();
+    const auto& B = m_B.get();
+    const auto I = tmech::eye<T, 3, 2>();
+
+    m_rg = g + tmech::trace(B) - m_a - tmech::trace(m_eps);
+    m_rB = B - g * m_P;
+
+    m_jgg = T{1};
+    m_jgB = tensor2{I};
+    m_jBg = tensor2{-m_P};
+    m_jBB = tensor4{(tmech::otimesu(I, I) + tmech::otimesl(I, I)) * T{0.5}};
+
+    m_dRg = tensor2{-I};      // dR_g/deps = -I
+    m_dRB = tensor4{};        // dR_B/deps = 0
+  }
+
+private:
+  T& m_rg; tensor2& m_rB;
+  T& m_jgg; tensor2& m_jgB; tensor2& m_jBg; tensor4& m_jBB;
+  tensor2& m_dRg; tensor4& m_dRB;
+  const T& m_a;
+  const std::string& m_solver;
+  const input_property<T, property_traits>& m_g;
+  const input_property<tensor2, property_traits>& m_B;
+  tensor2 m_P{}, m_eps{};
+};
+
+TEST(VectorNewtonTangent, MatchesTheAnalyticStrainDerivative) {
+  ctx_type ctx;
+  param_type p;
+  const T a = 2.0;
+
+  p.clear();
+  p.insert<std::string>("name", "solver");
+  p.insert<std::string>("function", "sys");
+  p.insert<bool>("strain_derivative", true);
+  p.insert<std::vector<unknown_spec>>(
+      "unknowns", {{"g", unknown_kind::scalar}, {"B", unknown_kind::sym_tensor}});
+  auto& solver = ctx.create<solver_type>(p);
+
+  p.clear();
+  p.insert<std::string>("name", "sys");
+  p.insert<std::string>("solver_name", "solver");
+  p.insert<T>("a", a);
+  auto& sys = ctx.create<strain_coupled_system>(p);
+
+  ctx.finalize();
+  solver.solve();
+  ASSERT_TRUE(solver.converged());
+
+  const T trP = tmech::trace(sys.P());
+  const T denom = T{1} + trP;
+  const T g_ref = (a + tmech::trace(sys.eps())) / denom;
+  EXPECT_NEAR(ctx.get<T>("solver", "g"), g_ref, 1e-12);
+
+  // dg/deps = I / (1 + trP)
+  const tensor2 dg_ref = tmech::eye<T, 3, 2>() / denom;
+  const auto& dg = ctx.get<tensor2>("solver", "d_g_d_strain");
+  for (std::size_t i = 0; i < 3; ++i)
+    for (std::size_t j = 0; j < 3; ++j)
+      EXPECT_NEAR(dg(i, j), dg_ref(i, j), 1e-12)
+          << "dg/deps(" << i << "," << j << ")";
+
+  // dB/deps = (P (x) I) / (1 + trP) — minor-symmetric, major-asymmetric
+  const tensor4 dB_ref =
+      tmech::otimes(sys.P(), tmech::eye<T, 3, 2>()) / denom;
+  const auto& dB = ctx.get<tensor4>("solver", "d_B_d_strain");
+  for (std::size_t i = 0; i < 3; ++i)
+    for (std::size_t j = 0; j < 3; ++j)
+      for (std::size_t k = 0; k < 3; ++k)
+        for (std::size_t l = 0; l < 3; ++l)
+          EXPECT_NEAR(dB(i, j, k, l), dB_ref(i, j, k, l), 1e-12)
+              << "dB/deps(" << i << j << k << l << ")";
+
+  // Guard against the reference being accidentally symmetric, which would make
+  // the transpose check above vacuous.
+  ASSERT_GT(std::abs(dB_ref(0, 0, 1, 1) - dB_ref(1, 1, 0, 0)), 1e-3);
+}
+
+// ---------------------------------------------------------------------------
 // Input validation
 // ---------------------------------------------------------------------------
 //
