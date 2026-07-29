@@ -246,6 +246,7 @@ public:
         m_jBg(base::template add_output<t2>("jacobian_B_g")),
         m_jBB(base::template add_output<t4>("jacobian_B_B")),
         m_a(base::template get_parameter<value_type>("a")),
+        m_c(base::template get_parameter<value_type>("c")),
         m_solver(base::template get_parameter<std::string>("solver_name")),
         m_g(base::template add_input<value_type>(m_solver, "g", EdgeKind::Local)),
         m_B(base::template add_input<t2>(m_solver, "B", EdgeKind::Local)) {
@@ -260,6 +261,9 @@ public:
     input_parameter_controller para{base::parameters()};
     para.template insert<std::string>("solver_name").template add<is_required>();
     para.template insert<value_type>("a").template add<set_default>(value_type{1});
+    // c == 0 keeps the system linear (Newton lands in one update); c != 0 adds
+    // the g^2 term that forces it to iterate.
+    para.template insert<value_type>("c").template add<set_default>(value_type{0});
     return para;
   }
 
@@ -273,12 +277,12 @@ public:
         (tmech::otimesu(I, I) + tmech::otimesl(I, I)) * value_type{0.5}};
 
     m_rg = g + tmech::trace(B) - m_a;
-    m_rB = B - g * m_P;
+    m_rB = B - g * m_P + (m_c * g * g) * I;
 
     m_jgg = value_type{1};
-    m_jgB = t2{I};        // d(tr B)/dB = I, packed as a 1xW row
-    m_jBg = t2{-m_P};     // dR_B/dg,     packed as a Wx1 column
-    m_jBB = IIsym;        // dR_B/dB
+    m_jgB = t2{I};                                    // d(tr B)/dB = I, a 1xW row
+    m_jBg = t2{-m_P + (value_type{2} * m_c * g) * I}; // dR_B/dg,       a Wx1 column
+    m_jBB = IIsym;                                    // dR_B/dB
   }
 
 private:
@@ -289,6 +293,7 @@ private:
   t2& m_jBg;
   t4& m_jBB;
   const value_type& m_a;
+  const value_type& m_c;
   const std::string& m_solver;
   const input_property<value_type, property_traits>& m_g;
   const input_property<t2, property_traits>& m_B;
@@ -331,6 +336,78 @@ TEST(VectorNewton, MixedScalarAndSymmetricTensorSystem) {
   for (std::size_t i = 0; i < 3; ++i)
     for (std::size_t j = 0; j < 3; ++j)
       EXPECT_NEAR(B(i, j), B_ref(i, j), 1e-10) << "B(" << i << "," << j << ")";
+}
+
+TEST(VectorNewton, NonlinearMixedSystemActuallyIterates) {
+  // MixedScalarAndSymmetricTensorSystem above is linear in (g, B), so Newton
+  // reaches machine precision in a single update and the iteration is never
+  // exercised for a system containing a tensor unknown. The g^2 term here
+  // forces it to iterate, so a regression in the loop is actually caught.
+  //
+  // Measured convergence from (0,0):
+  //   2.0e+00 -> 4.16e-02 -> 2.12e-04 -> 5.60e-09 -> 2.22e-16
+  // with r/r_prev^2 settling at ~0.125 — quadratic, with a tensor unknown in
+  // the system. That is the property the Mandel packing has to preserve: the
+  // convergence test is an infinity-norm over the packed vector, and a
+  // non-isometric packing would not keep it equivalent to the tensor system.
+  const T a = 2.0;
+  const T c = 0.1;
+
+  struct built { solver_type& solver; mixed_system& sys; };
+  const auto build = [&](ctx_type& ctx, int max_iter) -> built {
+    param_type p;
+    p.clear();
+    p.insert<std::string>("name", "solver");
+    p.insert<std::string>("function", "sys");
+    p.insert<int>("max_iter", max_iter);
+    p.insert<std::vector<unknown_spec>>(
+        "unknowns", {{"g", unknown_kind::scalar}, {"B", unknown_kind::sym_tensor}});
+    auto& s = ctx.create<solver_type>(p);
+
+    p.clear();
+    p.insert<std::string>("name", "sys");
+    p.insert<std::string>("solver_name", "solver");
+    p.insert<T>("a", a);
+    p.insert<T>("c", c);
+    auto& m = ctx.create<mixed_system>(p);
+
+    ctx.finalize();
+    return built{s, m};
+  };
+
+  // One update is not enough — this is what makes the test non-vacuous.
+  ctx_type one_step_ctx;
+  // Binds to the material in one_step_ctx; the temporary `built` only carries
+  // references, so its lifetime does not matter here.
+  auto& one_step = build(one_step_ctx, /*max_iter=*/1).solver;
+  one_step.solve();
+  EXPECT_FALSE(one_step.converged())
+      << "if this converges in one update the system is still linear and the "
+         "test has stopped exercising the iteration";
+
+  ctx_type ctx;
+  auto b = build(ctx, /*max_iter=*/50);
+  auto& solver = b.solver;
+  solver.solve();
+  ASSERT_TRUE(solver.converged());
+
+  // B = g*P - c*g^2*I  =>  tr(B) = g*trP - D*c*g^2, so the scalar equation is
+  //   D*c*g^2 - (1 + trP)*g + a = 0
+  // and Newton from g = 0 lands on the smaller root.
+  const auto& sys = b.sys;
+  const T trP = tmech::trace(sys.P());
+  const T D = 3.0;
+  const T s = T{1} + trP;
+  const T g_ref = (s - std::sqrt(s * s - T{4} * D * c * a)) / (T{2} * D * c);
+
+  const T g = ctx.get<T>("solver", "g");
+  EXPECT_NEAR(g, g_ref, 1e-12);
+
+  const tensor2 B_ref = g_ref * sys.P() - (c * g_ref * g_ref) * tmech::eye<T, 3, 2>();
+  const auto& B = ctx.get<tensor2>("solver", "B");
+  for (std::size_t i = 0; i < 3; ++i)
+    for (std::size_t j = 0; j < 3; ++j)
+      EXPECT_NEAR(B(i, j), B_ref(i, j), 1e-12) << "B(" << i << "," << j << ")";
 }
 
 TEST(VectorNewton, MixedSystemIn2D) {
