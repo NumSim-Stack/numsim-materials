@@ -26,6 +26,21 @@
 /// operation.
 namespace numsim::materials::umat {
 
+/// Convention for tensor-valued state variables in STATEV.
+///
+/// Rank-2 state variables are stored with ENGINEERING shear — off-diagonals
+/// doubled — matching STRAN, DSTRAN and Abaqus's own PE/LE output. The library
+/// would round-trip either convention exactly, so this is invisible internally
+/// and only matters at the host boundary, which is precisely why it has to
+/// match the host: an SDV compared against PE, or an initial plastic state
+/// seeded through *INITIAL CONDITIONS, TYPE=SOLUTION, would otherwise be out by
+/// a factor of two in shear, silently.
+///
+/// Note this assumes tensor-valued history is STRAIN-like, which is true of
+/// every state variable the framework currently carries. A stress-like tensor
+/// state variable (a back stress, say) would want the unscaled convention, and
+/// would need this decision made per property rather than globally.
+///
 /// One `(material, property)` pair the host owns and STATEV must NOT contain.
 using statev_exclusion = std::pair<std::string, std::string>;
 
@@ -148,7 +163,8 @@ public:
     for (const auto& e : m_entries)
       out.push_back(std::to_string(e.offset) + ".." +
                     std::to_string(e.offset + e.width - 1) + "  " + e.owner +
-                    "::" + e.name);
+                    "::" + e.name +
+                    (e.width == canonical_width ? "  [engineering shear]" : ""));
     return out;
   }
 
@@ -231,12 +247,12 @@ private:
       m_entries.push_back(
           {id.owner, id.name, offset, canonical_width,
            [h](const value_type* src) {
-             h->old_value() = stress_from_buffer<value_type>(src);
+             h->old_value() = strain_from_buffer<value_type>(src);
              h->new_value() = h->old_value();
            },
            [h, who](value_type* dst) {
              require_symmetric(h->new_value(), who);
-             stress_to_buffer<value_type>(h->new_value(), dst);
+             strain_to_buffer<value_type>(h->new_value(), dst);
            },
            [h](const tensor2& R) {
              h->old_value() = rotate(h->old_value(), R);

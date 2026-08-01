@@ -2,6 +2,7 @@
 #include <cmath>
 #include <span>
 #include <vector>
+#include "numsim-materials/umat/tensor_conversion.h"
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/materials/linear_elasticity.h"
@@ -205,9 +206,15 @@ TEST(MaterialPointEvaluator, RepeatedCallOnSameStateIsIdempotent) {
 
 /// Finite-difference the exported DDSDDE *through the raw-pointer boundary*.
 ///
-/// This is the test that catches an engineering-shear factor of 2, a slot
-/// permutation, or a row/column-major transpose — none of which a tensor-level
-/// tangent check can see, because they all live outside the tensor algebra.
+/// This catches an engineering-shear factor of 2 and a slot permutation —
+/// neither of which a tensor-level tangent check can see, because they live
+/// outside the tensor algebra.
+///
+/// It does NOT catch a row/column-major transpose, despite the symmetry of the
+/// FD loop making it look like it would: J2's consistent tangent is
+/// major-symmetric, so a transpose is invisible here. That contract is covered
+/// only by the deliberately major-ASYMMETRIC fixture in test_umat_conversion,
+/// which makes it a single point of coverage worth keeping.
 ///
 /// Each perturbed call starts from a fresh copy of the t_n STATEV, which is
 /// only correct because the evaluator is stateless.
@@ -428,7 +435,7 @@ TEST(MaterialPointEvaluator, ReportsStatevLayout) {
   const auto desc = eval.describe_statev();
   ASSERT_EQ(desc.size(), 2u);
   EXPECT_EQ(desc[0], "0..0  j2::equivalent_plastic_strain");
-  EXPECT_EQ(desc[1], "1..6  j2::plastic_strain");
+  EXPECT_EQ(desc[1], "1..6  j2::plastic_strain  [engineering shear]");
 }
 
 // ---------------------------------------------------------------------------
@@ -701,6 +708,75 @@ TEST(MaterialPointEvaluator, RejectsBuffersSizedForTheWrongElementType) {
                               .statev = statev,
                               .drot = std::span<const T>(bad_rot, 4)}),
                u::fatal_error);
+}
+
+
+/// The energy-balance assertion above is a TAUTOLOGY on its own: sse and spd are
+/// updated as `sse += dSSE; spd += dW - dSSE`, so their sum telescopes to the
+/// accumulated work for ANY definition of dSSE whatsoever. Defining the elastic
+/// strain as the total strain (ignoring plastic strain entirely) passes it.
+///
+/// These two tests constrain the SPLIT, which is the only thing ALLSE/ALLPD
+/// actually depend on.
+TEST(MaterialPointEvaluator, ElasticStepStoresAllWorkAsStrainEnergy) {
+  ctx_type ctx;
+  build_j2(ctx);
+  auto cfg = j2_config();
+  cfg.plastic_strain_property = "j2::plastic_strain";
+  evaluator eval(ctx, cfg);
+
+  std::vector<T> statev(eval.nstatv(), 0.0);
+  const T stran[6] = {0, 0, 0, 0, 0, 0};
+  const T dstran[6] = {0.001, -0.0004, 0.0, 0.0008, 0.0, 0.0};
+  T stress[6] = {0, 0, 0, 0, 0, 0}, ddsdde[36];
+  T sse = 0, spd = 0, scd = 0;
+
+  eval.evaluate({.stran = stran, .dstran = dstran, .stress = stress,
+                 .ddsdde = ddsdde, .statev = statev, .sse = &sse, .spd = &spd,
+                 .scd = &scd});
+
+  ASSERT_DOUBLE_EQ(statev[0], 0.0) << "this step must be elastic";
+
+  // From rest with no plastic flow, all the work is stored: SSE = 1/2 sigma:eps.
+  const auto sig = u::stress_from_buffer<T>(stress);
+  const auto eps = u::strain_from_buffer<T>(dstran);
+  EXPECT_NEAR(sse, 0.5 * tmech::dcontract(sig, eps), 1e-12);
+  EXPECT_NEAR(spd, 0.0, 1e-15);
+}
+
+/// Regression: SSE and SPD are both accumulated incrementally, so a host that
+/// starts from a pre-stressed state with SSE = 0 (which is what Abaqus does
+/// under *INITIAL CONDITIONS, TYPE=STRESS) must not book the pre-existing
+/// stored energy as negative dissipation.
+///
+/// An earlier version set SSE to the absolute 1/2 sigma:(eps - eps_p) and
+/// derived the SPD increment from its change; this scenario produced
+/// SPD = -1.35 on a step with no plastic flow at all, and the offset persisted
+/// in ALLPD for the whole analysis.
+TEST(MaterialPointEvaluator, PreStressedStartDoesNotProduceNegativeDissipation) {
+  ctx_type ctx;
+  build_j2(ctx);
+  auto cfg = j2_config();
+  cfg.plastic_strain_property = "j2::plastic_strain";
+  evaluator eval(ctx, cfg);
+
+  std::vector<T> statev(eval.nstatv(), 0.0);
+  // The host reports an existing strain and the matching stress, with the
+  // energies still at zero.
+  const T stran[6] = {0.1, 0.0, 0.0, 0.0, 0.0, 0.0};
+  T stress[6] = {26.92, 11.54, 11.54, 0.0, 0.0, 0.0};
+  const T dstran[6] = {0.001, 0.0, 0.0, 0.0, 0.0, 0.0};
+  T ddsdde[36];
+  T sse = 0, spd = 0, scd = 0;
+
+  eval.evaluate({.stran = stran, .dstran = dstran, .stress = stress,
+                 .ddsdde = ddsdde, .statev = statev, .sse = &sse, .spd = &spd,
+                 .scd = &scd});
+
+  ASSERT_DOUBLE_EQ(statev[0], 0.0) << "this step must be elastic";
+  EXPECT_NEAR(spd, 0.0, 1e-12) << "no plastic flow, so no dissipation";
+  EXPECT_GE(spd, -1e-12) << "dissipation must never be negative";
+  EXPECT_GT(sse, 0.0) << "an elastic increment stores energy";
 }
 
 }  // namespace

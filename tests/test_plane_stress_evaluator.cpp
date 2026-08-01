@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include <cmath>
+#include <span>
 #include <vector>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_context.h"
@@ -306,7 +307,11 @@ TEST(PlaneStressEvaluator, WarmStartCostsNoMoreIterationsThanColdStart) {
 
   const int warm = run(true);
   const int cold = run(false);
-  EXPECT_LE(warm, cold) << "warm=" << warm << " cold=" << cold;
+  // Strictly fewer, not merely no more: with EXPECT_LE this test passes against
+  // an implementation that ignores the carried value entirely, since both runs
+  // are then cold and equal — which is exactly the defect the extra STATEV slot
+  // exists to avoid.
+  EXPECT_LT(warm, cold) << "warm=" << warm << " cold=" << cold;
 }
 
 /// Statelessness must survive the extra outer loop.
@@ -416,6 +421,148 @@ TEST(PlaneStressEvaluator, ReportsEnergiesFromTheConvergedState) {
   EXPECT_GT(statev[0], 1e-8) << "the path must yield";
   EXPECT_GT(spd, 0.0);
   EXPECT_GT(sse, 0.0);
+}
+
+
+/// The elastic phase must show zero dissipation. Without this the plane-stress
+/// energy test only checks a telescoping identity that holds for any split.
+TEST(PlaneStressEvaluator, NoDissipationWhileElastic) {
+  ctx_type ctx;
+  build_j2(ctx);
+  auto cfg = cfg_for("j2");
+  cfg.plastic_strain_property = "j2::plastic_strain";
+  ps_evaluator eval(ctx, cfg);
+
+  std::vector<T> statev(eval.nstatv(), 0.0);
+  const T stran[3] = {0, 0, 0};
+  const T dstran[3] = {0.001, -0.0002, 0.0004};
+  T stress[3] = {0, 0, 0}, ddsdde[9];
+  T sse = 0, spd = 0, scd = 0;
+
+  eval.evaluate({.stran = stran, .dstran = dstran, .stress = stress,
+                 .ddsdde = ddsdde, .statev = statev, .sse = &sse, .spd = &spd,
+                 .scd = &scd});
+
+  ASSERT_DOUBLE_EQ(statev[0], 0.0) << "this step must be elastic";
+  EXPECT_NEAR(spd, 0.0, 1e-15);
+  EXPECT_GT(sse, 0.0);
+}
+
+/// The eps_33 slot is documented as carrying the OLD side of the strain history
+/// too, not just a starting guess. Nothing exercised that: every model here
+/// reads only the new strain. This asserts the binding directly.
+TEST(PlaneStressEvaluator, BindsThePreviousOutOfPlaneStrainAsTheOldSide) {
+  ctx_type ctx;
+  build_j2(ctx);
+  ps_evaluator eval(ctx, cfg_for("j2"));
+
+  std::vector<T> statev(eval.nstatv(), 0.0);
+  T stran[3] = {0, 0, 0};
+  const T dstran[3] = {0.01, -0.002, 0.004};
+  T stress[3], ddsdde[9];
+
+  eval.evaluate({.stran = stran, .dstran = dstran, .stress = stress,
+                 .ddsdde = ddsdde, .statev = statev});
+  const T eps33_after_first = statev[eval.nstatv() - 1];
+  ASSERT_NE(eps33_after_first, 0.0);
+
+  for (std::size_t i = 0; i < 3; ++i) stran[i] += dstran[i];
+  eval.evaluate({.stran = stran, .dstran = dstran, .stress = stress,
+                 .ddsdde = ddsdde, .statev = statev});
+
+  auto* prop = ctx.find_property("stepper", "strain");
+  ASSERT_NE(prop, nullptr);
+  auto* hist = dynamic_cast<
+      numsim_core::history_property<tensor2, nm::property_traits>*>(prop);
+  ASSERT_NE(hist, nullptr);
+
+  // The old side of the second step must carry the first step's converged
+  // out-of-plane strain, not zero.
+  EXPECT_NEAR(hist->old_value()(2, 2), eps33_after_first, 1e-14);
+}
+
+/// The Newton must break BEFORE applying the update, so the stored eps_33, the
+/// reported stress and the packed history all describe the same iterate.
+///
+/// At the default 1e-10 tolerance the final update is far below anything
+/// observable, which is why this uses a deliberately loose tolerance: there the
+/// discarded update is large, and storing the post-update value would leave
+/// STATEV inconsistent with the stress that was returned.
+TEST(PlaneStressEvaluator, StoredOutOfPlaneStrainMatchesTheReportedStress) {
+  ctx_type ps_ctx;
+  build_j2(ps_ctx);
+  u::plane_stress_evaluator<policy>::options loose;
+  loose.tolerance = 1e-3;
+  ps_evaluator eval(ps_ctx, cfg_for("j2"), loose);
+
+  ctx_type audit_ctx;
+  build_j2(audit_ctx);
+  evaluator audit(audit_ctx, cfg_for("j2"));
+
+  std::vector<T> statev(eval.nstatv(), 0.0);
+  std::vector<T> audit_statev(audit.nstatv(), 0.0);
+  T stran[3] = {0, 0, 0};
+  const T dstran[3] = {0.01, -0.002, 0.004};
+  T eps33_prev = 0.0;
+
+  for (int step = 0; step < 25; ++step) {
+    T stress[3], ddsdde[9];
+    eval.evaluate({.stran = stran, .dstran = dstran, .stress = stress,
+                   .ddsdde = ddsdde, .statev = statev});
+    const T eps33 = statev[eval.nstatv() - 1];
+
+    const T a_stran[6] = {stran[0], stran[1], eps33_prev, stran[2], 0, 0};
+    const T a_dstran[6] = {dstran[0], dstran[1], eps33 - eps33_prev,
+                           dstran[2], 0, 0};
+    T a_stress[6], a_ddsdde[36];
+    audit.evaluate({.stran = a_stran, .dstran = a_dstran, .stress = a_stress,
+                    .ddsdde = a_ddsdde, .statev = audit_statev});
+
+    // Replaying the STORED eps_33 must reproduce the REPORTED stress tightly.
+    EXPECT_NEAR(a_stress[0], stress[0], 1e-10) << "step " << step;
+    EXPECT_NEAR(a_stress[1], stress[1], 1e-10) << "step " << step;
+    EXPECT_NEAR(a_stress[3], stress[2], 1e-10) << "step " << step;
+
+    for (std::size_t i = 0; i < 3; ++i) stran[i] += dstran[i];
+    eps33_prev = eps33;
+  }
+}
+
+/// DROT that tilts out of the plane cannot be represented by the scalar
+/// out-of-plane strain, so it must be refused rather than silently mishandled.
+TEST(PlaneStressEvaluator, RejectsOutOfPlaneRotation) {
+  ctx_type ctx;
+  build_j2(ctx);
+  ps_evaluator eval(ctx, cfg_for("j2"));
+
+  std::vector<T> statev(eval.nstatv(), 0.0);
+  const T stran[3] = {0, 0, 0};
+  const T dstran[3] = {0.001, 0, 0};
+  T stress[3], ddsdde[9];
+
+  // 90 degrees about x: maps the 3-axis onto the 2-axis.
+  T tilt[9];
+  for (auto& v : tilt) v = 0.0;
+  tilt[0 + 3 * 0] = 1.0;
+  tilt[1 + 3 * 2] = -1.0;
+  tilt[2 + 3 * 1] = 1.0;
+
+  EXPECT_THROW(eval.evaluate({.stran = stran, .dstran = dstran,
+                              .stress = stress, .ddsdde = ddsdde,
+                              .statev = statev,
+                              .drot = std::span<const T>(tilt, 9)}),
+               u::fatal_error);
+
+  // A rotation about the out-of-plane axis is fine.
+  T spin[9];
+  for (auto& v : spin) v = 0.0;
+  spin[0 + 3 * 1] = -1.0;
+  spin[1 + 3 * 0] = 1.0;
+  spin[2 + 3 * 2] = 1.0;
+  EXPECT_NO_THROW(eval.evaluate({.stran = stran, .dstran = dstran,
+                                 .stress = stress, .ddsdde = ddsdde,
+                                 .statev = statev,
+                                 .drot = std::span<const T>(spin, 9)}));
 }
 
 }  // namespace

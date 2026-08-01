@@ -74,6 +74,84 @@ struct J2Fixture {
 
 const std::vector<u::statev_exclusion> host_owned = {{"stepper", "strain"}};
 
+/// A material carrying rank-4 history. No production material has one, so
+/// without this fixture the entire tensor4 branch of statev_map — its 36-slot
+/// pack/unpack, its minor-symmetry check and its rotation — is unreachable from
+/// the tests and could be deleted without a single failure.
+template <typename Traits>
+class tensor4_history_material final
+    : public nm::material_base<tensor4_history_material<Traits>, Traits> {
+public:
+  using base = nm::material_base<tensor4_history_material<Traits>, Traits>;
+  using value_type = typename base::value_type;
+  using input_parameter_controller = typename base::input_parameter_controller;
+  using tensor4 = tmech::tensor<value_type, 3, 4>;
+
+  template <typename... Args>
+  explicit tensor4_history_material(Args&&... args)
+      : base(std::forward<Args>(args)...),
+        m_c(base::template add_history_output<tensor4>("stored_tangent")) {}
+
+  static input_parameter_controller parameters() { return base::parameters(); }
+
+  nm::history_property<tensor4>& stored() { return m_c; }
+
+private:
+  nm::history_property<tensor4>& m_c;
+};
+
+/// Scalar history under a property name that sorts BEFORE the J2 fixture's
+/// property names. Needed to tell (owner, name) apart from (name, owner):
+/// with every property called "state" the two keys agree, which is why the
+/// first attempt at this test could not detect a swapped comparator.
+template <typename Traits>
+class early_name_history_material final
+    : public nm::material_base<early_name_history_material<Traits>, Traits> {
+public:
+  using base = nm::material_base<early_name_history_material<Traits>, Traits>;
+  using value_type = typename base::value_type;
+  using input_parameter_controller = typename base::input_parameter_controller;
+
+  template <typename... Args>
+  explicit early_name_history_material(Args&&... args)
+      : base(std::forward<Args>(args)...),
+        m_v(base::template add_history_output<value_type>("a_state")) {}
+
+  static input_parameter_controller parameters() { return base::parameters(); }
+
+private:
+  nm::history_property<value_type>& m_v;
+};
+
+/// History of a type STATEV cannot represent, to exercise the rejection branch.
+template <typename Traits>
+class int_history_material final
+    : public nm::material_base<int_history_material<Traits>, Traits> {
+public:
+  using base = nm::material_base<int_history_material<Traits>, Traits>;
+  using input_parameter_controller = typename base::input_parameter_controller;
+
+  template <typename... Args>
+  explicit int_history_material(Args&&... args)
+      : base(std::forward<Args>(args)...),
+        m_flag(base::template add_history_output<int>("flag")) {}
+
+  static input_parameter_controller parameters() { return base::parameters(); }
+
+private:
+  nm::history_property<int>& m_flag;
+};
+
+/// Isotropic (hence minor-symmetric) rank-4 tensor.
+tmech::tensor<T, 3, 4> isotropic4(T K, T G) {
+  const auto I = tmech::eye<T, 3, 2>();
+  const auto IIsym = (tmech::otimesu(I, I) + tmech::otimesl(I, I)) * 0.5;
+  const auto IIvol = tmech::otimes(I, I) / 3.0;
+  tmech::tensor<T, 3, 4> C;
+  C = 3.0 * K * IIvol + 2.0 * G * (IIsym - IIvol);
+  return C;
+}
+
 // ---------------------------------------------------------------------------
 // Layout
 // ---------------------------------------------------------------------------
@@ -96,7 +174,7 @@ TEST(StatevMap, LayoutIsSortedByOwnerThenProperty) {
 
   ASSERT_EQ(desc.size(), 2u);
   EXPECT_EQ(desc[0], "0..0  j2::equivalent_plastic_strain");
-  EXPECT_EQ(desc[1], "1..6  j2::plastic_strain");
+  EXPECT_EQ(desc[1], "1..6  j2::plastic_strain  [engineering shear]");
 }
 
 /// The layout must not depend on graph execution order, so two maps built over
@@ -250,6 +328,167 @@ TEST(StatevMap, CarriesEverythingNeededBetweenSteps) {
         << "step " << step;
     prev = cur;
   }
+}
+
+
+// ---------------------------------------------------------------------------
+// The STATEV encoding itself
+// ---------------------------------------------------------------------------
+
+/// Every other test round-trips through the same pack/unpack pair, so they only
+/// establish self-consistency — swapping the shear convention, or permuting two
+/// slots, passes them all. This asserts what the raw slots MEAN, which is the
+/// only thing a restart file or an SDV field output depends on.
+TEST(StatevMap, RawSlotsUseAbaqusOrderAndEngineeringShear) {
+  J2Fixture f;
+  const map_type map(f.ctx, host_owned);
+
+  tensor2 eps_p;
+  eps_p.fill(0.0);
+  eps_p(0, 0) = 0.011;  eps_p(1, 1) = 0.022;  eps_p(2, 2) = 0.033;
+  eps_p(0, 1) = eps_p(1, 0) = 0.044;   // -> gamma_12 = 0.088
+  eps_p(0, 2) = eps_p(2, 0) = 0.055;   // -> gamma_13 = 0.110
+  eps_p(1, 2) = eps_p(2, 1) = 0.066;   // -> gamma_23 = 0.132
+
+  f.ctx.get_mutable<tensor2>("j2", "plastic_strain") = eps_p;
+  f.ctx.get_mutable<T>("j2", "equivalent_plastic_strain") = 0.123;
+
+  std::vector<T> statev(map.nstatv(), 0.0);
+  map.pack(statev.data());
+
+  // Layout is sorted by (owner, name): the scalar first, then the tensor in
+  // Abaqus order {11,22,33,12,13,23} with ENGINEERING shear.
+  EXPECT_DOUBLE_EQ(statev[0], 0.123);
+  EXPECT_DOUBLE_EQ(statev[1], 0.011);
+  EXPECT_DOUBLE_EQ(statev[2], 0.022);
+  EXPECT_DOUBLE_EQ(statev[3], 0.033);
+  EXPECT_DOUBLE_EQ(statev[4], 0.088);
+  EXPECT_DOUBLE_EQ(statev[5], 0.110);
+  EXPECT_DOUBLE_EQ(statev[6], 0.132);
+}
+
+/// The sort key is (owner, then name). With a single-owner fixture that is
+/// indistinguishable from (name, then owner), so this uses two owners whose
+/// orderings disagree between the two keys.
+TEST(StatevMap, SortsByOwnerBeforeProperty) {
+  // Owner sorts LAST, property name sorts FIRST, so the two candidate keys
+  // disagree: by (owner, name) this entry comes last; by (name, owner) it would
+  // come first. A fixture whose properties share a name cannot tell them apart.
+  ctx_type ctx;
+  param_type q;
+  q.insert<std::string>("name", "zzz");
+  ctx.create<early_name_history_material<policy>>(q);
+  q.clear();
+  q.insert<std::string>("name", "aaa");
+  ctx.create<tensor4_history_material<policy>>(q);  // property "stored_tangent"
+  ctx.finalize();
+
+  const map_type map(ctx, {});
+  const auto desc = map.describe();
+  ASSERT_EQ(desc.size(), 2u);
+  // (owner, name): aaa::stored_tangent then zzz::a_state.
+  // (name, owner) would invert this, since "a_state" < "stored_tangent".
+  EXPECT_EQ(desc[0], "0..35  aaa::stored_tangent");
+  EXPECT_EQ(desc[1], "36..36  zzz::a_state");
+}
+
+// ---------------------------------------------------------------------------
+// Rank-4 history
+// ---------------------------------------------------------------------------
+
+TEST(StatevMap, RoundTripsRankFourHistory) {
+  ctx_type ctx;
+  param_type p;
+  p.insert<std::string>("name", "store");
+  auto& mat = ctx.create<tensor4_history_material<policy>>(p);
+  ctx.finalize();
+
+  const map_type map(ctx, {});
+  EXPECT_EQ(map.nstatv(), 36u);
+
+  const auto C = isotropic4(166.67, 76.92);
+  mat.stored().new_value() = C;
+
+  std::vector<T> statev(map.nstatv(), 0.0);
+  map.pack(statev.data());
+
+  mat.stored().new_value() = tmech::tensor<T, 3, 4>();
+  mat.stored().old_value() = tmech::tensor<T, 3, 4>();
+  map.unpack(statev.data());
+
+  const auto& back = mat.stored().new_value();
+  for (int i = 0; i < 3; ++i)
+    for (int j = 0; j < 3; ++j)
+      for (int k = 0; k < 3; ++k)
+        for (int l = 0; l < 3; ++l)
+          EXPECT_NEAR(back(i, j, k, l), C(i, j, k, l), 1e-10);
+  // unpack sets both sides, as for every other type.
+  EXPECT_NEAR(mat.stored().old_value()(0, 0, 0, 0), C(0, 0, 0, 0), 1e-10);
+}
+
+/// 36 slots can only hold a minor-symmetric rank-4 tensor; anything else must
+/// be reported rather than silently truncated.
+TEST(StatevMap, PackRejectsRankFourWithoutMinorSymmetry) {
+  ctx_type ctx;
+  param_type p;
+  p.insert<std::string>("name", "store");
+  auto& mat = ctx.create<tensor4_history_material<policy>>(p);
+  ctx.finalize();
+  const map_type map(ctx, {});
+
+  const auto I = tmech::eye<T, 3, 2>();
+  tmech::tensor<T, 3, 4> bad;
+  bad = tmech::otimesu(I, I);  // not minor-symmetric
+  mat.stored().new_value() = bad;
+
+  std::vector<T> statev(map.nstatv(), 0.0);
+  EXPECT_THROW(map.pack(statev.data()), u::fatal_error);
+}
+
+TEST(StatevMap, RotatesRankFourHistory) {
+  ctx_type ctx;
+  param_type p;
+  p.insert<std::string>("name", "store");
+  auto& mat = ctx.create<tensor4_history_material<policy>>(p);
+  ctx.finalize();
+  const map_type map(ctx, {});
+
+  EXPECT_TRUE(map.has_rotatable_history());
+
+  // A non-isotropic but minor-symmetric tensor, so the rotation is observable.
+  tensor2 A, B;
+  A.fill(0.0);
+  B.fill(0.0);
+  A(0, 0) = 1.0;  A(1, 1) = 2.0;  A(2, 2) = 3.0;
+  B(0, 0) = 5.0;  B(1, 1) = 6.0;  B(2, 2) = 7.0;
+  tmech::tensor<T, 3, 4> C;
+  C = tmech::otimes(A, B);
+  mat.stored().new_value() = C;
+  mat.stored().old_value() = C;
+
+  T drot[9];
+  for (auto& v : drot) v = 0.0;
+  drot[0 + 3 * 1] = -1.0;
+  drot[1 + 3 * 0] = 1.0;
+  drot[2 + 3 * 2] = 1.0;
+  map.rotate_history(u::rotation_from_buffer<T>(drot));
+
+  // R (A (x) B) R^T = (R A R^T) (x) (R B R^T); a 90-degree z-rotation swaps the
+  // 11 and 22 entries of both factors, so C_1111 becomes A_22 * B_22.
+  EXPECT_NEAR(mat.stored().new_value()(0, 0, 0, 0), 2.0 * 6.0, 1e-10);
+  EXPECT_NEAR(mat.stored().old_value()(0, 0, 0, 0), 2.0 * 6.0, 1e-10);
+}
+
+/// A history type outside the supported set must be refused, not ignored.
+/// Silently skipping it would leave that state out of STATEV entirely, so it
+/// would reset to its default at the start of every increment.
+TEST(StatevMap, RejectsUnsupportedHistoryType) {
+  ctx_type ctx;
+  param_type p;
+  p.insert<std::string>("name", "weird");
+  ctx.create<int_history_material<policy>>(p);
+  ctx.finalize();
+  EXPECT_THROW(map_type(ctx, {}), u::fatal_error);
 }
 
 }  // namespace

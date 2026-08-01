@@ -82,6 +82,22 @@ public:
     if (!c.drot.empty() && c.drot.size() != 9)
       throw fatal_error("plane_stress_evaluator: drot must be empty or 3x3");
 
+    // The out-of-plane strain is carried as a bare scalar in STATEV and is the
+    // one piece of state rotate_history cannot touch. That is safe exactly when
+    // the rotation leaves the 3-axis alone, which is what the plane-stress
+    // element families produce — but call::drot accepts an arbitrary 3x3, and a
+    // general rotation would mix eps_33 into eps_22/eps_23 with nothing to
+    // signal it. So it is checked rather than assumed.
+    if (!c.drot.empty()) {
+      const auto R = rotation_from_buffer<value_type>(c.drot.data());
+      constexpr value_type axis_tol{1e-8};
+      if (std::abs(R(2, 0)) > axis_tol || std::abs(R(2, 1)) > axis_tol ||
+          std::abs(R(0, 2)) > axis_tol || std::abs(R(1, 2)) > axis_tol)
+        throw fatal_error(
+            "plane_stress_evaluator: DROT rotates out of the plane, which the "
+            "scalar out-of-plane strain in STATEV cannot represent");
+    }
+
     const std::size_t eps33_slot = m_inner->nstatv();
     const value_type eps33_old = c.statev[eps33_slot];
 

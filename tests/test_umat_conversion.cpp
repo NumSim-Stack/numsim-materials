@@ -401,6 +401,57 @@ TEST(UmatConversionRotation, RotatesRankTwoByNinetyDegrees) {
   EXPECT_NEAR(b(2, 2), 3.0, 1e-12);
 }
 
+/// Pins the SENSE of the rotation: R a R^T, not R^T a R.
+///
+/// The 90-degree diagonal fixture above cannot tell the two apart — both swap
+/// the 11 and 22 entries — and neither can an invariant check, which any
+/// orthogonal map satisfies. This uses a non-degenerate angle and a tensor with
+/// a nonzero shear component, and computes the expectation from the closed-form
+/// rotation algebra rather than from u::rotate, so the test cannot agree with a
+/// self-consistently wrong implementation.
+///
+/// Getting this backwards would counter-rotate every tensor state variable
+/// under NLGEOM=YES, with the error growing as rotation accumulates.
+TEST(UmatConversionRotation, PinsTheSenseOfTheRotation) {
+  constexpr T theta = 0.5235987755982988;  // 30 degrees
+  const T c = std::cos(theta), sn = std::sin(theta);
+
+  // R = [[c,-s,0],[s,c,0],[0,0,1]], column-major for DROT.
+  T buf[9];
+  for (auto& v : buf) v = 0.0;
+  buf[0 + 3 * 0] = c;   buf[0 + 3 * 1] = -sn;
+  buf[1 + 3 * 0] = sn;  buf[1 + 3 * 1] = c;
+  buf[2 + 3 * 2] = 1.0;
+  const auto R = u::rotation_from_buffer<T>(buf);
+
+  tensor2 a;
+  a.fill(0.0);
+  a(0, 0) = 1.0;  a(1, 1) = 2.0;  a(2, 2) = 5.0;
+  a(0, 1) = a(1, 0) = 3.0;
+
+  const auto b = u::rotate(a, R);
+
+  // (R a R^T)_ij = R_ip a_pq R_jq, written out for a z-rotation.
+  const T e11 = c * c * a(0, 0) - 2 * c * sn * a(0, 1) + sn * sn * a(1, 1);
+  const T e22 = sn * sn * a(0, 0) + 2 * sn * c * a(0, 1) + c * c * a(1, 1);
+  const T e12 = c * sn * a(0, 0) + (c * c - sn * sn) * a(0, 1) - sn * c * a(1, 1);
+
+  EXPECT_NEAR(b(0, 0), e11, 1e-12);
+  EXPECT_NEAR(b(1, 1), e22, 1e-12);
+  EXPECT_NEAR(b(0, 1), e12, 1e-12);
+  EXPECT_NEAR(b(1, 0), e12, 1e-12);
+  EXPECT_NEAR(b(2, 2), 5.0, 1e-12);
+
+  // Guard the guard: this fixture must be able to tell the two senses apart,
+  // unlike the 90-degree diagonal one. Stated as the property that matters —
+  // the observed component differs from what R^T a R would have produced — so
+  // there is no magnitude threshold to pick arbitrarily.
+  const T e12_transposed =
+      -c * sn * a(0, 0) + (c * c - sn * sn) * a(0, 1) + sn * c * a(1, 1);
+  EXPECT_GT(std::abs(b(0, 1) - e12_transposed), 1e-6)
+      << "fixture cannot distinguish R a R^T from R^T a R";
+}
+
 TEST(UmatConversionRotation, RotationPreservesInvariants) {
   T buf[9];
   rot_z90_buffer(buf);

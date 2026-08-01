@@ -1,6 +1,8 @@
 #ifndef NUMSIM_MATERIALS_UMAT_UMAT_INTERFACE_H
 #define NUMSIM_MATERIALS_UMAT_UMAT_INTERFACE_H
 
+#include <algorithm>
+#include <cctype>
 #include <cstddef>
 #include <cstdio>
 #include <functional>
@@ -55,6 +57,19 @@ inline std::string trim_fortran_name(const char* s, std::size_t len) {
   return std::string(s, len);
 }
 
+/// Fold a material name to the form used as the registry key.
+///
+/// Abaqus input is case-insensitive and CMNAME arrives upper-cased whatever the
+/// deck says, so a model registered as "j2steel" against *MATERIAL, NAME=j2steel
+/// would never be found. Both registration and lookup normalise, so the caller's
+/// choice of case is irrelevant on either side.
+inline std::string normalise_material_name(std::string name) {
+  std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) {
+    return static_cast<char>(std::toupper(c));
+  });
+  return name;
+}
+
 /// Registry of UMAT-callable models, keyed by CMNAME.
 ///
 /// Registration happens once (typically from a static initialiser, since Abaqus
@@ -79,13 +94,13 @@ public:
                       typename ps_evaluator_type::options ps_opts = {}) {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_models.insert_or_assign(
-        std::move(cmname),
+        normalise_material_name(std::move(cmname)),
         model{std::move(build), std::move(cfg), ps_opts});
   }
 
   [[nodiscard]] bool contains(const std::string& cmname) const {
     std::lock_guard<std::mutex> lock(m_mutex);
-    return m_models.contains(cmname);
+    return m_models.contains(normalise_material_name(cmname));
   }
 
   /// STATEV width for a model, so a user can size *DEPVAR. Plane stress needs
@@ -136,44 +151,72 @@ private:
   }
 
   thread_state& thread_state_for(const std::string& cmname) {
+    const auto key = normalise_material_name(cmname);
     auto& cache = thread_cache();
-    if (auto it = cache.find(cmname); it != cache.end()) return it->second;
+    if (auto it = cache.find(key); it != cache.end()) return it->second;
 
     model m;
     {
       std::lock_guard<std::mutex> lock(m_mutex);
-      auto it = m_models.find(cmname);
+      auto it = m_models.find(key);
       if (it == m_models.end())
         throw fatal_error(
-            "numsim UMAT: no model registered for material name '" + cmname +
+            "numsim UMAT: no model registered for material name '" + key +
             "' — check *MATERIAL, NAME= against the registered models");
       m = it->second;  // copy under the lock; building runs unlocked
     }
 
-    thread_state ts;
-    ts.ctx = std::make_unique<context_type>();
-    m.build(*ts.ctx);
-    if (!ts.ctx->is_finalized())
-      throw fatal_error(
-          "numsim UMAT: the builder for '" + cmname +
-          "' returned without calling finalize() on the context");
+    // Everything from here to the end of construction is SETUP, so every
+    // failure is fatal regardless of which layer raised it.
+    //
+    // Classifying at each throw site does not work here: the builder runs
+    // arbitrary graph construction, and the core library reports a mistyped
+    // source name or an unknown material type as a plain std::runtime_error.
+    // Those would otherwise reach the generic handler and request a cutback —
+    // against a fault no increment size can fix, rebuilt and re-failed on every
+    // call from every thread. Translating at the boundary is the only place
+    // that covers code this layer does not own.
+    try {
+      thread_state ts;
+      ts.ctx = std::make_unique<context_type>();
+      m.build(*ts.ctx);
+      if (!ts.ctx->is_finalized())
+        throw fatal_error(
+            "the builder returned without calling finalize() on the context");
 
-    // Both evaluators share the thread's context. They hold no mutable state
-    // beyond diagnostics, and only one is used per call, so this is safe — and
-    // it lets one material serve solid and plane-stress elements in one job.
-    ts.solid = std::make_unique<evaluator_type>(*ts.ctx, m.cfg);
-    ts.ps = std::make_unique<ps_evaluator_type>(*ts.ctx, m.cfg, m.ps_opts);
+      // Both evaluators share the thread's context. They hold no mutable state
+      // beyond diagnostics, and only one is used per call, so this is safe —
+      // and it lets one material serve solid and plane-stress elements in one
+      // job.
+      ts.solid = std::make_unique<evaluator_type>(*ts.ctx, m.cfg);
+      ts.ps = std::make_unique<ps_evaluator_type>(*ts.ctx, m.cfg, m.ps_opts);
 
-    return cache.emplace(cmname, std::move(ts)).first->second;
+      return cache.emplace(key, std::move(ts)).first->second;
+    } catch (const fatal_error& e) {
+      throw fatal_error("numsim UMAT: building the material graph for '" + key +
+                        "' failed: " + e.what());
+    } catch (const std::exception& e) {
+      throw fatal_error("numsim UMAT: building the material graph for '" + key +
+                        "' failed: " + e.what());
+    }
   }
 
   mutable std::mutex m_mutex;
   std::unordered_map<std::string, model> m_models;
 };
 
-/// Zero the host's outputs. Used only on the fatal path, so that a handler
-/// which (against contract) returns cannot hand Abaqus the uninitialised
-/// contents of DDSDDE as if they were a real tangent.
+/// Zero the host's outputs.
+///
+/// Used on EVERY error path, not just the fatal one. On a cutback it matters
+/// more than it looks: PNEWDT is the minimum over all calls for the iteration,
+/// so Abaqus finishes the element loop and assembles BEFORE acting on the
+/// request — with whatever DDSDDE contains. Leaving it untouched means
+/// assembling uninitialised memory, which can trap on a signalling NaN long
+/// before the cutback is honoured.
+///
+/// A zero tangent is a poor stiffness, and that is the accepted trade: the
+/// increment is being discarded either way, and predictably soft beats
+/// arbitrarily wrong. STRESS is zeroed for the same reason.
 template <typename T>
 inline void zero_outputs(T* stress, T* ddsdde, std::size_t n) noexcept {
   if (stress)
@@ -194,6 +237,26 @@ inline void zero_outputs(T* stress, T* ddsdde, std::size_t n) noexcept {
 ///  * anything else — treated as a failure at this increment size, which is the
 ///    right default for exceptions escaping the constitutive models themselves.
 ///    Ask for a smaller increment via PNEWDT and let the host retry.
+/// Report an unrecoverable fault, then hand control to the fatal handler.
+///
+/// The message is assembled inside a nested try. An exception thrown from
+/// within a catch handler is NOT caught by the sibling catch(...) of the same
+/// try-block, so a bad_alloc while concatenating would escape a noexcept
+/// function and terminate BEFORE the handler runs — losing precisely the
+/// diagnostic the fatal path exists to produce. The fallback is a literal.
+inline void report_fatal(const char* material, const char* what) noexcept {
+  try {
+    const std::string msg = std::string("Unrecoverable fault in material '") +
+                            material + "' — terminating the analysis.\n  " +
+                            what;
+    invoke_fatal(msg.c_str());
+  } catch (...) {
+    invoke_fatal(
+        "numsim UMAT: unrecoverable fault; the message could not be formatted "
+        "— terminating the analysis");
+  }
+}
+
 /// Every argument the shim forwards, grouped so the dispatch signature does not
 /// grow past readability.
 template <typename T>
@@ -221,8 +284,12 @@ struct dispatch_args {
 template <typename Traits>
 void umat_dispatch(const dispatch_args<typename Traits::value_type>& a) noexcept {
   using T = typename Traits::value_type;
-  const std::string name = trim_fortran_name(a.cmname, a.cmname_len);
+  // Built inside the try: CMNAME is character*80, so a name past the small-string
+  // buffer heap-allocates, and this function is noexcept — a bad_alloc escaping
+  // here would be std::terminate with no diagnostic at all.
+  std::string name;
   try {
+    name = trim_fortran_name(a.cmname, a.cmname_len);
     const auto ec = case_from_element(a.ndi, a.nshr);
     const auto n = ntens_for(ec);
 
@@ -250,15 +317,16 @@ void umat_dispatch(const dispatch_args<typename Traits::value_type>& a) noexcept
     umat_registry<Traits>::instance().evaluate(name, c);
   } catch (const fatal_error& e) {
     zero_outputs(a.stress, a.ddsdde, static_cast<std::size_t>(a.ntens));
-    invoke_fatal("Unrecoverable fault in material '" + name +
-                 "' — terminating the analysis.\n  " + e.what());
+    report_fatal(name.c_str(), e.what());
   } catch (const std::exception& e) {
+    zero_outputs(a.stress, a.ddsdde, static_cast<std::size_t>(a.ntens));
     std::fprintf(stderr,
                  "numsim UMAT: material '%s' failed (%s) — requesting a "
                  "smaller increment\n",
                  name.c_str(), e.what());
     if (a.pnewdt) *a.pnewdt = T{0.25};
   } catch (...) {
+    zero_outputs(a.stress, a.ddsdde, static_cast<std::size_t>(a.ntens));
     std::fprintf(stderr,
                  "numsim UMAT: material '%s' failed with an unknown error — "
                  "requesting a smaller increment\n",

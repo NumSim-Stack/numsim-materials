@@ -111,7 +111,7 @@ public:
 
     if (!m_cfg.plastic_strain_property.empty()) {
       const auto src = connection_source::parse(m_cfg.plastic_strain_property);
-      m_plastic_strain = resolve_property<tensor2>(src.material, src.property);
+      m_plastic_strain = resolve_history<tensor2>(src.material, src.property);
     }
 
     m_statev = std::make_unique<statev_map<Traits>>(m_ctx, exclusions);
@@ -208,18 +208,25 @@ public:
 
   /// Update SSE and SPD from the converged state.
   ///
-  ///   SSE  = 1/2 sigma : (eps - eps_p)             stored elastic energy
-  ///   dW   = 1/2 (sigma_n + sigma_n+1) : d_eps     total work increment
-  ///   SPD += dW - dSSE                             the part not stored
+  ///   d_eps_e = d_eps - d_eps_p
+  ///   dSSE    = 1/2 (sigma_n + sigma_n+1) : d_eps_e      stored elastic energy
+  ///   dW      = 1/2 (sigma_n + sigma_n+1) : d_eps        total work
+  ///   SPD    += dW - dSSE  ==  1/2 (sigma_n + sigma_n+1) : d_eps_p
   ///
-  /// The trapezoidal work increment is second-order accurate in the step — the
-  /// same order as the stress update it accompanies.
+  /// BOTH are accumulated incrementally, which is what Abaqus's own materials
+  /// do. An earlier version set SSE to the absolute 1/2 sigma:(eps - eps_p) and
+  /// derived the SPD increment from its change; that is only self-consistent if
+  /// the host's incoming SSE equals the stored energy at t_n, and Abaqus
+  /// initialises SSE to zero whatever the initial state. With
+  /// *INITIAL CONDITIONS, TYPE=STRESS the whole pre-existing stored energy was
+  /// then booked once as NEGATIVE plastic dissipation on the first increment,
+  /// and the offset persisted in ALLPD for the rest of the analysis.
+  ///
   /// Everything is taken from the CANONICAL buffers, never re-derived from the
-  /// call's host-sized arrays. The strain increment is eps_new6 - eps_old6,
-  /// which is correct for every element family without knowing which one it is
-  /// — and in the plane-stress case it correctly includes the solved-for
-  /// out-of-plane increment (which does no work, since sigma_33 vanishes there,
-  /// but costs nothing to carry).
+  /// call's host-sized arrays: the strain increment is eps_new6 - eps_old6,
+  /// which is right for every element family without knowing which one it is,
+  /// and in the plane-stress case correctly includes the solved-for
+  /// out-of-plane increment (which does no work, since sigma_33 vanishes).
   void update_energies(value_type* sse, value_type* spd,
                        const value_type* eps_old6, const value_type* eps_new6,
                        const value_type* sig_old6,
@@ -228,22 +235,22 @@ public:
     for (std::size_t i = 0; i < canonical_width; ++i)
       deps6[i] = eps_new6[i] - eps_old6[i];
 
-    const auto eps = strain_from_buffer<value_type>(eps_new6);
     const auto deps = strain_from_buffer<value_type>(deps6);
     const auto sig_new = stress_from_buffer<value_type>(sig_new6);
     const auto sig_old = stress_from_buffer<value_type>(sig_old6);
 
-    tensor2 eps_e;
-    eps_e = eps - *m_plastic_strain;
+    tensor2 deps_p;
+    deps_p = m_plastic_strain->new_value() - m_plastic_strain->old_value();
+    tensor2 deps_e;
+    deps_e = deps - deps_p;
     tensor2 sig_mid;
     sig_mid = value_type{0.5} * (sig_old + sig_new);
 
-    const value_type sse_new =
-        value_type{0.5} * tmech::dcontract(sig_new, eps_e);
+    const value_type dSSE = tmech::dcontract(sig_mid, deps_e);
     const value_type dW = tmech::dcontract(sig_mid, deps);
 
-    *spd += dW - (sse_new - *sse);
-    *sse = sse_new;
+    *sse += dSSE;
+    *spd += dW - dSSE;
   }
 
 private:
@@ -279,6 +286,26 @@ private:
     return typed;
   }
 
+  /// Resolve a property that must be history, because the caller needs both
+  /// sides of the increment.
+  template <typename T>
+  const numsim_core::history_property<T, property_traits>* resolve_history(
+      const std::string& material, const std::string& property) {
+    auto* prop = m_ctx.find_property(material, property);
+    if (!prop)
+      throw fatal_error("material_point_evaluator: property '" + material +
+                        "::" + property + "' not found");
+    auto* hist =
+        dynamic_cast<const numsim_core::history_property<T, property_traits>*>(
+            prop);
+    if (!hist)
+      throw fatal_error("material_point_evaluator: property '" + material +
+                        "::" + property +
+                        "' must be a history property — the energy split needs "
+                        "its value at both ends of the increment");
+    return hist;
+  }
+
   template <typename T>
   const T* resolve_property(const std::string& material,
                             const std::string& property) {
@@ -302,7 +329,8 @@ private:
   external_scalar_source<Traits>* m_time_src{nullptr};
   const tensor2* m_stress{nullptr};
   const tensor4* m_tangent{nullptr};
-  const tensor2* m_plastic_strain{nullptr};
+  const numsim_core::history_property<tensor2, property_traits>*
+      m_plastic_strain{nullptr};
   std::unique_ptr<statev_map<Traits>> m_statev;
 };
 

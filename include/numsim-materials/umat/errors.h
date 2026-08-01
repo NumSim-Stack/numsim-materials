@@ -1,6 +1,7 @@
 #ifndef NUMSIM_MATERIALS_UMAT_ERRORS_H
 #define NUMSIM_MATERIALS_UMAT_ERRORS_H
 
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <stdexcept>
@@ -71,18 +72,22 @@ inline void abaqus_xit_handler(const char* message) {
   std::abort();
 }
 
-inline fatal_handler& fatal_handler_slot() {
-  static fatal_handler handler = &abaqus_xit_handler;
+/// Atomic because the fatal path is reachable from every worker thread. The
+/// contract is still "set once before any call" — the atomicity costs nothing
+/// here and removes a footgun rather than enabling a use case.
+inline std::atomic<fatal_handler>& fatal_handler_slot() {
+  static std::atomic<fatal_handler> handler{&abaqus_xit_handler};
   return handler;
 }
 
 /// Replace the fatal handler. Intended for tests; set once before any call.
 inline void set_fatal_handler(fatal_handler handler) {
-  fatal_handler_slot() = handler ? handler : &abaqus_xit_handler;
+  fatal_handler_slot().store(handler ? handler : &abaqus_xit_handler,
+                             std::memory_order_relaxed);
 }
 
-inline void invoke_fatal(const std::string& message) {
-  fatal_handler_slot()(message.c_str());
+inline void invoke_fatal(const char* message) noexcept {
+  fatal_handler_slot().load(std::memory_order_relaxed)(message);
 }
 
 }  // namespace numsim::materials::umat

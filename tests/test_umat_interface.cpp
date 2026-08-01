@@ -5,6 +5,7 @@
 #include <vector>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_context.h"
+#include "numsim-materials/core/input_types.h"
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/materials/linear_isotropic_hardening.h"
 #include "numsim-materials/materials/small_strain_plasticity.h"
@@ -68,6 +69,57 @@ void build_j2(ctx_type& ctx) {
   ctx.finalize();
 }
 
+/// Reports the time it was bound with, so TIME/DTIME plumbing is observable
+/// from outside. Without something like this, nothing that reaches a material
+/// through the shim depends on time at all, and TIME(1)-vs-TIME(2) or a dropped
+/// DTIME is undetectable at the ABI.
+template <typename Traits>
+class time_probe_material final
+    : public nm::material_base<time_probe_material<Traits>, Traits> {
+public:
+  using base = nm::material_base<time_probe_material<Traits>, Traits>;
+  using value_type = typename base::value_type;
+  using input_parameter_controller = typename base::input_parameter_controller;
+  using tensor2 = tmech::tensor<value_type, 3, 2>;
+  using tensor4 = tmech::tensor<value_type, 3, 4>;
+
+  template <typename... Args>
+  explicit time_probe_material(Args&&... args)
+      : base(std::forward<Args>(args)...),
+        m_stress(base::template add_output<tensor2>(
+            "stress", &time_probe_material::compute)),
+        m_tangent(base::template add_output<tensor4>("tangent")),
+        m_time(base::template add_input_history<value_type>(
+            nm::connection_source{"clock", "state"}, nm::EdgeKind::Global)) {}
+
+  static input_parameter_controller parameters() { return base::parameters(); }
+
+  void compute() {
+    m_stress.fill(0.0);
+    m_stress(0, 0) = m_time.new_value();
+    m_stress(1, 1) = m_time.new_value() - m_time.old_value();
+    m_stress(2, 2) = m_time.old_value();
+  }
+
+private:
+  tensor2& m_stress;
+  tensor4& m_tangent;
+  const nm::input_history<value_type, nm::property_traits>& m_time;
+};
+
+void build_time_probe(ctx_type& ctx) {
+  param_type p;
+  p.insert<std::string>("name", "stepper");
+  ctx.create<nm::external_strain_source<policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "clock");
+  ctx.create<nm::external_scalar_source<policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "probe");
+  ctx.create<time_probe_material<policy>>(p);
+  ctx.finalize();
+}
+
 /// Register once for the whole binary, as a real UMAT library would from a
 /// static initialiser.
 struct Registration {
@@ -76,6 +128,18 @@ struct Registration {
     cfg.strain_source = "stepper";
     cfg.stress_source = "j2";
     registry::instance().register_model("J2STEEL", build_j2, cfg);
+
+    registry::config tp;
+    tp.strain_source = "stepper";
+    tp.stress_source = "probe";
+    tp.time_source = "clock";
+    registry::instance().register_model("TIMEPROBE", build_time_probe, tp);
+
+    // Deliberately lower-case, to prove the registry folds case on both sides.
+    registry::config lc;
+    lc.strain_source = "stepper";
+    lc.stress_source = "j2";
+    registry::instance().register_model("mixedCase", build_j2, lc);
   }
 };
 const Registration registration_{};
@@ -458,6 +522,137 @@ TEST(UmatInterface, ForwardsEnergiesThroughTheEntryPoint) {
   EXPECT_GT(sse, 0.0) << "elastic energy should be reported";
   EXPECT_GT(spd, 0.0) << "plastic dissipation should accumulate";
   EXPECT_DOUBLE_EQ(scd, 0.0) << "no creep in this model";
+}
+
+
+// ---------------------------------------------------------------------------
+// TIME plumbing
+// ---------------------------------------------------------------------------
+
+/// TIME(2) is the TOTAL time at the start of the increment; TIME(1) is the step
+/// time. They differ in any analysis past the first step, and a material
+/// forming dt from the old/new pair depends on both the right slot and DTIME
+/// actually arriving.
+TEST(UmatInterface, PassesTotalTimeAndIncrementToTheMaterial) {
+  std::vector<T> statev(1, 0.0);
+  const T stran[6] = {0, 0, 0, 0, 0, 0};
+  const T dstran[6] = {0, 0, 0, 0, 0, 0};
+  T stress[6], ddsdde[36], pnewdt = 1.0;
+
+  // Step time 2.5, total time 11.0 — deliberately different, which is what the
+  // old fixture (both slots equal) could not distinguish.
+  const T step_time = 2.5, total_time = 11.0, dtime = 0.25;
+  const fortran_name cm("TIMEPROBE");
+  T sse = 0, spd = 0, scd = 0, rpl = 0;
+  std::vector<T> ddsddt(6, 0.0), drplde(6, 0.0);
+  T drpldt = 0;
+  const T time[2] = {step_time, total_time};
+  const T temp = 0, dtemp = 0, predef = 0, dpred = 0, props = 0;
+  const int nprops = 0;
+  const T coords[3] = {0, 0, 0};
+  const T drot[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+  const T celent = 1.0;
+  const T dfgrd[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+  const int noel = 1, npt = 1, layer = 1, kspt = 1, jstep = 1, kinc = 1;
+  int ndi = 3, nshr = 3, ntens = 6, nstatv = 1;
+
+  umat_(stress, statev.data(), ddsdde, &sse, &spd, &scd, &rpl, ddsddt.data(),
+        drplde.data(), &drpldt, stran, dstran, time, &dtime, &temp, &dtemp,
+        &predef, &dpred, cm.buf, &ndi, &nshr, &ntens, &nstatv, &props, &nprops,
+        coords, drot, &pnewdt, &celent, dfgrd, dfgrd, &noel, &npt, &layer,
+        &kspt, &jstep, &kinc, 80);
+
+  EXPECT_DOUBLE_EQ(pnewdt, 1.0);
+  // stress_11 = t_new, stress_22 = dt, stress_33 = t_old
+  EXPECT_DOUBLE_EQ(stress[2], total_time) << "TIME(2), not TIME(1)";
+  EXPECT_DOUBLE_EQ(stress[0], total_time + dtime);
+  EXPECT_DOUBLE_EQ(stress[1], dtime) << "DTIME must reach the material";
+}
+
+// ---------------------------------------------------------------------------
+// Guards at the ABI
+// ---------------------------------------------------------------------------
+
+/// NTENS inconsistent with NDI/NSHR must be refused. Without the guard the
+/// dispatch would build 6-element spans over a 4-element host array.
+TEST(UmatInterface, RejectsNtensInconsistentWithNdiNshr) {
+  FatalProbe probe;
+  std::vector<T> statev(7, 0.0);
+  const T stran[6] = {0, 0, 0, 0, 0, 0};
+  const T dstran[6] = {0.001, 0, 0, 0, 0, 0};
+  T stress[6] = {0}, ddsdde[36] = {0}, pnewdt = 1.0;
+
+  // NDI=3/NSHR=3 implies NTENS=6; claiming 4 is a contradiction.
+  call_umat("J2STEEL", stress, statev.data(), ddsdde, stran, dstran, 0.0, 0.1,
+            3, 3, 4, 7, &pnewdt);
+
+  EXPECT_EQ(FatalProbe::count, 1);
+  EXPECT_NE(FatalProbe::last.find("NTENS"), std::string::npos)
+      << FatalProbe::last;
+  EXPECT_DOUBLE_EQ(pnewdt, 1.0);
+}
+
+/// A fault raised INSIDE the registered builder is still a setup fault, even
+/// though it surfaces from the core library as a plain std::runtime_error.
+/// Classifying only at this layer's own throw sites missed it: the builder runs
+/// arbitrary graph construction that this layer does not own.
+TEST(UmatInterface, BuilderFailureIsFatalNotACutback) {
+  FatalProbe probe;
+  registry::instance().register_model(
+      "BROKENBUILD",
+      [](ctx_type& ctx) {
+        param_type p;
+        p.insert<std::string>("name", "stepper");
+        ctx.create<nm::external_strain_source<policy>>(p);
+        p.clear();
+        p.insert<std::string>("name", "elastic");
+        // Typo: no material called "steper" exists, so wire_inputs() throws a
+        // plain std::runtime_error from the core library.
+        p.insert<std::string>("strain_producer_name", "steper");
+        p.insert<T>("K", K);
+        p.insert<T>("G", G);
+        ctx.create<nm::linear_elasticity<policy>>(p);
+        ctx.finalize();
+      },
+      [] {
+        registry::config c;
+        c.strain_source = "stepper";
+        c.stress_source = "elastic";
+        return c;
+      }());
+
+  std::vector<T> statev(1, 0.0);
+  const T stran[6] = {0, 0, 0, 0, 0, 0};
+  const T dstran[6] = {0.001, 0, 0, 0, 0, 0};
+  T stress[6] = {0}, ddsdde[36] = {0}, pnewdt = 1.0;
+
+  call_umat("BROKENBUILD", stress, statev.data(), ddsdde, stran, dstran, 0.0,
+            0.1, 3, 3, 6, 1, &pnewdt);
+
+  EXPECT_EQ(FatalProbe::count, 1) << "a broken graph cannot be fixed by a cutback";
+  EXPECT_NE(FatalProbe::last.find("steper"), std::string::npos)
+      << FatalProbe::last;
+  EXPECT_DOUBLE_EQ(pnewdt, 1.0);
+}
+
+/// Abaqus input is case-insensitive and delivers CMNAME upper-cased, so the
+/// registry must fold case on both sides.
+TEST(UmatInterface, MaterialNameLookupIsCaseInsensitive) {
+  EXPECT_TRUE(registry::instance().contains("MIXEDCASE"));
+  EXPECT_TRUE(registry::instance().contains("mixedcase"));
+  EXPECT_TRUE(registry::instance().contains("MixedCase"));
+
+  std::vector<T> statev(7, 0.0);
+  const T stran[6] = {0, 0, 0, 0, 0, 0};
+  const T dstran[6] = {0.001, 0, 0, 0, 0, 0};
+  T stress[6] = {0}, ddsdde[36] = {0}, pnewdt = 1.0;
+
+  // Registered as "mixedCase"; Abaqus will deliver "MIXEDCASE".
+  call_umat("MIXEDCASE", stress, statev.data(), ddsdde, stran, dstran, 0.0, 0.1,
+            3, 3, 6, 7, &pnewdt);
+
+  EXPECT_DOUBLE_EQ(pnewdt, 1.0);
+  EXPECT_GT(std::abs(stress[0]), 0.0) << "the model should have evaluated";
 }
 
 }  // namespace
