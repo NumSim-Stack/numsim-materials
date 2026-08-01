@@ -81,6 +81,11 @@ public:
     /// Abaqus DROT(3,3), column-major. Empty means no rotation.
     std::span<const value_type> drot{};
     /// Optional energy outputs; null leaves the host's values alone.
+    ///
+    /// SCD is accepted for interface completeness but is NEVER written: this
+    /// layer does not separate creep from plastic dissipation, so a viscous
+    /// model's dissipation is reported entirely in SPD and Abaqus's ALLCD stays
+    /// at zero. The total is right; the split between those two buckets is not.
     value_type* sse{nullptr};
     value_type* spd{nullptr};
     value_type* scd{nullptr};

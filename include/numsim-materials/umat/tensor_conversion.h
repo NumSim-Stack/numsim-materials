@@ -108,6 +108,12 @@ inline void narrow_vector(const T in6[canonical_width], element_case c,
 ///    for a non-associative (major-asymmetric) tangent it is a transpose, which
 ///    is why the tests exercise an asymmetric block specifically.
 ///
+///    Narrower still: Abaqus uses only the SYMMETRIC part of DDSDDE unless the
+///    unsymmetric solver is requested with *USER MATERIAL, UNSYMM. So the
+///    transpose is observable only in that configuration — which is exactly the
+///    configuration a non-associative model needs, and the one where getting it
+///    wrong would be least likely to be noticed.
+///
 /// For plane stress the block is additionally statically condensed on the 33
 /// row/column, which is what enforces sigma_33 = 0 in the tangent:
 ///
@@ -147,7 +153,17 @@ inline void narrow_matrix(const T in36[canonical_width * canonical_width],
 // ---------------------------------------------------------------------------
 //
 // The shear convention is asymmetric across these four functions, and that
-// asymmetry is exactly the UMAT contract, not an oversight:
+// asymmetry is exactly the UMAT contract, not an oversight.
+//
+// One caveat on how it is achieved: the `false` in the rank-4 functions is
+// INERT. tmech's abq_std honours _ShearStrain only on the rank-2 path; its
+// rank-4 assign_tensor ignores the flag entirely. The no-scaling property of
+// the tangent is therefore guaranteed by tmech's internals, not by the argument
+// written here — and would silently acquire a factor 2 if tmech ever
+// implemented it. The physical check in the tests (DDSDDE times the engineering
+// strain vector must equal the tensor contraction) is what actually pins it.
+//
+// The conventions themselves:
 //
 //   strain  ShearStrain = true   STRAN/DSTRAN carry ENGINEERING shear (2*eps_12)
 //   stress  ShearStrain = false  STRESS carries tensor components
@@ -196,8 +212,17 @@ inline void stress_to_buffer(const tmech::tensor<T, 3, 2>& sig,
 ///
 /// Mandel/Voigt storage keeps 36 of the 81 rank-4 components, so a tangent
 /// without minor symmetry cannot round-trip. statev_map rejects such a tensor
-/// outright; here the same hazard is only asserted in debug builds, because
-/// tangent_to_buffer sits in the innermost loop of every Gauss point.
+/// outright; here the same hazard is only asserted, because tangent_to_buffer
+/// sits in the innermost loop of every Gauss point and this check is 162
+/// comparisons.
+///
+/// A production UMAT is built with -DNDEBUG, so in deployment a tangent lacking
+/// minor symmetry is silently truncated to its 36 representable slots. The
+/// consequence is bounded and worth stating precisely: STRESS is computed by
+/// the material and is unaffected, so the converged answer is still correct;
+/// only the Jacobian is degraded, costing global Newton convergence rate. That
+/// asymmetry of treatment is deliberate — in statev_map a truncated state
+/// variable would corrupt the solution itself, so there it throws.
 template <typename T>
 inline bool is_minor_symmetric(const tmech::tensor<T, 3, 4>& c,
                                T rel_tol = T{1e-12}) noexcept {

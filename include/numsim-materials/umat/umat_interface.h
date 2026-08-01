@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <string_view>
 #include <cstddef>
 #include <cstdio>
 #include <functional>
@@ -36,8 +37,17 @@ namespace numsim::materials::umat {
 ///
 /// Plane strain and axisymmetric are indistinguishable here — both are
 /// NDI=3, NSHR=1 — and deliberately need no distinction: both supply all four
-/// strain components, so they take the identical code path (plane strain simply
-/// happens to pass eps_33 = 0).
+/// strain components, so they take the identical code path. Ordinary plane
+/// strain happens to pass eps_33 = 0, axisymmetric passes the hoop strain, and
+/// generalized plane strain (CPEG) reports the same NDI/NSHR with a nonzero
+/// eps_33. Whatever slot 2 holds is simply consumed, so all three are correct
+/// without being told apart.
+///
+/// Element families NOT covered fall through to the fatal error, which is the
+/// intended outcome rather than a gap: beams (NDI=1, NSHR=1), trusses (1, 0),
+/// axisymmetric shells (2, 0) and cohesive traction-separation (1, 2) all use
+/// component orderings this layer does not implement, and a prefix-based guess
+/// would silently misinterpret them.
 inline element_case case_from_element(int ndi, int nshr) {
   if (ndi == 3 && nshr == 3) return element_case::solid3d;
   if (ndi == 3 && nshr == 1) return element_case::plane_strain;
@@ -52,9 +62,14 @@ inline element_case case_from_element(int ndi, int nshr) {
 inline std::size_t ntens_for(element_case ec) noexcept { return ntens(ec); }
 
 /// Trim a Fortran character*N: blank-padded, not NUL-terminated.
-inline std::string trim_fortran_name(const char* s, std::size_t len) {
+///
+/// Returns a view into the caller's buffer rather than a string: this runs once
+/// per UMAT call — per integration point, per global iteration — and CMNAME is
+/// character*80, well past the small-string buffer, so a std::string here would
+/// be a heap allocation in the hottest path the library has.
+inline std::string_view trim_fortran_name(const char* s, std::size_t len) {
   while (len > 0 && (s[len - 1] == ' ' || s[len - 1] == '\0')) --len;
-  return std::string(s, len);
+  return {s, len};
 }
 
 /// Fold a material name to the form used as the registry key.
@@ -69,6 +84,30 @@ inline std::string normalise_material_name(std::string name) {
   });
   return name;
 }
+
+/// Trim and fold CMNAME into @p buf, returning a NUL-terminated view of it.
+/// The NUL lets the same buffer feed both the registry lookup and the C
+/// formatting in the error paths, with no allocation on either.
+template <std::size_t N>
+inline std::string_view normalise_cmname(const char* s, std::size_t len,
+                                         char (&buf)[N]) {
+  const auto trimmed = trim_fortran_name(s, len);
+  const auto n = std::min(trimmed.size(), N - 1);
+  for (std::size_t i = 0; i < n; ++i)
+    buf[i] = static_cast<char>(
+        std::toupper(static_cast<unsigned char>(trimmed[i])));
+  buf[n] = '\0';
+  return {buf, n};
+}
+
+/// Heterogeneous hash so the registry can be looked up by string_view without
+/// materialising a std::string.
+struct transparent_string_hash {
+  using is_transparent = void;
+  std::size_t operator()(std::string_view s) const noexcept {
+    return std::hash<std::string_view>{}(s);
+  }
+};
 
 /// Registry of UMAT-callable models, keyed by CMNAME.
 ///
@@ -85,6 +124,9 @@ public:
   /// Populates a context with materials AND calls finalize().
   using builder = std::function<void(context_type&)>;
 
+  /// CMNAME is character*80 in the Abaqus interface.
+  static constexpr std::size_t max_cmname = 80;
+
   static umat_registry& instance() {
     static umat_registry reg;
     return reg;
@@ -98,14 +140,16 @@ public:
         model{std::move(build), std::move(cfg), ps_opts});
   }
 
-  [[nodiscard]] bool contains(const std::string& cmname) const {
+  [[nodiscard]] bool contains(std::string_view cmname) const {
+    char buf[max_cmname + 1];
+    const auto key = normalise_cmname(cmname.data(), cmname.size(), buf);
     std::lock_guard<std::mutex> lock(m_mutex);
-    return m_models.contains(normalise_material_name(cmname));
+    return m_models.contains(key);
   }
 
   /// STATEV width for a model, so a user can size *DEPVAR. Plane stress needs
   /// one slot more than the other families.
-  [[nodiscard]] std::size_t nstatv(const std::string& cmname,
+  [[nodiscard]] std::size_t nstatv(std::string_view cmname,
                                    element_case ec = element_case::solid3d) {
     auto& ts = thread_state_for(cmname);
     return ec == element_case::plane_stress ? ts.ps->nstatv()
@@ -113,14 +157,14 @@ public:
   }
 
   [[nodiscard]] std::vector<std::string> describe_statev(
-      const std::string& cmname, element_case ec = element_case::solid3d) {
+      std::string_view cmname, element_case ec = element_case::solid3d) {
     auto& ts = thread_state_for(cmname);
     return ec == element_case::plane_stress ? ts.ps->describe_statev()
                                             : ts.solid->describe_statev();
   }
 
   /// Evaluate one material point, dispatching on the element family.
-  void evaluate(const std::string& cmname, const call& c) {
+  void evaluate(std::string_view cmname, const call& c) {
     auto& ts = thread_state_for(cmname);
     if (c.ec == element_case::plane_stress)
       ts.ps->evaluate(c);
@@ -139,19 +183,32 @@ private:
     typename ps_evaluator_type::options ps_opts;
   };
 
+  /// Declaration order matters on USE, not on teardown. The evaluators hold raw
+  /// pointers into the context's property storage, so an evaluator outliving its
+  /// context is a use-after-free — but no destructor here dereferences the
+  /// context, so the reverse order would in fact be clean today. Keeping the
+  /// context first anyway means a future destructor body, or a reordering, does
+  /// not quietly turn a latent hazard into a live one. Compare the load-bearing
+  /// `DO NOT REORDER` ordering in material_context itself.
   struct thread_state {
     std::unique_ptr<context_type> ctx;
     std::unique_ptr<evaluator_type> solid;
     std::unique_ptr<ps_evaluator_type> ps;
   };
 
-  static std::unordered_map<std::string, thread_state>& thread_cache() {
-    static thread_local std::unordered_map<std::string, thread_state> cache;
+  static std::unordered_map<std::string, thread_state, transparent_string_hash,
+                            std::equal_to<>>&
+  thread_cache() {
+    static thread_local std::unordered_map<std::string, thread_state,
+                                           transparent_string_hash,
+                                           std::equal_to<>>
+        cache;
     return cache;
   }
 
-  thread_state& thread_state_for(const std::string& cmname) {
-    const auto key = normalise_material_name(cmname);
+  thread_state& thread_state_for(std::string_view cmname) {
+    char buf[max_cmname + 1];
+    const auto key = normalise_cmname(cmname.data(), cmname.size(), buf);
     auto& cache = thread_cache();
     if (auto it = cache.find(key); it != cache.end()) return it->second;
 
@@ -161,7 +218,8 @@ private:
       auto it = m_models.find(key);
       if (it == m_models.end())
         throw fatal_error(
-            "numsim UMAT: no model registered for material name '" + key +
+            "numsim UMAT: no model registered for material name '" +
+            std::string(key) +
             "' — check *MATERIAL, NAME= against the registered models");
       m = it->second;  // copy under the lock; building runs unlocked
     }
@@ -191,18 +249,20 @@ private:
       ts.solid = std::make_unique<evaluator_type>(*ts.ctx, m.cfg);
       ts.ps = std::make_unique<ps_evaluator_type>(*ts.ctx, m.cfg, m.ps_opts);
 
-      return cache.emplace(key, std::move(ts)).first->second;
+      return cache.emplace(std::string(key), std::move(ts)).first->second;
     } catch (const fatal_error& e) {
-      throw fatal_error("numsim UMAT: building the material graph for '" + key +
-                        "' failed: " + e.what());
+      throw fatal_error("numsim UMAT: building the material graph for '" +
+                        std::string(key) + "' failed: " + e.what());
     } catch (const std::exception& e) {
-      throw fatal_error("numsim UMAT: building the material graph for '" + key +
-                        "' failed: " + e.what());
+      throw fatal_error("numsim UMAT: building the material graph for '" +
+                        std::string(key) + "' failed: " + e.what());
     }
   }
 
   mutable std::mutex m_mutex;
-  std::unordered_map<std::string, model> m_models;
+  std::unordered_map<std::string, model, transparent_string_hash,
+                     std::equal_to<>>
+      m_models;
 };
 
 /// Zero the host's outputs.
@@ -284,19 +344,25 @@ struct dispatch_args {
 template <typename Traits>
 void umat_dispatch(const dispatch_args<typename Traits::value_type>& a) noexcept {
   using T = typename Traits::value_type;
-  // Built inside the try: CMNAME is character*80, so a name past the small-string
-  // buffer heap-allocates, and this function is noexcept — a bad_alloc escaping
-  // here would be std::terminate with no diagnostic at all.
-  std::string name;
+  // A fixed buffer, so the success path allocates nothing at all: this runs per
+  // integration point per global iteration. It is also NUL-terminated, so the
+  // same storage feeds both the registry lookup and the C formatting below —
+  // and, being stack storage, it cannot throw in a noexcept function.
+  char namebuf[umat_registry<Traits>::max_cmname + 1] = {'\0'};
+  std::string_view name;
   try {
-    name = trim_fortran_name(a.cmname, a.cmname_len);
+    if (!a.cmname)
+      throw fatal_error("numsim UMAT: CMNAME is null");
+    if (!a.time)
+      throw fatal_error("numsim UMAT: TIME is null");
+    name = normalise_cmname(a.cmname, a.cmname_len, namebuf);
     const auto ec = case_from_element(a.ndi, a.nshr);
     const auto n = ntens_for(ec);
 
     if (static_cast<std::size_t>(a.ntens) != n)
       throw fatal_error("numsim UMAT: NTENS=" + std::to_string(a.ntens) +
-                        " is inconsistent with NDI/NSHR for material '" + name +
-                        "'");
+                        " is inconsistent with NDI/NSHR for material '" +
+                        std::string(name) + "'");
 
     typename umat_registry<Traits>::call c;
     c.stran = {a.stran, n};
@@ -317,20 +383,20 @@ void umat_dispatch(const dispatch_args<typename Traits::value_type>& a) noexcept
     umat_registry<Traits>::instance().evaluate(name, c);
   } catch (const fatal_error& e) {
     zero_outputs(a.stress, a.ddsdde, static_cast<std::size_t>(a.ntens));
-    report_fatal(name.c_str(), e.what());
+    report_fatal(namebuf, e.what());
   } catch (const std::exception& e) {
     zero_outputs(a.stress, a.ddsdde, static_cast<std::size_t>(a.ntens));
     std::fprintf(stderr,
                  "numsim UMAT: material '%s' failed (%s) — requesting a "
                  "smaller increment\n",
-                 name.c_str(), e.what());
+                 namebuf, e.what());
     if (a.pnewdt) *a.pnewdt = T{0.25};
   } catch (...) {
     zero_outputs(a.stress, a.ddsdde, static_cast<std::size_t>(a.ntens));
     std::fprintf(stderr,
                  "numsim UMAT: material '%s' failed with an unknown error — "
                  "requesting a smaller increment\n",
-                 name.c_str());
+                 namebuf);
     if (a.pnewdt) *a.pnewdt = T{0.25};
   }
 }
@@ -357,10 +423,48 @@ void umat_dispatch(const dispatch_args<typename Traits::value_type>& a) noexcept
 /// is header-only: an inline definition is not guaranteed to be emitted, and a
 /// symbol Fortran resolves by name must actually exist in the object file.
 ///
-/// Arguments that are accepted but not used: RPL, DDSDDT, DRPLDE and DRPLDT are
-/// for coupled temperature-displacement analysis; PREDEF/DPRED are field
-/// variables; DFGRD0/DFGRD1 are the deformation gradients, unused by a
-/// small-strain material. DROT and the energies ARE forwarded.
+/// Forwarded: STRESS, STATEV, DDSDDE, SSE, SPD, SCD, STRAN, DSTRAN, TIME,
+/// DTIME, CMNAME, NDI, NSHR, NTENS, NSTATV, DROT, PNEWDT.
+///
+/// Accepted and IGNORED — the full list, because an omission here reads as a
+/// capability that is not there:
+///
+///   PROPS, NPROPS  The most surprising one. This shim takes material constants
+///                  from the registered builder, NOT from *USER MATERIAL
+///                  CONSTANTS. A deck that varies PROPS between materials while
+///                  naming the same model gets the builder's constants for all
+///                  of them. Register one model per distinct parameter set.
+///   TEMP, DTEMP    Temperature-dependent properties are therefore unavailable.
+///                  Thermal EXPANSION still behaves correctly: with *EXPANSION
+///                  in the same material definition, Abaqus passes STRAN and
+///                  DSTRAN already reduced to mechanical strain.
+///   RPL, DDSDDT,   Required in fully coupled thermal-stress, coupled
+///   DRPLDE, DRPLDT thermal-electrical-structural, and adiabatic analysis or
+///                  with *INELASTIC HEAT FRACTION. Ignoring them there reports
+///                  zero heat generation and degrades the coupled Jacobian; it
+///                  is safe in every other procedure.
+///   PREDEF, DPRED  Field variables.
+///   DFGRD0/DFGRD1  Safe for this small-strain formulation. Under NLGEOM=YES
+///                  Abaqus documents the stress measure as Cauchy and STRAN as
+///                  an approximation to logarithmic strain, already rotated by
+///                  DROT — which this layer handles. The residual caveat is
+///                  that DDSDDE should then be d(dCauchy)/d(d log-strain); a
+///                  small-strain tangent costs convergence rate, not converged
+///                  accuracy.
+///   COORDS         Position-dependent properties.
+///   CELENT         Mesh-regularised softening/damage needs it.
+///   NOEL, NPT,     Identify the point; only needed for diagnostics or
+///   LAYER, KSPT    point-dependent behaviour.
+///   JSTEP, KINC    JSTEP(4) flags a linear-perturbation step. Ignoring it means
+///                  a perturbation step gets the full nonlinear update and a
+///                  STATEV write; Abaqus restores the base state afterwards, so
+///                  this is not corruption, but the returned Jacobian is the
+///                  elastic-plastic tangent rather than the base-state elastic
+///                  one.
+///
+/// Deck-side requirement not visible from this code: a UMAT used for beams or
+/// shells that compute transverse shear energy must have the transverse shear
+/// stiffness given in the beam or shell section definition.
 #define NUMSIM_MATERIALS_DEFINE_UMAT(TRAITS)                                   \
   extern "C" void umat_(                                                       \
       double* STRESS, double* STATEV, double* DDSDDE, double* SSE,             \

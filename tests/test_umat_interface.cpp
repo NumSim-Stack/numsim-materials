@@ -510,7 +510,7 @@ TEST(UmatInterface, ForwardsEnergiesThroughTheEntryPoint) {
   T stran[6] = {0, 0, 0, 0, 0, 0};
   const T dstran[6] = {0.01, -0.0025, 0.0, 0.005, 0.0, 0.0};
   T stress[6] = {0, 0, 0, 0, 0, 0}, ddsdde[36], pnewdt = 1.0;
-  T sse = 0, spd = 0, scd = 0;
+  T sse = 0, spd = 0, scd = 5.0;  // SCD deliberately nonzero on entry
 
   for (int step = 0; step < 40; ++step) {
     call_umat("J2ENERGY", stress, statev.data(), ddsdde, stran, dstran,
@@ -521,7 +521,11 @@ TEST(UmatInterface, ForwardsEnergiesThroughTheEntryPoint) {
 
   EXPECT_GT(sse, 0.0) << "elastic energy should be reported";
   EXPECT_GT(spd, 0.0) << "plastic dissipation should accumulate";
-  EXPECT_DOUBLE_EQ(scd, 0.0) << "no creep in this model";
+  // Not a physical claim about creep: SCD is documented as never written by
+  // this layer, so it must come back exactly as it was passed in. Asserting
+  // against a NONZERO input makes that a real check rather than one satisfied
+  // by a do-nothing implementation and a zero-initialised variable.
+  EXPECT_DOUBLE_EQ(scd, 5.0) << "SCD is never written; it must pass through";
 }
 
 
