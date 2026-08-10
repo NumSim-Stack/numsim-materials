@@ -122,7 +122,17 @@ public:
   using config = typename evaluator_type::config;
   using call = typename evaluator_type::call;
   /// Populates a context with materials AND calls finalize().
-  using builder = std::function<void(context_type&)>;
+  ///
+  /// Receives the deck's *USER MATERIAL constants. They are read once, here,
+  /// and copied into each material's parameter handler — material_interface
+  /// stores it BY VALUE — so the span need not outlive the call, and per-call
+  /// evaluation never touches parameters again.
+  ///
+  /// The mapping from slot to parameter is positional and is the builder's
+  /// contract with the deck; document it next to each builder, and validate the
+  /// count with require_props() before indexing.
+  using builder =
+      std::function<void(context_type&, std::span<const double> props)>;
 
   /// CMNAME is character*80 in the Abaqus interface.
   static constexpr std::size_t max_cmname = 80;
@@ -150,22 +160,25 @@ public:
   /// STATEV width for a model, so a user can size *DEPVAR. Plane stress needs
   /// one slot more than the other families.
   [[nodiscard]] std::size_t nstatv(std::string_view cmname,
+                                   std::span<const double> props = {},
                                    element_case ec = element_case::solid3d) {
-    auto& ts = thread_state_for(cmname);
+    auto& ts = thread_state_for(cmname, props);
     return ec == element_case::plane_stress ? ts.ps->nstatv()
                                             : ts.solid->nstatv();
   }
 
   [[nodiscard]] std::vector<std::string> describe_statev(
-      std::string_view cmname, element_case ec = element_case::solid3d) {
-    auto& ts = thread_state_for(cmname);
+      std::string_view cmname, std::span<const double> props = {},
+      element_case ec = element_case::solid3d) {
+    auto& ts = thread_state_for(cmname, props);
     return ec == element_case::plane_stress ? ts.ps->describe_statev()
                                             : ts.solid->describe_statev();
   }
 
   /// Evaluate one material point, dispatching on the element family.
-  void evaluate(std::string_view cmname, const call& c) {
-    auto& ts = thread_state_for(cmname);
+  void evaluate(std::string_view cmname, std::span<const double> props,
+                const call& c) {
+    auto& ts = thread_state_for(cmname, props);
     if (c.ec == element_case::plane_stress)
       ts.ps->evaluate(c);
     else
@@ -194,6 +207,10 @@ private:
     std::unique_ptr<context_type> ctx;
     std::unique_ptr<evaluator_type> solid;
     std::unique_ptr<ps_evaluator_type> ps;
+    /// How many constants the context was built from. The graph is built once
+    /// and reused, so a later call arriving with a different count would mean
+    /// the cached parameters no longer describe this material.
+    std::size_t nprops{0};
   };
 
   static std::unordered_map<std::string, thread_state, transparent_string_hash,
@@ -206,11 +223,25 @@ private:
     return cache;
   }
 
-  thread_state& thread_state_for(std::string_view cmname) {
+  thread_state& thread_state_for(std::string_view cmname,
+                                 std::span<const double> props) {
     char buf[max_cmname + 1];
     const auto key = normalise_cmname(cmname.data(), cmname.size(), buf);
     auto& cache = thread_cache();
-    if (auto it = cache.find(key); it != cache.end()) return it->second;
+    if (auto it = cache.find(key); it != cache.end()) {
+      // PROPS cannot vary for a given material name — two *MATERIAL blocks must
+      // have distinct names — so a changed count means the deck contradicts the
+      // cached graph. Checking the size is one comparison; checking the values
+      // is not worth it per integration point.
+      if (it->second.nprops != props.size())
+        throw fatal_error(
+            "numsim UMAT: material '" + std::string(key) +
+            "' was built from " + std::to_string(it->second.nprops) +
+            " constants but this call supplies " +
+            std::to_string(props.size()) +
+            " — PROPS must be constant for a given material name");
+      return it->second;
+    }
 
     model m;
     {
@@ -237,7 +268,8 @@ private:
     try {
       thread_state ts;
       ts.ctx = std::make_unique<context_type>();
-      m.build(*ts.ctx);
+      m.build(*ts.ctx, props);
+      ts.nprops = props.size();
       if (!ts.ctx->is_finalized())
         throw fatal_error(
             "the builder returned without calling finalize() on the context");
@@ -297,6 +329,22 @@ inline void zero_outputs(T* stress, T* ddsdde, std::size_t n) noexcept {
 ///  * anything else — treated as a failure at this increment size, which is the
 ///    right default for exceptions escaping the constitutive models themselves.
 ///    Ask for a smaller increment via PNEWDT and let the host retry.
+/// Check that the deck supplied at least @p needed constants.
+///
+/// A *USER MATERIAL, CONSTANTS= count that disagrees with what the model reads
+/// is a setup fault, not something a smaller increment fixes — and indexing past
+/// the end would otherwise yield a plausible-looking value for a parameter that
+/// was never given.
+inline void require_props(std::span<const double> props, std::size_t needed,
+                          const char* model) {
+  if (props.size() < needed)
+    throw fatal_error(std::string("numsim UMAT: model '") + model +
+                      "' needs " + std::to_string(needed) +
+                      " material constants but the deck supplied " +
+                      std::to_string(props.size()) +
+                      " — check *USER MATERIAL, CONSTANTS=");
+}
+
 /// Report an unrecoverable fault, then hand control to the fatal handler.
 ///
 /// The message is assembled inside a nested try. An exception thrown from
@@ -331,6 +379,7 @@ struct dispatch_args {
   const T* dstran{nullptr};
   const T* time{nullptr};
   const T* drot{nullptr};
+  const T* props{nullptr};
   T dtime{0};
   T* pnewdt{nullptr};
   const char* cmname{nullptr};
@@ -339,6 +388,7 @@ struct dispatch_args {
   int nshr{0};
   int ntens{0};
   int nstatv{0};
+  int nprops{0};
 };
 
 template <typename Traits>
@@ -380,7 +430,15 @@ void umat_dispatch(const dispatch_args<typename Traits::value_type>& a) noexcept
     c.spd = a.spd;
     c.scd = a.scd;
 
-    umat_registry<Traits>::instance().evaluate(name, c);
+    // The deck's material constants. Only read when this thread builds the
+    // graph for this material — never on the per-call path.
+    const std::span<const double> props =
+        (a.props && a.nprops > 0)
+            ? std::span<const double>(a.props,
+                                      static_cast<std::size_t>(a.nprops))
+            : std::span<const double>{};
+
+    umat_registry<Traits>::instance().evaluate(name, props, c);
   } catch (const fatal_error& e) {
     zero_outputs(a.stress, a.ddsdde, static_cast<std::size_t>(a.ntens));
     report_fatal(namebuf, e.what());
@@ -424,20 +482,21 @@ void umat_dispatch(const dispatch_args<typename Traits::value_type>& a) noexcept
 /// symbol Fortran resolves by name must actually exist in the object file.
 ///
 /// Forwarded: STRESS, STATEV, DDSDDE, SSE, SPD, SCD, STRAN, DSTRAN, TIME,
-/// DTIME, CMNAME, NDI, NSHR, NTENS, NSTATV, DROT, PNEWDT.
+/// DTIME, CMNAME, NDI, NSHR, NTENS, NSTATV, PROPS, NPROPS, DROT, PNEWDT.
+///
+/// PROPS reaches the registered builder, so *USER MATERIAL, CONSTANTS= drives
+/// the model's parameters. It is read ONCE, when this thread first builds the
+/// graph for this material name — constants cannot vary per increment, and a
+/// changed NPROPS for the same name is reported as a setup fault.
 ///
 /// Accepted and IGNORED — the full list, because an omission here reads as a
 /// capability that is not there:
 ///
-///   PROPS, NPROPS  The most surprising one. This shim takes material constants
-///                  from the registered builder, NOT from *USER MATERIAL
-///                  CONSTANTS. A deck that varies PROPS between materials while
-///                  naming the same model gets the builder's constants for all
-///                  of them. Register one model per distinct parameter set.
-///   TEMP, DTEMP    Temperature-dependent properties are therefore unavailable.
-///                  Thermal EXPANSION still behaves correctly: with *EXPANSION
-///                  in the same material definition, Abaqus passes STRAN and
-///                  DSTRAN already reduced to mechanical strain.
+///   TEMP, DTEMP    Temperature-dependent properties are unavailable: constants
+///                  are read once, when the graph is built. Thermal EXPANSION
+///                  still behaves correctly, because with *EXPANSION in the same
+///                  material definition Abaqus passes STRAN and DSTRAN already
+///                  reduced to mechanical strain.
 ///   RPL, DDSDDT,   Required in fully coupled thermal-stress, coupled
 ///   DRPLDE, DRPLDT thermal-electrical-structural, and adiabatic analysis or
 ///                  with *INELASTIC HEAT FRACTION. Ignoring them there reports
@@ -474,7 +533,7 @@ void umat_dispatch(const dispatch_args<typename Traits::value_type>& a) noexcept
       const double* /*TEMP*/, const double* /*DTEMP*/,                         \
       const double* /*PREDEF*/, const double* /*DPRED*/, const char* CMNAME,   \
       const int* NDI, const int* NSHR, const int* NTENS, const int* NSTATV,    \
-      const double* /*PROPS*/, const int* /*NPROPS*/,                          \
+      const double* PROPS, const int* NPROPS,                                   \
       const double* /*COORDS*/, const double* DROT, double* PNEWDT,            \
       const double* /*CELENT*/, const double* /*DFGRD0*/,                      \
       const double* /*DFGRD1*/, const int* /*NOEL*/, const int* /*NPT*/,       \
@@ -487,6 +546,7 @@ void umat_dispatch(const dispatch_args<typename Traits::value_type>& a) noexcept
     a.drot = DROT;      a.dtime = *DTIME;   a.pnewdt = PNEWDT;                 \
     a.cmname = CMNAME;                                                         \
     a.cmname_len = static_cast<std::size_t>(CMNAME_LEN);                       \
+    a.props = PROPS;    a.nprops = *NPROPS;                                    \
     a.ndi = *NDI;  a.nshr = *NSHR;  a.ntens = *NTENS;  a.nstatv = *NSTATV;     \
     ::numsim::materials::umat::umat_dispatch<TRAITS>(a);                       \
   }

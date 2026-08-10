@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include <cstddef>
+#include <span>
 #include <string>
 #include <thread>
 #include <vector>
@@ -32,7 +33,7 @@ constexpr T G = 76.92;
 constexpr T sigma_0 = 50.0;
 constexpr T H_mod = 1000.0;
 
-void build_j2(ctx_type& ctx) {
+void build_j2(ctx_type& ctx, std::span<const double> /*props*/) {
   param_type p;
 
   p.clear();
@@ -107,7 +108,7 @@ private:
   const nm::input_history<value_type, nm::property_traits>& m_time;
 };
 
-void build_time_probe(ctx_type& ctx) {
+void build_time_probe(ctx_type& ctx, std::span<const double> /*props*/) {
   param_type p;
   p.insert<std::string>("name", "stepper");
   ctx.create<nm::external_strain_source<policy>>(p);
@@ -117,6 +118,24 @@ void build_time_probe(ctx_type& ctx) {
   p.clear();
   p.insert<std::string>("name", "probe");
   ctx.create<time_probe_material<policy>>(p);
+  ctx.finalize();
+}
+
+/// Constants come entirely from *USER MATERIAL, CONSTANTS= — nothing is baked
+/// into the builder. The slot mapping is this builder's contract with the deck:
+///
+///   props[0] = K   props[1] = G
+void build_deck_elastic(ctx_type& ctx, std::span<const double> props) {
+  u::require_props(props, 2, "deck_elastic");
+  param_type p;
+  p.insert<std::string>("name", "stepper");
+  ctx.create<nm::external_strain_source<policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "elastic");
+  p.insert<std::string>("strain_producer_name", "stepper");
+  p.insert<T>("K", props[0]);
+  p.insert<T>("G", props[1]);
+  ctx.create<nm::linear_elasticity<policy>>(p);
   ctx.finalize();
 }
 
@@ -134,6 +153,19 @@ struct Registration {
     tp.stress_source = "probe";
     tp.time_source = "clock";
     registry::instance().register_model("TIMEPROBE", build_time_probe, tp);
+
+    // Two deck materials, ONE builder: the constants differ only via PROPS.
+    // Before PROPS was plumbed, this needed two builders with captured values.
+    registry::config de;
+    de.strain_source = "stepper";
+    de.stress_source = "elastic";
+    registry::instance().register_model("SOFT",  build_deck_elastic, de);
+    registry::instance().register_model("STIFF", build_deck_elastic, de);
+    // Used only by the too-few-constants test. It needs a name no other test
+    // has warmed: the per-thread cache persists for the life of the binary, so
+    // against an already-built name the NPROPS-consistency check fires first
+    // and require_props is never reached.
+    registry::instance().register_model("COLDNAME", build_deck_elastic, de);
 
     // Deliberately lower-case, to prove the registry folds case on both sides.
     registry::config lc;
@@ -158,7 +190,8 @@ void call_umat(const std::string& name, T* stress, T* statev, T* ddsdde,
                const T* stran, const T* dstran, T total_time, T dtime, int ndi,
                int nshr, int ntens, int nstatv, T* pnewdt,
                const T* drot_in = nullptr, T* sse_io = nullptr,
-               T* spd_io = nullptr, T* scd_io = nullptr) {
+               T* spd_io = nullptr, T* scd_io = nullptr,
+               const T* props_in = nullptr, int nprops_in = 0) {
   const fortran_name cm(name);
   T sse_local = 0, spd_local = 0, scd_local = 0;
   T* sse = sse_io ? sse_io : &sse_local;
@@ -169,8 +202,9 @@ void call_umat(const std::string& name, T* stress, T* statev, T* ddsdde,
   T drpldt = 0;
   const T time[2] = {total_time, total_time};
   const T temp = 0, dtemp = 0, predef = 0, dpred = 0;
-  const T props = 0;
-  const int nprops = 0;
+  const T no_props = 0;
+  const T* props = props_in ? props_in : &no_props;
+  const int nprops = nprops_in;
   const T coords[3] = {0, 0, 0};
   const T identity[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
   const T* drot = drot_in ? drot_in : identity;
@@ -181,7 +215,7 @@ void call_umat(const std::string& name, T* stress, T* statev, T* ddsdde,
 
   umat_(stress, statev, ddsdde, sse, spd, scd, &rpl, ddsddt.data(),
         drplde.data(), &drpldt, stran, dstran, time, &dtime, &temp, &dtemp,
-        &predef, &dpred, cm.buf, &ndi, &nshr, &ntens, &nstatv, &props, &nprops,
+        &predef, &dpred, cm.buf, &ndi, &nshr, &ntens, &nstatv, props, &nprops,
         coords, drot, pnewdt, &celent, dfgrd0, dfgrd1, &noel, &npt, &layer,
         &kspt, &jstep, &kinc, 80);
 }
@@ -207,7 +241,8 @@ TEST(UmatInterface, TrimsBlankPaddedFortranName) {
 
 TEST(UmatInterface, ReportsStatevWidth) {
   EXPECT_EQ(registry::instance().nstatv("J2STEEL"), 7u);
-  EXPECT_EQ(registry::instance().nstatv("J2STEEL", u::element_case::plane_stress),
+  EXPECT_EQ(registry::instance().nstatv("J2STEEL", {},
+                                       u::element_case::plane_stress),
             8u);
 }
 
@@ -234,7 +269,7 @@ TEST(UmatInterface, DrivesJ2ThroughTheFortranEntryPoint) {
 
   // Cross-check against the evaluator driven directly in C++.
   ctx_type ctx;
-  build_j2(ctx);
+  build_j2(ctx, {});
   u::material_point_evaluator<policy>::config cfg;
   cfg.strain_source = "stepper";
   cfg.stress_source = "j2";
@@ -552,7 +587,7 @@ TEST(UmatInterface, PassesTotalTimeAndIncrementToTheMaterial) {
   T drpldt = 0;
   const T time[2] = {step_time, total_time};
   const T temp = 0, dtemp = 0, predef = 0, dpred = 0, props = 0;
-  const int nprops = 0;
+  const int nprops = 0;  // TIMEPROBE reads no constants
   const T coords[3] = {0, 0, 0};
   const T drot[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
   const T celent = 1.0;
@@ -604,7 +639,7 @@ TEST(UmatInterface, BuilderFailureIsFatalNotACutback) {
   FatalProbe probe;
   registry::instance().register_model(
       "BROKENBUILD",
-      [](ctx_type& ctx) {
+      [](ctx_type& ctx, std::span<const double>) {
         param_type p;
         p.insert<std::string>("name", "stepper");
         ctx.create<nm::external_strain_source<policy>>(p);
@@ -657,6 +692,81 @@ TEST(UmatInterface, MaterialNameLookupIsCaseInsensitive) {
 
   EXPECT_DOUBLE_EQ(pnewdt, 1.0);
   EXPECT_GT(std::abs(stress[0]), 0.0) << "the model should have evaluated";
+}
+
+
+// ---------------------------------------------------------------------------
+// Deck-driven material constants (PROPS)
+// ---------------------------------------------------------------------------
+
+/// The whole point: one compiled builder, two materials, constants supplied by
+/// *USER MATERIAL, CONSTANTS= rather than baked into C++.
+TEST(UmatInterface, MaterialConstantsComeFromPropsNotTheBuilder) {
+  auto uniaxial_tangent = [](const char* name, const T* props, int nprops) {
+    std::vector<T> statev(1, 0.0);
+    const T stran[6] = {0, 0, 0, 0, 0, 0};
+    const T dstran[6] = {0.001, 0, 0, 0, 0, 0};
+    T stress[6], ddsdde[36], pnewdt = 1.0;
+    call_umat(name, stress, statev.data(), ddsdde, stran, dstran, 0.0, 0.1, 3,
+              3, 6, 0, &pnewdt, nullptr, nullptr, nullptr, nullptr, props,
+              nprops);
+    EXPECT_DOUBLE_EQ(pnewdt, 1.0);
+    return ddsdde[0];  // DDSDDE(1,1) = K + 4G/3
+  };
+
+  const T soft[2]  = {100.0,  40.0};
+  const T stiff[2] = {300.0, 140.0};
+
+  EXPECT_NEAR(uniaxial_tangent("SOFT", soft, 2), 100.0 + 4.0 * 40.0 / 3.0, 1e-9);
+  EXPECT_NEAR(uniaxial_tangent("STIFF", stiff, 2), 300.0 + 4.0 * 140.0 / 3.0,
+              1e-9);
+}
+
+/// A CONSTANTS= count smaller than the model reads is a setup fault. Without
+/// require_props this would index past the end of the array and produce a
+/// plausible-looking parameter that the deck never supplied.
+TEST(UmatInterface, TooFewMaterialConstantsIsFatal) {
+  FatalProbe probe;
+  std::vector<T> statev(1, 0.0);
+  const T stran[6] = {0, 0, 0, 0, 0, 0};
+  const T dstran[6] = {0.001, 0, 0, 0, 0, 0};
+  T stress[6] = {0}, ddsdde[36] = {0}, pnewdt = 1.0;
+  const T only_one[1] = {100.0};
+
+  call_umat("COLDNAME", stress, statev.data(), ddsdde, stran, dstran, 0.0, 0.1,
+            3, 3, 6, 0, &pnewdt, nullptr, nullptr, nullptr, nullptr, only_one,
+            1);
+
+  EXPECT_EQ(FatalProbe::count, 1);
+  EXPECT_NE(FatalProbe::last.find("CONSTANTS"), std::string::npos)
+      << FatalProbe::last;
+  EXPECT_DOUBLE_EQ(pnewdt, 1.0) << "a wrong CONSTANTS= count is not a cutback";
+}
+
+/// The graph is built once and reused, so its parameters are fixed after the
+/// first call. A later call arriving with a different NPROPS means the deck
+/// contradicts the cached context — which cannot happen for a single material
+/// name, and so indicates a dispatch mistake rather than a modelling one.
+TEST(UmatInterface, ChangingNpropsForTheSameNameIsFatal) {
+  FatalProbe probe;
+  std::vector<T> statev(1, 0.0);
+  const T stran[6] = {0, 0, 0, 0, 0, 0};
+  const T dstran[6] = {0.001, 0, 0, 0, 0, 0};
+  T stress[6] = {0}, ddsdde[36] = {0}, pnewdt = 1.0;
+  const T two[2] = {100.0, 40.0};
+  const T three[3] = {100.0, 40.0, 7.0};
+
+  // Builds the context with 2 constants.
+  call_umat("STIFF", stress, statev.data(), ddsdde, stran, dstran, 0.0, 0.1, 3,
+            3, 6, 0, &pnewdt, nullptr, nullptr, nullptr, nullptr, two, 2);
+  ASSERT_EQ(FatalProbe::count, 0);
+
+  // Same name, different count.
+  call_umat("STIFF", stress, statev.data(), ddsdde, stran, dstran, 0.0, 0.1, 3,
+            3, 6, 0, &pnewdt, nullptr, nullptr, nullptr, nullptr, three, 3);
+  EXPECT_EQ(FatalProbe::count, 1);
+  EXPECT_NE(FatalProbe::last.find("constant"), std::string::npos)
+      << FatalProbe::last;
 }
 
 }  // namespace
