@@ -1,9 +1,13 @@
 #include <gtest/gtest.h>
 #include <array>
 #include <string>
+#include <type_traits>
 #include <numsim-core/parameter_handler.h>
 #include "numsim-materials/core/material_base.h"
 #include "numsim-materials/core/material_context.h"
+#include "numsim-materials/materials/linear_elasticity.h"
+#include "numsim-materials/umat/external_state_source.h"
+#include <tmech/tmech.h>
 
 namespace {
 
@@ -13,6 +17,7 @@ using policy = nm::material_policy_default;
 using T = policy::value_type;
 using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
+using tensor2 = tmech::tensor<T, 3, 2>;   // named: commas break the gtest macros
 
 /// Too large for std::any's small buffer — a scalar would hide the bug.
 struct big_parameter {
@@ -131,6 +136,145 @@ TEST(SetParameter, LeavesOtherParametersAlone) {
   EXPECT_DOUBLE_EQ(m.bound_k(), 42.0);
   EXPECT_DOUBLE_EQ(m.bound_big().data[5], 3.0);
   EXPECT_EQ(m.name(), "probe");
+}
+
+
+// ---------------------------------------------------------------------------
+// Against SHIPPED materials
+//
+// The probe above binds every parameter by reference and derives nothing, which
+// is the one shape this API handles cleanly. These pin what happens with real
+// materials, where it does not.
+// ---------------------------------------------------------------------------
+
+/// linear_elasticity computes its tangent in the constructor and registers
+/// "tangent" with no callback, so a write to K lands in the parameter and
+/// changes nothing. Pinned, not endorsed: this is the limitation the API
+/// documents, and the reason isotropic_tangent's "recompute" exists.
+TEST(SetParameterShippedMaterials, WriteLandsButDerivedStateGoesStale) {
+  ctx_type ctx;
+  param_type p;
+  p.insert<std::string>("name", "strain_in");
+  auto& src = ctx.create<nm::external_strain_source<policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "elastic");
+  p.insert<std::string>("strain_producer_name", "strain_in");
+  p.insert<T>("K", 100.0);
+  p.insert<T>("G", 40.0);
+  auto& el = ctx.create<nm::linear_elasticity<policy>>(p);
+  ctx.finalize();
+
+  tensor2 eps;
+  eps.fill(0.0);
+  eps(0, 0) = 0.001;
+  src.bind(eps, eps);
+  ctx.update();
+  const T before = ctx.get<tensor2>("elastic", "stress")(0, 0);
+  EXPECT_NEAR(before, (100.0 + 4.0 * 40.0 / 3.0) * 0.001, 1e-12);
+
+  el.template set_parameter<T>("K", 200.0);
+
+  // The write is real...
+  EXPECT_DOUBLE_EQ(el.template get_parameter<T>("K"), 200.0);
+  // ... and has no effect, because the tangent was built once.
+  ctx.update();
+  EXPECT_DOUBLE_EQ(ctx.get<tensor2>("elastic", "stress")(0, 0),
+                   before);
+}
+
+/// Each material holds its own COPY of the handler, so a write reaches one
+/// material and not the caller's handler or any sibling built from it.
+TEST(SetParameterShippedMaterials, WriteIsLocalToTheMaterial) {
+  ctx_type ctx;
+  param_type p;
+  p.insert<std::string>("name", "probe");
+  p.insert<T>("K", 100.0);
+  p.insert<big_parameter>("big", big_parameter{});
+  auto& m = ctx.create<probe_material<policy>>(p);
+  ctx.finalize();
+
+  m.template set_parameter<T>("K", 777.0);
+
+  EXPECT_DOUBLE_EQ(m.bound_k(), 777.0);
+  EXPECT_DOUBLE_EQ(p.get<T>("K"), 100.0)
+      << "the caller's handler is a separate copy";
+}
+
+/// A wiring parameter is consumed once, at construction, to build the input.
+/// Writing it afterwards cannot re-wire anything.
+TEST(SetParameterShippedMaterials, WritingAWiringKeyDoesNotRewire) {
+  ctx_type ctx;
+  param_type p;
+  p.insert<std::string>("name", "strain_in");
+  auto& src = ctx.create<nm::external_strain_source<policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "other");
+  ctx.create<nm::external_strain_source<policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "elastic");
+  p.insert<std::string>("strain_producer_name", "strain_in");
+  p.insert<T>("K", 100.0);
+  p.insert<T>("G", 40.0);
+  auto& el = ctx.create<nm::linear_elasticity<policy>>(p);
+  ctx.finalize();
+
+  el.template set_parameter<std::string>("strain_producer_name", "other");
+
+  tensor2 eps;
+  eps.fill(0.0);
+  eps(0, 0) = 0.002;
+  src.bind(eps, eps);   // the ORIGINAL source
+  ctx.update();
+  // Still reading strain_in, so the stress follows it despite the write.
+  EXPECT_NEAR(ctx.get<tensor2>("elastic", "stress")(0, 0),
+              (100.0 + 4.0 * 40.0 / 3.0) * 0.002, 1e-12);
+}
+
+// ---------------------------------------------------------------------------
+// Guards
+// ---------------------------------------------------------------------------
+
+/// "name" is cached in m_name and used as the registry key, so writing it would
+/// desynchronise the parameter from the material's identity.
+TEST(SetParameter, RejectsWritingTheIdentityKey) {
+  ctx_type ctx;
+  auto& m = build(ctx);
+  EXPECT_THROW(m.template set_parameter<std::string>("name", "renamed"),
+               std::invalid_argument);
+  EXPECT_EQ(m.name(), "probe");
+}
+
+/// A type mismatch must name the key. Without the translation it surfaces as a
+/// bare "bad any_cast" that is neither invalid_argument nor runtime_error, so a
+/// UMAT boundary catching those would miss it entirely.
+TEST(SetParameter, TypeMismatchThrowsADiagnosticNotBadAnyCast) {
+  ctx_type ctx;
+  auto& m = build(ctx);
+  try {
+    m.template set_parameter<float>("K", 1.0f);   // "K" is stored as double
+    FAIL() << "expected a diagnostic";
+  } catch (const std::invalid_argument& e) {
+    EXPECT_NE(std::string(e.what()).find("K"), std::string::npos) << e.what();
+  }
+  EXPECT_DOUBLE_EQ(m.bound_k(), 100.0) << "the value must be unchanged";
+}
+
+/// T is not deduced, so a wrong-typed literal is a compile error rather than a
+/// run-time throw.
+template <typename M, typename = void>
+struct deduces_t : std::false_type {};
+template <typename M>
+struct deduces_t<M, std::void_t<decltype(std::declval<M&>().set_parameter(
+                        std::declval<std::string const&>(), 250))>>
+    : std::true_type {};
+
+TEST(SetParameter, TypeIsNotDeduced) {
+  static_assert(!deduces_t<probe_material<policy>>::value,
+                "set_parameter must not deduce T from the value");
+  ctx_type ctx;
+  auto& m = build(ctx);
+  m.template set_parameter<T>("K", 250);   // int converts to the named double
+  EXPECT_DOUBLE_EQ(m.bound_k(), 250.0);
 }
 
 }  // namespace
