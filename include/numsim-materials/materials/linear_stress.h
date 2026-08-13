@@ -8,17 +8,12 @@ namespace numsim::materials {
 
 /// sigma = C : eps, with C supplied by another material.
 ///
-/// The decomposed counterpart to `linear_elasticity`: same physics, but the
-/// stiffness arrives as a Global input rather than being owned and computed
-/// in the constructor. That single change is what makes the ordering correct —
-/// consuming another material's property creates a graph edge, so the engine
-/// guarantees the stiffness is produced before this material reads it. A
-/// material reading its own property has no such edge (see isotropic_tangent).
+/// linear_elasticity with the tangent as a Global input instead of an owned
+/// output. That is what makes the ordering correct: consuming another
+/// material's property creates a graph edge; reading your own does not.
 ///
-/// Pair it with any tangent generator. `linear_elasticity` remains the better
-/// choice whenever the moduli are fixed, since it computes the tangent once and
-/// costs one less material in the graph; reach for this pair when the stiffness
-/// has to follow something that changes.
+/// Pair with any tangent generator. linear_elasticity stays the better choice
+/// when the moduli are fixed — one fewer material, tangent computed once.
 template <typename Traits>
 class linear_stress final
     : public material_base<linear_stress<Traits>, Traits> {

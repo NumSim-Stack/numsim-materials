@@ -62,19 +62,14 @@ tensor2 uniaxial(T v) {
 // The ordering this decomposition exists to fix
 // ---------------------------------------------------------------------------
 
-/// The whole point. Within one material, `stress` sorts BEFORE `tangent`
-/// because a material reading its own property creates no graph edge — so
-/// linear_elasticity could never recompute its tangent safely. Consuming
-/// another material's property creates a real Global edge, and the topological
-/// sort then puts the producer first.
+/// The whole point: a cross-material tangent is ordered before its consumer,
+/// where an intra-material one is not.
 TEST(TangentGenerator, StiffnessIsOrderedBeforeTheStressThatConsumesIt) {
   ctx_type ctx;
   build_decomposed(ctx, K, G, /*recompute=*/true);
 
-  // Not a sentinel of 0: the tangent has no inputs, so index 0 is exactly where
-  // it legitimately lands, and a not-found sentinel of 0 would be
-  // indistinguishable from the correct answer. The test would then pass on a
-  // graph that no longer contains the property being ordered.
+  // optional, not 0: the tangent legitimately lands at index 0, so a 0 sentinel
+  // would pass even with the property missing from the graph.
   std::optional<std::size_t> i_tangent, i_stress;
   std::size_t n = 0;
   for (const auto* prop : ctx.property_execution_order()) {
@@ -93,8 +88,7 @@ TEST(TangentGenerator, StiffnessIsOrderedBeforeTheStressThatConsumesIt) {
 // Equivalence with the monolithic material
 // ---------------------------------------------------------------------------
 
-/// Decomposed and monolithic must agree exactly — same physics, different
-/// graph shape.
+/// Same physics, different graph shape: must agree exactly.
 TEST(TangentGenerator, MatchesLinearElasticityExactly) {
   ctx_type dec;
   auto& dec_src = build_decomposed(dec, K, G, /*recompute=*/false);
@@ -142,8 +136,7 @@ TEST(TangentGenerator, MatchesLinearElasticityExactly) {
 // recompute: bound vs unbound callback
 // ---------------------------------------------------------------------------
 
-/// With recompute=false the property carries NO callback, so the engine skips
-/// it entirely — the per-call cost is zero rather than merely small.
+/// recompute=false must leave no callback at all, not merely a cheap one.
 TEST(TangentGenerator, RecomputeFalseLeavesThePropertyWithoutACallback) {
   ctx_type ctx;
   build_decomposed(ctx, K, G, /*recompute=*/false);
@@ -163,8 +156,7 @@ TEST(TangentGenerator, RecomputeTrueBindsTheCallback) {
   EXPECT_TRUE(static_cast<bool>(prop->traits().update));
 }
 
-/// Even with no callback the tangent must be valid: it is built once in the
-/// constructor, before any update() runs.
+/// Built in the constructor, so valid before the first update().
 TEST(TangentGenerator, TangentIsValidBeforeTheFirstUpdate) {
   ctx_type ctx;
   build_decomposed(ctx, K, G, /*recompute=*/false);
@@ -174,13 +166,7 @@ TEST(TangentGenerator, TangentIsValidBeforeTheFirstUpdate) {
   EXPECT_NEAR(C(0, 0, 0, 0), K + 4.0 * G / 3.0, 1e-9);
 }
 
-/// The behaviour the whole design is for: writing new constants in place and
-/// having the graph pick them up, with correct ordering, on the next update.
-///
-/// Writing goes through the non-const get<T>(), which mutates the value inside
-/// the std::any in place. insert() would replace the whole any and, for a type
-/// past its small-buffer, relocate the object — invalidating the reference the
-/// material bound at construction.
+/// What the design is for: write constants, graph picks them up next update.
 TEST(TangentGenerator, RecomputeTrueFollowsAParameterWrittenInPlace) {
   ctx_type ctx;
   auto& src = build_decomposed(ctx, K, G, /*recompute=*/true);
@@ -206,9 +192,7 @@ TEST(TangentGenerator, RecomputeTrueFollowsAParameterWrittenInPlace) {
   EXPECT_NEAR(after, 2 * before, 1e-12);
 }
 
-/// The counterpart: with recompute=false the write is visible in the parameter
-/// but the tangent does NOT follow it. This is the documented trade, and the
-/// test exists so the behaviour is pinned rather than discovered.
+/// The documented trade, pinned: recompute=false ignores a later write.
 TEST(TangentGenerator, RecomputeFalseIgnoresALaterParameterWrite) {
   ctx_type ctx;
   auto& src = build_decomposed(ctx, K, G, /*recompute=*/false);
@@ -234,11 +218,8 @@ TEST(TangentGenerator, RecomputeFalseIgnoresALaterParameterWrite) {
 // The flag is construction-time only
 // ---------------------------------------------------------------------------
 
-/// The callback can only be bound at construction, so "recompute" is read once
-/// and stored BY VALUE. Reading the live parameter instead would let
-/// recomputes() claim the tangent tracks K and G after someone flipped the flag
-/// with set_parameter — while no callback exists and the tangent is permanently
-/// stale. The accessor must describe what was actually bound.
+/// recomputes() must report what was bound, not the live parameter — flipping
+/// the flag afterwards cannot bind a callback.
 TEST(TangentGenerator, RecomputeIsReadOnceAndTheAccessorCannotLie) {
   ctx_type ctx;
   build_decomposed(ctx, K, G, /*recompute=*/false);
@@ -248,13 +229,10 @@ TEST(TangentGenerator, RecomputeIsReadOnceAndTheAccessorCannotLie) {
   ASSERT_NE(typed, nullptr);
   ASSERT_FALSE(typed->recomputes());
 
-  // Flipping the parameter afterwards cannot bind a callback...
   typed->template set_parameter<bool>("recompute", true);
 
-  // ... so the accessor must still report false,
   EXPECT_FALSE(typed->recomputes())
       << "recomputes() must report what was bound, not the live parameter";
-  // ... and the property must still carry no callback.
   const auto* prop = ctx.find_property("stiffness", "tangent");
   ASSERT_NE(prop, nullptr);
   EXPECT_FALSE(static_cast<bool>(prop->traits().update));
@@ -264,10 +242,9 @@ TEST(TangentGenerator, RecomputeIsReadOnceAndTheAccessorCannotLie) {
 // Composition with a pre-existing consumer
 // ---------------------------------------------------------------------------
 
-/// The header claims a tangent producer is a drop-in for any consumer. That has
-/// to be tested against a consumer that already existed, not only against two
-/// contexts built here. small_strain_plasticity takes its tangent from a NAMED
-/// source, so it needs no change: point elastic_source at the generator.
+/// The drop-in claim, tested against a PRE-EXISTING consumer.
+/// small_strain_plasticity already names its tangent source, so it needs no
+/// change: point elastic_source at the generator.
 TEST(TangentGenerator, DrivesJ2PlasticityIdenticallyToLinearElasticity) {
   auto drive = [](bool decomposed) {
     ctx_type ctx;
@@ -336,11 +313,8 @@ TEST(TangentGenerator, DrivesJ2PlasticityIdenticallyToLinearElasticity) {
 // The optional tangent_source
 // ---------------------------------------------------------------------------
 
-/// "Optional" in this framework means declared with no check: check_parameter
-/// only runs registered checks, and the JSON visitor skips absent keys. These
-/// pin that an ABSENT tangent_source falls back to the stress source, while a
-/// SUPPLIED one is honoured — the two must be distinguishable, which an
-/// empty-string sentinel could not express.
+/// Absent tangent_source falls back to the stress source; supplied is honoured.
+/// The two must stay distinguishable.
 TEST(TangentSource, AbsentFallsBackToTheStressSource) {
   ctx_type ctx;
   param_type p;
@@ -354,7 +328,6 @@ TEST(TangentSource, AbsentFallsBackToTheStressSource) {
   ctx.create<nm::linear_elasticity<policy>>(p);
   ctx.finalize();
 
-  // No tangent_source configured: the monolithic material supplies both.
   u::material_point_evaluator<policy>::config cfg;
   cfg.strain_source = "strain_in";
   cfg.stress_source = "elastic";
@@ -370,16 +343,14 @@ TEST(TangentSource, SuppliedResolvesTheTangentElsewhere) {
 
   u::material_point_evaluator<policy>::config cfg;
   cfg.strain_source = "strain_in";
-  cfg.stress_source = "elastic";     // linear_stress: publishes only "stress"
-  // Without this the evaluator cannot find a tangent at all.
+  cfg.stress_source = "elastic";  // linear_stress publishes only "stress"
   EXPECT_THROW(u::material_point_evaluator<policy>(ctx, cfg), u::fatal_error);
 
   cfg.tangent_source = "stiffness";  // the generator
   EXPECT_NO_THROW(u::material_point_evaluator<policy>(ctx, cfg));
 }
 
-/// The decomposed pair driving a UMAT end to end — the configuration the review
-/// showed was impossible before tangent_source existed.
+/// The decomposed pair driving a UMAT end to end.
 TEST(TangentSource, DecomposedPairDrivesTheEvaluatorLikeLinearElasticity) {
   ctx_type dec;
   build_decomposed(dec, K, G, /*recompute=*/false);

@@ -47,11 +47,7 @@ public:
     // Dynamically create inputs for each term
     std::size_t i = 0;
     for (const auto& [weight_name, mat_name] : m_terms_param) {
-      // A term's tangent normally comes from the same material as its stress.
-      // An entry in "tangent_sources" overrides that for one term, so a
-      // constituent whose stiffness lives in its own material (isotropic_tangent
-      // + linear_stress) can participate. A short or empty list leaves every
-      // unlisted term wired exactly as before.
+      // Unlisted terms take the tangent from the material producing the stress.
       const std::string& tangent_owner =
           (i < m_tangent_sources.size()) ? m_tangent_sources[i] : mat_name;
       auto& w = base::template add_input<value_type>(weight_name, m_weight_property, EdgeKind::Global);
@@ -64,8 +60,7 @@ public:
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
-    // Optional: declared with no check. Absent means every term takes its
-    // tangent from the same material as its stress.
+    // Optional (no check): absent means every term uses its stress material.
     para.template insert<std::vector<std::string>>("tangent_sources");
     para.template insert<terms_type>("terms").template add<is_required>();
     para.template insert<std::string>("weight_property")

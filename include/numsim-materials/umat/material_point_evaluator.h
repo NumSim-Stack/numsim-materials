@@ -46,14 +46,9 @@ public:
     std::string strain_source;
     /// Material producing the stress the host wants back.
     std::string stress_source;
-    /// Material producing the tangent. Unset means "same as stress_source",
-    /// which is how every monolithic material (linear_elasticity, j2_plasticity)
-    /// is configured. Set it when the stiffness lives in its own material, as
-    /// with isotropic_tangent + linear_stress.
-    ///
-    /// std::optional rather than an empty string, so "not configured" and
-    /// "configured as empty" are distinct — the latter is a mistake and should
-    /// fail to resolve rather than silently fall back.
+    /// Unset means "same as stress_source", which is how monolithic materials
+    /// are configured. Set it when the stiffness is its own material.
+    /// optional, not an empty string, so unset and "" stay distinct.
     std::optional<std::string> tangent_source{};
     std::string stress_property{"stress"};
     std::string tangent_property{"tangent"};
