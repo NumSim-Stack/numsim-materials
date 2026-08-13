@@ -38,20 +38,33 @@ public:
         m_terms_param(base::template get_parameter<terms_type>("terms")),
         m_weight_property(base::template get_parameter<std::string>("weight_property")),
         m_stress_property(base::template get_parameter<std::string>("stress_property")),
-        m_tangent_property(base::template get_parameter<std::string>("tangent_property"))
+        m_tangent_property(base::template get_parameter<std::string>("tangent_property")),
+        m_tangent_sources(base::template get_parameter<std::vector<std::string>>("tangent_sources"))
   {
     // Dynamically create inputs for each term
+    std::size_t i = 0;
     for (const auto& [weight_name, mat_name] : m_terms_param) {
+      // A term's tangent normally comes from the same material as its stress.
+      // An entry in "tangent_sources" overrides that for one term, so a
+      // constituent whose stiffness lives in its own material (isotropic_tangent
+      // + linear_stress) can participate. A short or empty list leaves every
+      // unlisted term wired exactly as before.
+      const std::string& tangent_owner =
+          (i < m_tangent_sources.size() && !m_tangent_sources[i].empty())
+              ? m_tangent_sources[i]
+              : mat_name;
       auto& w = base::template add_input<value_type>(weight_name, m_weight_property, EdgeKind::Global);
       auto& s = base::template add_input<tensor2>(mat_name, m_stress_property, EdgeKind::Global);
-      auto& c = base::template add_input<tensor4>(mat_name, m_tangent_property, EdgeKind::Global);
+      auto& c = base::template add_input<tensor4>(tangent_owner, m_tangent_property, EdgeKind::Global);
       m_terms.push_back({&w, &s, &c});
+      ++i;
     }
-
   }
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
+    para.template insert<std::vector<std::string>>("tangent_sources")
+        .template add<set_default>(std::vector<std::string>{});
     para.template insert<terms_type>("terms").template add<is_required>();
     para.template insert<std::string>("weight_property")
         .template add<set_default>(std::string{"value"});
@@ -94,6 +107,7 @@ private:
   const std::string& m_weight_property;
   const std::string& m_stress_property;
   const std::string& m_tangent_property;
+  const std::vector<std::string>& m_tangent_sources;
   std::vector<term> m_terms;
 };
 

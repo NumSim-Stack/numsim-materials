@@ -3,6 +3,7 @@
 
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_base.h"
+#include "numsim-materials/materials/plasticity_utils.h"
 
 namespace numsim::materials {
 
@@ -33,9 +34,19 @@ namespace numsim::materials {
 ///   recompute = true    constants change between calls (CalculiX interpolates
 ///                       *USER MATERIAL constants by temperature)
 ///
+/// The flag is read ONCE, at construction, because that is when the callback is
+/// bound — there is no way to attach one later. It is therefore stored by value
+/// rather than as a reference into the parameter store: writing "recompute"
+/// afterwards changes nothing, and an accessor reading the live parameter would
+/// report that the tangent tracks K and G when in fact no callback exists.
+/// `recomputes()` reports what was actually bound.
+///
 /// Setting it false while the constants do move yields a stale tangent, with
 /// the stress still correct — the classic silently-wrong tangent, costing
-/// convergence rate rather than accuracy. A debug assertion catches it.
+/// convergence rate rather than accuracy. Nothing detects that automatically:
+/// the material cannot see a write it has no callback to observe. Choosing the
+/// flag correctly is the caller's responsibility, and
+/// RecomputeFalseIgnoresALaterParameterWrite pins what happens if they do not.
 template <typename Traits>
 class isotropic_tangent final
     : public material_base<isotropic_tangent<Traits>, Traits> {
@@ -51,6 +62,7 @@ public:
       : base(std::forward<Args>(args)...),
         m_K(base::template get_parameter<value_type>("K")),
         m_G(base::template get_parameter<value_type>("G")),
+        // By value, not by reference: see the class comment.
         m_recompute(base::template get_parameter<bool>("recompute")),
         // Bind the callback only when asked. add_output ignores a null one, so
         // with recompute=false the property has no callback and the engine
@@ -63,10 +75,6 @@ public:
     // Always compute once, so the tangent is valid before the first update()
     // whether or not it will ever be recomputed.
     update_tangent();
-#ifndef NDEBUG
-    m_K_at_construction = m_K;
-    m_G_at_construction = m_G;
-#endif
   }
 
   static input_parameter_controller parameters() {
@@ -80,39 +88,22 @@ public:
   }
 
   void update_tangent() {
+    // IIdev comes from plasticity_utils rather than being spelled out again;
+    // the isotropic basis was already written three times in this repo.
     const auto I{tmech::eye<value_type, Dim, 2>()};
-    const auto IIsym{(tmech::otimesu(I, I) + tmech::otimesl(I, I)) * 0.5};
     const auto IIvol{tmech::otimes(I, I) / Dim};
-    const auto IIdev{IIsym - IIvol};
-    m_C = 3 * m_K * IIvol + 2 * m_G * IIdev;
+    m_C = 3 * m_K * IIvol +
+          2 * m_G * plasticity_detail::make_IIdev<value_type, Dim>();
   }
 
   /// True when this material will follow a change to K or G.
   [[nodiscard]] bool recomputes() const noexcept { return m_recompute; }
 
-#ifndef NDEBUG
-  /// Debug-only guard against the one way this can be configured wrongly:
-  /// recompute=false while the constants actually move. Callers that write
-  /// parameters may invoke this after writing; it is a no-op in release.
-  void assert_constants_unchanged() const {
-    assert((m_recompute || (m_K == m_K_at_construction &&
-                            m_G == m_G_at_construction)) &&
-           "isotropic_tangent: K or G changed but recompute=false, so the "
-           "tangent is stale");
-  }
-#else
-  void assert_constants_unchanged() const noexcept {}
-#endif
-
 private:
   const value_type& m_K;
   const value_type& m_G;
-  const bool& m_recompute;
+  const bool m_recompute;
   tensor4& m_C;
-#ifndef NDEBUG
-  value_type m_K_at_construction{};
-  value_type m_G_at_construction{};
-#endif
 };
 
 }  // namespace numsim::materials
