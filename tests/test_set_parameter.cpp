@@ -14,15 +14,12 @@ using T = policy::value_type;
 using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
 
-/// A parameter large enough that std::any cannot use its small buffer. Storing
-/// one is what separates a correct write API from one that merely appears to
-/// work with scalars.
+/// Too large for std::any's small buffer — a scalar would hide the bug.
 struct big_parameter {
   std::array<double, 32> data{};
 };
 
-/// Binds references to its parameters exactly as every real material does, and
-/// exposes them so a test can observe what a bound reference sees after a write.
+/// Binds parameters by reference as real materials do, and exposes them.
 template <typename Traits>
 class probe_material final
     : public nm::material_base<probe_material<Traits>, Traits> {
@@ -64,8 +61,7 @@ probe_material<policy>& build(ctx_type& ctx) {
 
 // ---------------------------------------------------------------------------
 
-/// A material binds `const T&` into the parameter handler at construction, so
-/// the only useful write is one those references observe.
+/// The only useful write is one the material's bound reference observes.
 TEST(SetParameter, BoundReferenceSeesTheNewValue) {
   ctx_type ctx;
   auto& m = build(ctx);
@@ -75,12 +71,8 @@ TEST(SetParameter, BoundReferenceSeesTheNewValue) {
   EXPECT_DOUBLE_EQ(m.bound_k(), 250.0);
 }
 
-/// The address must not move, for any type. This is the reason set_parameter
-/// assigns through the non-const get<T>() instead of calling insert():
-/// insert() goes through insert_or_assign, which replaces the whole std::any.
-/// For a value past std::any's small buffer that relocates the object and every
-/// bound reference dangles — while a `double` would keep the same address by
-/// accident and pass a test written only against scalars.
+/// The address must not move, for any type — which is why set_parameter
+/// assigns rather than calling insert().
 TEST(SetParameter, WriteDoesNotRelocateEvenForALargeType) {
   ctx_type ctx;
   auto& m = build(ctx);
@@ -97,8 +89,8 @@ TEST(SetParameter, WriteDoesNotRelocateEvenForALargeType) {
   EXPECT_DOUBLE_EQ(m.bound_big().data[31], 9.0);
 }
 
-/// The same guarantee, stated directly against parameter_handler so the reason
-/// is documented where the mechanism lives rather than only in a material.
+/// The same guarantee against parameter_handler directly, so the rationale
+/// lives next to the mechanism.
 TEST(SetParameter, InsertRelocatesALargeValueButAssignmentDoesNot) {
   numsim_core::parameter_handler<> h;
   h.insert<big_parameter>("big", big_parameter{});
@@ -113,8 +105,8 @@ TEST(SetParameter, InsertRelocatesALargeValueButAssignmentDoesNot) {
       static_cast<const void*>(&h.get<big_parameter>("big"));
 
   EXPECT_NE(after_insert, bound)
-      << "insert() is expected to relocate; if this ever stops being true the "
-         "rationale for set_parameter's implementation needs revisiting";
+      << "insert() is expected to relocate; if that changes, revisit why "
+         "set_parameter assigns instead";
   EXPECT_EQ(after_assign, after_insert)
       << "assignment through get<T>() must never relocate";
 }
@@ -126,7 +118,7 @@ TEST(SetParameter, ThrowsForAnUnknownKey) {
                std::invalid_argument);
 }
 
-/// Writing does not disturb neighbouring parameters.
+/// No collateral damage to neighbouring parameters.
 TEST(SetParameter, LeavesOtherParametersAlone) {
   ctx_type ctx;
   auto& m = build(ctx);

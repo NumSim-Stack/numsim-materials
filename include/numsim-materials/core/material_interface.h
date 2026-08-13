@@ -51,18 +51,12 @@ public:
     return m_parameter_handler.template get<T>(std::forward<std::string>(key));
   }
 
-  /// Overwrite a parameter in place.
+  /// Overwrite a parameter in place, so references bound by get_parameter()
+  /// stay valid and see the new value.
   ///
-  /// Assigns through the NON-CONST get<T>(), deliberately not insert().
-  /// insert() goes through insert_or_assign, which replaces the whole std::any;
-  /// for a value larger than std::any's small buffer that relocates the
-  /// contained object, dangling every reference a material bound at
-  /// construction via get_parameter(). Assigning through get<T>() mutates the
-  /// contained object where it already lives, so those references stay valid
-  /// and observe the new value.
-  ///
-  /// Note that materials caching anything DERIVED from a parameter will not
-  /// notice — see isotropic_tangent's "recompute" for how that is handled.
+  /// Assigns through the non-const get<T>(), NOT insert(): insert_or_assign
+  /// replaces the whole std::any, relocating anything past its small buffer.
+  /// Does not touch values a material DERIVED from a parameter at construction.
   template <typename T>
   void set_parameter(std::string const& key, T const& value) {
     m_parameter_handler.template get<T>(key) = value;
