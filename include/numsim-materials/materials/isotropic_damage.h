@@ -50,13 +50,16 @@ public:
         // inputs
         m_stress(base::template add_input<tensor2>(
             m_elastic_source, "stress", EdgeKind::Global)),
-        // Empty tangent_source means "same material as the stress", which is
-        // how a monolithic linear_elasticity is wired. Naming it separately
+        // An ABSENT tangent_source means "same material as the stress", which
+        // is how a monolithic linear_elasticity is wired. Naming it separately
         // allows a decomposed stiffness (isotropic_tangent + linear_stress).
+        // Tested with contains() rather than against an empty string: absent
+        // and empty are then distinct, so a deck that supplies "" gets a
+        // wiring error instead of silently falling back.
         m_tangent(base::template add_input<tensor4>(
-            base::template get_parameter<std::string>("tangent_source").empty()
-                ? m_elastic_source
-                : base::template get_parameter<std::string>("tangent_source"),
+            base::m_parameter_handler.contains("tangent_source")
+                ? base::template get_parameter<std::string>("tangent_source")
+                : m_elastic_source,
             "tangent", EdgeKind::Global)),
         m_damage(base::template add_input<value_type>(
             m_damage_source, "damage", EdgeKind::Global)),
@@ -71,8 +74,11 @@ public:
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
     para.template insert<std::string>("elastic_source").template add<is_required>();
-    para.template insert<std::string>("tangent_source")
-        .template add<set_default>(std::string{});
+    // Declared with no check, which is how this framework spells "optional":
+    // check_parameter only runs registered checks, and the JSON visitor skips
+    // keys the input does not contain. Declaring it anyway keeps it in the
+    // schema, so the JSON layer knows the key instead of warning about it.
+    para.template insert<std::string>("tangent_source");
     para.template insert<std::string>("damage_source").template add<is_required>();
     para.template insert<std::string>("state_source").template add<is_required>();
     para.template insert<std::string>("yield_source").template add<is_required>();

@@ -10,10 +10,12 @@
 #include "numsim-materials/materials/small_strain_plasticity.h"
 #include "numsim-materials/solvers/backward_euler.h"
 #include "numsim-materials/umat/external_state_source.h"
+#include "numsim-materials/umat/material_point_evaluator.h"
 
 namespace {
 
 namespace nm = numsim::materials;
+namespace u = numsim::materials::umat;
 
 using policy = nm::material_policy_default;
 using T = policy::value_type;
@@ -327,6 +329,100 @@ TEST(TangentGenerator, DrivesJ2PlasticityIdenticallyToLinearElasticity) {
     if (i % 2 == 1 && with_generator[i] > 1e-8) went_plastic = true;
   }
   EXPECT_TRUE(went_plastic) << "the path must yield for this to mean anything";
+}
+
+
+// ---------------------------------------------------------------------------
+// The optional tangent_source
+// ---------------------------------------------------------------------------
+
+/// "Optional" in this framework means declared with no check: check_parameter
+/// only runs registered checks, and the JSON visitor skips absent keys. These
+/// pin that an ABSENT tangent_source falls back to the stress source, while a
+/// SUPPLIED one is honoured — the two must be distinguishable, which an
+/// empty-string sentinel could not express.
+TEST(TangentSource, AbsentFallsBackToTheStressSource) {
+  ctx_type ctx;
+  param_type p;
+  p.insert<std::string>("name", "strain_in");
+  auto& src = ctx.create<nm::external_strain_source<policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "elastic");
+  p.insert<std::string>("strain_producer_name", "strain_in");
+  p.insert<T>("K", K);
+  p.insert<T>("G", G);
+  ctx.create<nm::linear_elasticity<policy>>(p);
+  ctx.finalize();
+
+  // No tangent_source configured: the monolithic material supplies both.
+  u::material_point_evaluator<policy>::config cfg;
+  cfg.strain_source = "strain_in";
+  cfg.stress_source = "elastic";
+  ASSERT_FALSE(cfg.tangent_source.has_value());
+  EXPECT_NO_THROW(u::material_point_evaluator<policy>(ctx, cfg));
+
+  (void)src;
+}
+
+TEST(TangentSource, SuppliedResolvesTheTangentElsewhere) {
+  ctx_type ctx;
+  build_decomposed(ctx, K, G, /*recompute=*/false);
+
+  u::material_point_evaluator<policy>::config cfg;
+  cfg.strain_source = "strain_in";
+  cfg.stress_source = "elastic";     // linear_stress: publishes only "stress"
+  // Without this the evaluator cannot find a tangent at all.
+  EXPECT_THROW(u::material_point_evaluator<policy>(ctx, cfg), u::fatal_error);
+
+  cfg.tangent_source = "stiffness";  // the generator
+  EXPECT_NO_THROW(u::material_point_evaluator<policy>(ctx, cfg));
+}
+
+/// The decomposed pair driving a UMAT end to end — the configuration the review
+/// showed was impossible before tangent_source existed.
+TEST(TangentSource, DecomposedPairDrivesTheEvaluatorLikeLinearElasticity) {
+  ctx_type dec;
+  build_decomposed(dec, K, G, /*recompute=*/false);
+  u::material_point_evaluator<policy>::config dcfg;
+  dcfg.strain_source = "strain_in";
+  dcfg.stress_source = "elastic";
+  dcfg.tangent_source = "stiffness";
+  u::material_point_evaluator<policy> deval(dec, dcfg);
+
+  ctx_type mono;
+  {
+    param_type p;
+    p.insert<std::string>("name", "strain_in");
+    mono.create<nm::external_strain_source<policy>>(p);
+    p.clear();
+    p.insert<std::string>("name", "elastic");
+    p.insert<std::string>("strain_producer_name", "strain_in");
+    p.insert<T>("K", K);
+    p.insert<T>("G", G);
+    mono.create<nm::linear_elasticity<policy>>(p);
+    mono.finalize();
+  }
+  u::material_point_evaluator<policy>::config mcfg;
+  mcfg.strain_source = "strain_in";
+  mcfg.stress_source = "elastic";
+  u::material_point_evaluator<policy> meval(mono, mcfg);
+
+  std::vector<T> dsv(deval.nstatv(), 0.0), msv(meval.nstatv(), 0.0);
+  T stran[6] = {0, 0, 0, 0, 0, 0};
+  const T dstran[6] = {0.002, -0.0005, 0.0, 0.001, 0.0, 0.0};
+  T ds[6], dd[36], ms[6], md[36];
+
+  for (int step = 0; step < 10; ++step) {
+    deval.evaluate({.stran = stran, .dstran = dstran, .stress = ds,
+                    .ddsdde = dd, .statev = dsv});
+    meval.evaluate({.stran = stran, .dstran = dstran, .stress = ms,
+                    .ddsdde = md, .statev = msv});
+    for (std::size_t i = 0; i < 6; ++i)
+      EXPECT_DOUBLE_EQ(ds[i], ms[i]) << "step " << step << " stress " << i;
+    for (std::size_t i = 0; i < 36; ++i)
+      EXPECT_DOUBLE_EQ(dd[i], md[i]) << "step " << step << " ddsdde " << i;
+    for (std::size_t i = 0; i < 6; ++i) stran[i] += dstran[i];
+  }
 }
 
 }  // namespace

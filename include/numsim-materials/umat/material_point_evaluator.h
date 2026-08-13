@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -45,11 +46,15 @@ public:
     std::string strain_source;
     /// Material producing the stress the host wants back.
     std::string stress_source;
-    /// Material producing the tangent. Empty means "same as stress_source",
+    /// Material producing the tangent. Unset means "same as stress_source",
     /// which is how every monolithic material (linear_elasticity, j2_plasticity)
     /// is configured. Set it when the stiffness lives in its own material, as
     /// with isotropic_tangent + linear_stress.
-    std::string tangent_source{};
+    ///
+    /// std::optional rather than an empty string, so "not configured" and
+    /// "configured as empty" are distinct — the latter is a mistake and should
+    /// fail to resolve rather than silently fall back.
+    std::optional<std::string> tangent_source{};
     std::string stress_property{"stress"};
     std::string tangent_property{"tangent"};
     /// Optional external_scalar_source carrying time; empty to omit.
@@ -116,9 +121,8 @@ public:
 
     m_stress =
         resolve_property<tensor2>(m_cfg.stress_source, m_cfg.stress_property);
-    const std::string& tangent_owner = m_cfg.tangent_source.empty()
-                                           ? m_cfg.stress_source
-                                           : m_cfg.tangent_source;
+    const std::string& tangent_owner =
+        m_cfg.tangent_source ? *m_cfg.tangent_source : m_cfg.stress_source;
     m_tangent = resolve_property<tensor4>(tangent_owner, m_cfg.tangent_property);
 
     if (!m_cfg.plastic_strain_property.empty()) {
