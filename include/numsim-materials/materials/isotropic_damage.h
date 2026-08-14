@@ -24,6 +24,8 @@ namespace numsim::materials {
 ///   damage_source::damage, damage_source::d_damage   — from propagation law
 ///   state_source::d_equivalent_strain                — from state function
 ///   yield_source::is_yielding                        — from yield function
+/// The tangent may come from a different material than the stress: set the
+/// optional "tangent_source". Absent, both come from "elastic_source".
 template <typename Traits>
 class isotropic_damage final
     : public material_base<isotropic_damage<Traits>, Traits> {

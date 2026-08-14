@@ -1,6 +1,7 @@
 #ifndef WEIGHTED_SUM_H
 #define WEIGHTED_SUM_H
 
+#include <stdexcept>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_base.h"
 
@@ -18,6 +19,8 @@ namespace numsim::materials {
 /// Parameters:
 ///   "name":  material name
 ///   "terms": vector<pair<string,string>> — (weight_name, constituent_name) pairs
+///   "tangent_sources": optional vector<string> — one per term, naming a
+///       different material for that term's tangent; "" keeps the term's own.
 template <typename Traits>
 class weighted_sum final
     : public material_base<weighted_sum<Traits>, Traits> {
@@ -39,17 +42,30 @@ public:
         m_weight_property(base::template get_parameter<std::string>("weight_property")),
         m_stress_property(base::template get_parameter<std::string>("stress_property")),
         m_tangent_property(base::template get_parameter<std::string>("tangent_property")),
-        m_has_tangent_sources(base::m_parameter_handler.contains("tangent_sources")),
-        m_tangent_sources(m_has_tangent_sources
+        m_tangent_sources(base::m_parameter_handler.contains("tangent_sources")
                               ? base::template get_parameter<std::vector<std::string>>("tangent_sources")
                               : std::vector<std::string>{})
   {
+    // Positional, so a shorter list would silently shift every override onto
+    // the wrong constituent — both names resolve and the only symptom is a
+    // wrong summed tangent. Require one entry per term, and let "" mean "this
+    // term keeps its own", so a non-leading term can be overridden alone.
+    if (!m_tangent_sources.empty() &&
+        m_tangent_sources.size() != m_terms_param.size())
+      throw std::runtime_error(
+          "weighted_sum '" + base::name() + "': tangent_sources has " +
+          std::to_string(m_tangent_sources.size()) + " entries but there are " +
+          std::to_string(m_terms_param.size()) +
+          " terms — supply one per term (\"\" keeps a term's own tangent) or "
+          "omit it entirely");
+
     // Dynamically create inputs for each term
     std::size_t i = 0;
     for (const auto& [weight_name, mat_name] : m_terms_param) {
-      // Unlisted terms take the tangent from the material producing the stress.
+      const bool overridden =
+          i < m_tangent_sources.size() && !m_tangent_sources[i].empty();
       const std::string& tangent_owner =
-          (i < m_tangent_sources.size()) ? m_tangent_sources[i] : mat_name;
+          overridden ? m_tangent_sources[i] : mat_name;
       auto& w = base::template add_input<value_type>(weight_name, m_weight_property, EdgeKind::Global);
       auto& s = base::template add_input<tensor2>(mat_name, m_stress_property, EdgeKind::Global);
       auto& c = base::template add_input<tensor4>(tangent_owner, m_tangent_property, EdgeKind::Global);
@@ -61,6 +77,7 @@ public:
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
     // Optional (no check): absent means every term uses its stress material.
+    // If given, one entry per term; "" keeps that term's own tangent.
     para.template insert<std::vector<std::string>>("tangent_sources");
     para.template insert<terms_type>("terms").template add<is_required>();
     para.template insert<std::string>("weight_property")
@@ -104,7 +121,6 @@ private:
   const std::string& m_weight_property;
   const std::string& m_stress_property;
   const std::string& m_tangent_property;
-  const bool m_has_tangent_sources;
   const std::vector<std::string> m_tangent_sources;
   std::vector<term> m_terms;
 };

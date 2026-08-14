@@ -18,9 +18,9 @@ namespace numsim::materials {
 /// The moduli are inputs rather than parameters for the same reason: a
 /// parameter has no edge to the material that reads it, so nothing orders a
 /// change to it against the values derived from it. Wire from constant_scalar
-/// when they are fixed, or from any material publishing "value" when they vary
-/// (temperature dependence). Which one you wire IS the choice — there is no
-/// flag that can disagree with how the graph was built.
+/// when they are fixed, or from any scalar producer when they vary (temperature
+/// dependence) — set K_property/G_property if it does not publish under "value".
+/// Which one you wire IS the choice, and no flag can disagree with it.
 ///
 /// The callback is always bound: inputs are not wired until finalize(), so
 /// nothing can be computed in the constructor. It self-guards on the moduli, so
@@ -41,18 +41,25 @@ public:
         m_C(base::template add_output<tensor4>(
             "tangent", &isotropic_tangent::update_tangent)),
         m_K(base::template add_input<value_type>(
-            base::template get_parameter<std::string>("K_source"), "value",
+            base::template get_parameter<std::string>("K_source"),
+            base::template get_parameter<std::string>("K_property"),
             EdgeKind::Global)),
         m_G(base::template add_input<value_type>(
-            base::template get_parameter<std::string>("G_source"), "value",
+            base::template get_parameter<std::string>("G_source"),
+            base::template get_parameter<std::string>("G_property"),
             EdgeKind::Global)) {}
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
-    // Both sources must publish a scalar property called "value", the
-    // convention scalar_identity_weight and constant_scalar already follow.
     para.template insert<std::string>("K_source").template add<is_required>();
     para.template insert<std::string>("G_source").template add<is_required>();
+    // Defaults to the scalar-output convention constant_scalar and
+    // scalar_identity_weight follow. Override for a source that publishes under
+    // another name — external_scalar_source publishes "state", for instance.
+    para.template insert<std::string>("K_property")
+        .template add<set_default>(std::string{"value"});
+    para.template insert<std::string>("G_property")
+        .template add<set_default>(std::string{"value"});
     return para;
   }
 
@@ -68,6 +75,14 @@ public:
           2 * m_G_cached * plasticity_detail::make_IIdev<value_type, Dim>();
     ++m_recomputations;
   }
+
+  /// Force a rebuild on the next update.
+  ///
+  /// The guard keys on K and G, which assumes this material is the only writer
+  /// of its "tangent" property. material_context::get_mutable() hands out a
+  /// mutable reference to exactly that, so anything writing it without writing
+  /// it back would otherwise wedge the memo permanently.
+  void invalidate() noexcept { m_valid = false; }
 
   /// How often the stiffness was actually rebuilt. Diagnostics for the guard:
   /// with fixed moduli this stays at 1 however many updates run.
