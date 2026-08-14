@@ -1,7 +1,6 @@
 #ifndef NUMSIM_MATERIALS_ISOTROPIC_TANGENT_H
 #define NUMSIM_MATERIALS_ISOTROPIC_TANGENT_H
 
-#include <cstddef>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_base.h"
 #include "numsim-materials/materials/plasticity_utils.h"
@@ -73,21 +72,6 @@ public:
     const auto IIvol{tmech::otimes(I, I) / Dim};
     m_C = 3 * m_K_cached * IIvol +
           2 * m_G_cached * plasticity_detail::make_IIdev<value_type, Dim>();
-    ++m_recomputations;
-  }
-
-  /// Force a rebuild on the next update.
-  ///
-  /// The guard keys on K and G, which assumes this material is the only writer
-  /// of its "tangent" property. material_context::get_mutable() hands out a
-  /// mutable reference to exactly that, so anything writing it without writing
-  /// it back would otherwise wedge the memo permanently.
-  void invalidate() noexcept { m_valid = false; }
-
-  /// How often the stiffness was actually rebuilt. Diagnostics for the guard:
-  /// with fixed moduli this stays at 1 however many updates run.
-  [[nodiscard]] std::size_t recomputations() const noexcept {
-    return m_recomputations;
   }
 
 private:
@@ -97,7 +81,6 @@ private:
   value_type m_K_cached{};
   value_type m_G_cached{};
   bool m_valid{false};
-  std::size_t m_recomputations{0};
 };
 
 }  // namespace numsim::materials
