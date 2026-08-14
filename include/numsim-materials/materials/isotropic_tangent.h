@@ -1,29 +1,30 @@
 #ifndef NUMSIM_MATERIALS_ISOTROPIC_TANGENT_H
 #define NUMSIM_MATERIALS_ISOTROPIC_TANGENT_H
 
+#include <cstddef>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_base.h"
 #include "numsim-materials/materials/plasticity_utils.h"
 
 namespace numsim::materials {
 
-/// Isotropic elastic stiffness as a material of its own.
+/// Isotropic elastic stiffness as a material, with K and G as graph inputs.
 ///
 /// linear_elasticity owns its tangent, and a material reading its own property
 /// creates no graph edge — so elastic::stress sorts before elastic::tangent and
 /// would consume a stale stiffness. Consuming ANOTHER material's property is a
-/// real edge, which the topological sort honours. Also makes the stiffness
-/// pluggable: anything producing "tangent" is a drop-in.
+/// real edge, which the topological sort honours.
 ///
-/// "recompute" binds the update callback. False (the default, matching
-/// linear_elasticity) leaves the property with no callback, so the engine skips
-/// it and per-call cost is zero — right when constants are fixed (Abaqus PROPS).
-/// True is for constants that vary per call (CalculiX interpolates them by
-/// temperature). Read once, at construction: that is when the callback is bound.
+/// The moduli are inputs rather than parameters for the same reason: a
+/// parameter has no edge to the material that reads it, so nothing orders a
+/// change to it against the values derived from it. Wire from constant_scalar
+/// when they are fixed, or from any material publishing "value" when they vary
+/// (temperature dependence). Which one you wire IS the choice — there is no
+/// flag that can disagree with how the graph was built.
 ///
-/// recompute=false while constants move leaves a stale tangent with the stress
-/// still correct — costs convergence rate, not accuracy, and nothing detects it.
-/// See RecomputeFalseIgnoresALaterParameterWrite.
+/// The callback is always bound: inputs are not wired until finalize(), so
+/// nothing can be computed in the constructor. It self-guards on the moduli, so
+/// the fixed case costs two comparisons rather than a rank-4 rebuild.
 template <typename Traits>
 class isotropic_tangent final
     : public material_base<isotropic_tangent<Traits>, Traits> {
@@ -37,45 +38,51 @@ public:
   template <typename... Args>
   explicit isotropic_tangent(Args&&... args)
       : base(std::forward<Args>(args)...),
-        m_K(base::template get_parameter<value_type>("K")),
-        m_G(base::template get_parameter<value_type>("G")),
-        // By value: the callback is bound once, so a live reference would let
-        // recomputes() claim tracking that does not exist.
-        m_recompute(base::template get_parameter<bool>("recompute")),
-        // add_output ignores a null callback.
         m_C(base::template add_output<tensor4>(
-            "tangent",
-            base::template get_parameter<bool>("recompute")
-                ? &isotropic_tangent::update_tangent
-                : nullptr)) {
-    // Always compute once, so the tangent is valid before the first update()
-    // whether or not it will ever be recomputed.
-    update_tangent();
-  }
+            "tangent", &isotropic_tangent::update_tangent)),
+        m_K(base::template add_input<value_type>(
+            base::template get_parameter<std::string>("K_source"), "value",
+            EdgeKind::Global)),
+        m_G(base::template add_input<value_type>(
+            base::template get_parameter<std::string>("G_source"), "value",
+            EdgeKind::Global)) {}
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
-    para.template insert<value_type>("K").template add<is_required>();
-    para.template insert<value_type>("G").template add<is_required>();
-    para.template insert<bool>("recompute").template add<set_default>(false);
+    // Both sources must publish a scalar property called "value", the
+    // convention scalar_identity_weight and constant_scalar already follow.
+    para.template insert<std::string>("K_source").template add<is_required>();
+    para.template insert<std::string>("G_source").template add<is_required>();
     return para;
   }
 
   void update_tangent() {
+    if (m_valid && m_K.get() == m_K_cached && m_G.get() == m_G_cached) return;
+    m_K_cached = m_K.get();
+    m_G_cached = m_G.get();
+    m_valid = true;
+
     const auto I{tmech::eye<value_type, Dim, 2>()};
     const auto IIvol{tmech::otimes(I, I) / Dim};
-    m_C = 3 * m_K * IIvol +
-          2 * m_G * plasticity_detail::make_IIdev<value_type, Dim>();
+    m_C = 3 * m_K_cached * IIvol +
+          2 * m_G_cached * plasticity_detail::make_IIdev<value_type, Dim>();
+    ++m_recomputations;
   }
 
-  /// Whether a callback was bound, i.e. whether K/G changes are followed.
-  [[nodiscard]] bool recomputes() const noexcept { return m_recompute; }
+  /// How often the stiffness was actually rebuilt. Diagnostics for the guard:
+  /// with fixed moduli this stays at 1 however many updates run.
+  [[nodiscard]] std::size_t recomputations() const noexcept {
+    return m_recomputations;
+  }
 
 private:
-  const value_type& m_K;
-  const value_type& m_G;
-  const bool m_recompute;
   tensor4& m_C;
+  const input_property<value_type, property_traits>& m_K;
+  const input_property<value_type, property_traits>& m_G;
+  value_type m_K_cached{};
+  value_type m_G_cached{};
+  bool m_valid{false};
+  std::size_t m_recomputations{0};
 };
 
 }  // namespace numsim::materials

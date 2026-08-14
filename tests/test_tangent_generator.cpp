@@ -1,8 +1,10 @@
 #include <gtest/gtest.h>
 #include <optional>
 #include <string>
+#include <vector>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_context.h"
+#include "numsim-materials/materials/constant_scalar.h"
 #include "numsim-materials/materials/isotropic_tangent.h"
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/materials/linear_isotropic_hardening.h"
@@ -11,6 +13,7 @@
 #include "numsim-materials/solvers/backward_euler.h"
 #include "numsim-materials/umat/external_state_source.h"
 #include "numsim-materials/umat/material_point_evaluator.h"
+#include "numsim-materials/umat/statev_map.h"
 
 namespace {
 
@@ -27,18 +30,26 @@ using tensor4 = tmech::tensor<T, 3, 4>;
 constexpr T K = 166.67;
 constexpr T G = 76.92;
 
-/// strain source -> isotropic_tangent -> linear_stress
-nm::external_strain_source<policy>& build_decomposed(ctx_type& ctx, T k, T g,
-                                                     bool recompute) {
+/// strain source + constant moduli -> isotropic_tangent -> linear_stress
+nm::external_strain_source<policy>& build_decomposed(ctx_type& ctx, T k, T g) {
   param_type p;
   p.insert<std::string>("name", "strain_in");
   auto& src = ctx.create<nm::external_strain_source<policy>>(p);
 
   p.clear();
+  p.insert<std::string>("name", "K");
+  p.insert<T>("value", k);
+  ctx.create<nm::constant_scalar<policy>>(p);
+
+  p.clear();
+  p.insert<std::string>("name", "G");
+  p.insert<T>("value", g);
+  ctx.create<nm::constant_scalar<policy>>(p);
+
+  p.clear();
   p.insert<std::string>("name", "stiffness");
-  p.insert<T>("K", k);
-  p.insert<T>("G", g);
-  p.insert<bool>("recompute", recompute);
+  p.insert<std::string>("K_source", "K");
+  p.insert<std::string>("G_source", "G");
   ctx.create<nm::isotropic_tangent<policy>>(p);
 
   p.clear();
@@ -59,29 +70,34 @@ tensor2 uniaxial(T v) {
 }
 
 // ---------------------------------------------------------------------------
-// The ordering this decomposition exists to fix
+// Ordering — what the decomposition exists for
 // ---------------------------------------------------------------------------
 
-/// The whole point: a cross-material tangent is ordered before its consumer,
-/// where an intra-material one is not.
-TEST(TangentGenerator, StiffnessIsOrderedBeforeTheStressThatConsumesIt) {
+/// A cross-material property is ordered before its consumer; an intra-material
+/// one is not. Both the moduli and the stiffness are edges here.
+TEST(TangentGenerator, EveryProducerIsOrderedBeforeItsConsumer) {
   ctx_type ctx;
-  build_decomposed(ctx, K, G, /*recompute=*/true);
+  build_decomposed(ctx, K, G);
 
-  // optional, not 0: the tangent legitimately lands at index 0, so a 0 sentinel
+  // optional, not 0: a producer legitimately lands at index 0, so a 0 sentinel
   // would pass even with the property missing from the graph.
-  std::optional<std::size_t> i_tangent, i_stress;
+  std::optional<std::size_t> i_k, i_g, i_tangent, i_stress;
   std::size_t n = 0;
   for (const auto* prop : ctx.property_execution_order()) {
     const auto& id = prop->traits().id;
+    if (id.owner == "K" && id.name == "value") i_k = n;
+    if (id.owner == "G" && id.name == "value") i_g = n;
     if (id.owner == "stiffness" && id.name == "tangent") i_tangent = n;
     if (id.owner == "elastic" && id.name == "stress") i_stress = n;
     ++n;
   }
+  ASSERT_TRUE(i_k.has_value() && i_g.has_value());
   ASSERT_TRUE(i_tangent.has_value()) << "stiffness::tangent is not in the graph";
   ASSERT_TRUE(i_stress.has_value()) << "elastic::stress is not in the graph";
-  EXPECT_LT(*i_tangent, *i_stress)
-      << "the stiffness must be produced before the stress reads it";
+
+  EXPECT_LT(*i_k, *i_tangent);
+  EXPECT_LT(*i_g, *i_tangent);
+  EXPECT_LT(*i_tangent, *i_stress);
 }
 
 // ---------------------------------------------------------------------------
@@ -91,7 +107,7 @@ TEST(TangentGenerator, StiffnessIsOrderedBeforeTheStressThatConsumesIt) {
 /// Same physics, different graph shape: must agree exactly.
 TEST(TangentGenerator, MatchesLinearElasticityExactly) {
   ctx_type dec;
-  auto& dec_src = build_decomposed(dec, K, G, /*recompute=*/false);
+  auto& dec_src = build_decomposed(dec, K, G);
 
   ctx_type mono;
   nm::external_strain_source<policy>* mono_src = nullptr;
@@ -122,7 +138,6 @@ TEST(TangentGenerator, MatchesLinearElasticityExactly) {
         EXPECT_DOUBLE_EQ(a(i, j), b(i, j)) << "step " << step;
   }
 
-  // ... and the stiffness itself.
   const auto& Cd = dec.get<tensor4>("stiffness", "tangent");
   const auto& Cm = mono.get<tensor4>("elastic", "tangent");
   for (int i = 0; i < 3; ++i)
@@ -133,43 +148,67 @@ TEST(TangentGenerator, MatchesLinearElasticityExactly) {
 }
 
 // ---------------------------------------------------------------------------
-// recompute: bound vs unbound callback
+// Constants as materials
 // ---------------------------------------------------------------------------
 
-/// recompute=false must leave no callback at all, not merely a cheap one.
-TEST(TangentGenerator, RecomputeFalseLeavesThePropertyWithoutACallback) {
+/// constant_scalar publishes a PLAIN property, so it costs no STATEV slot and
+/// needs no exclusion. A history property here would be one wasted slot per
+/// integration point, per constant.
+TEST(TangentGenerator, ConstantsCostNoStatevSlot) {
   ctx_type ctx;
-  build_decomposed(ctx, K, G, /*recompute=*/false);
-
-  const auto* prop = ctx.find_property("stiffness", "tangent");
-  ASSERT_NE(prop, nullptr);
-  EXPECT_FALSE(static_cast<bool>(prop->traits().update))
-      << "recompute=false must not bind an update callback";
+  build_decomposed(ctx, K, G);
+  // Only the host-driven strain is excluded; the moduli are not mentioned.
+  const u::statev_map<policy> map(ctx, {{"strain_in", "strain"}});
+  EXPECT_EQ(map.nstatv(), 0u);
 }
 
-TEST(TangentGenerator, RecomputeTrueBindsTheCallback) {
+/// Inputs are not wired until finalize(), so nothing can be computed in the
+/// constructor: the stiffness is built on the first update, not before it.
+/// Everything that reads it goes through ctx.update() first, but the ordering
+/// is worth pinning because it differs from the parameter-based version.
+TEST(TangentGenerator, TangentIsBuiltOnTheFirstUpdateNotAtConstruction) {
   ctx_type ctx;
-  build_decomposed(ctx, K, G, /*recompute=*/true);
+  auto& src = build_decomposed(ctx, K, G);
 
-  const auto* prop = ctx.find_property("stiffness", "tangent");
-  ASSERT_NE(prop, nullptr);
-  EXPECT_TRUE(static_cast<bool>(prop->traits().update));
+  auto* typed =
+      dynamic_cast<nm::isotropic_tangent<policy>*>(ctx.find("stiffness"));
+  ASSERT_NE(typed, nullptr);
+  EXPECT_EQ(typed->recomputations(), 0u);
+
+  const auto eps = uniaxial(0.001);
+  src.bind(eps, eps);
+  ctx.update();
+
+  EXPECT_EQ(typed->recomputations(), 1u);
+  EXPECT_NEAR(ctx.get<tensor4>("stiffness", "tangent")(0, 0, 0, 0),
+              K + 4.0 * G / 3.0, 1e-9);
 }
 
-/// Built in the constructor, so valid before the first update().
-TEST(TangentGenerator, TangentIsValidBeforeTheFirstUpdate) {
+/// The self-guard is what makes fixed moduli free: the callback is always bound,
+/// but it rebuilds only when a modulus actually moves.
+TEST(TangentGenerator, FixedModuliAreRebuiltExactlyOnce) {
   ctx_type ctx;
-  build_decomposed(ctx, K, G, /*recompute=*/false);
+  auto& src = build_decomposed(ctx, K, G);
+  auto* typed =
+      dynamic_cast<nm::isotropic_tangent<policy>*>(ctx.find("stiffness"));
+  ASSERT_NE(typed, nullptr);
 
-  const auto& C = ctx.get<tensor4>("stiffness", "tangent");
-  // C_1111 = K + 4G/3
-  EXPECT_NEAR(C(0, 0, 0, 0), K + 4.0 * G / 3.0, 1e-9);
+  const auto eps = uniaxial(0.001);
+  src.bind(eps, eps);
+  for (int i = 0; i < 50; ++i) ctx.update();
+
+  EXPECT_EQ(typed->recomputations(), 1u)
+      << "the guard must skip every update after the first";
 }
 
-/// What the design is for: write constants, graph picks them up next update.
-TEST(TangentGenerator, RecomputeTrueFollowsAParameterWrittenInPlace) {
+/// And when a modulus does move, the stiffness follows on the next update —
+/// with the ordering guaranteed by the edge, not by registration order.
+TEST(TangentGenerator, StiffnessFollowsAChangedModulus) {
   ctx_type ctx;
-  auto& src = build_decomposed(ctx, K, G, /*recompute=*/true);
+  auto& src = build_decomposed(ctx, K, G);
+  auto* typed =
+      dynamic_cast<nm::isotropic_tangent<policy>*>(ctx.find("stiffness"));
+  ASSERT_NE(typed, nullptr);
 
   const auto eps = uniaxial(0.001);
   src.bind(eps, eps);
@@ -177,65 +216,13 @@ TEST(TangentGenerator, RecomputeTrueFollowsAParameterWrittenInPlace) {
   const T before = ctx.get<tensor2>("elastic", "stress")(0, 0);
   EXPECT_NEAR(before, (K + 4.0 * G / 3.0) * 0.001, 1e-12);
 
-  // Double the moduli in place, as a props writer would.
-  auto* stiffness = ctx.find("stiffness");
-  ASSERT_NE(stiffness, nullptr);
-  auto* typed = dynamic_cast<nm::isotropic_tangent<policy>*>(stiffness);
-  ASSERT_NE(typed, nullptr);
-  ASSERT_TRUE(typed->recomputes());
-  typed->template set_parameter<T>("K", 2 * K);
-  typed->template set_parameter<T>("G", 2 * G);
-
+  // Write the constant material's published value directly.
+  ctx.get_mutable<T>("K", "value") = 2 * K;
   ctx.update();
-  const T after = ctx.get<tensor2>("elastic", "stress")(0, 0);
-  EXPECT_NEAR(after, 2 * (K + 4.0 * G / 3.0) * 0.001, 1e-12);
-  EXPECT_NEAR(after, 2 * before, 1e-12);
-}
 
-/// The documented trade, pinned: recompute=false ignores a later write.
-TEST(TangentGenerator, RecomputeFalseIgnoresALaterParameterWrite) {
-  ctx_type ctx;
-  auto& src = build_decomposed(ctx, K, G, /*recompute=*/false);
-
-  const auto eps = uniaxial(0.001);
-  src.bind(eps, eps);
-  ctx.update();
-  const T before = ctx.get<tensor2>("elastic", "stress")(0, 0);
-
-  auto* typed =
-      dynamic_cast<nm::isotropic_tangent<policy>*>(ctx.find("stiffness"));
-  ASSERT_NE(typed, nullptr);
-  EXPECT_FALSE(typed->recomputes());
-  typed->template set_parameter<T>("K", 2 * K);
-
-  ctx.update();
-  EXPECT_DOUBLE_EQ(ctx.get<tensor2>("elastic", "stress")(0, 0), before)
-      << "recompute=false must leave the tangent as built";
-}
-
-
-// ---------------------------------------------------------------------------
-// The flag is construction-time only
-// ---------------------------------------------------------------------------
-
-/// recomputes() must report what was bound, not the live parameter — flipping
-/// the flag afterwards cannot bind a callback.
-TEST(TangentGenerator, RecomputeIsReadOnceAndTheAccessorCannotLie) {
-  ctx_type ctx;
-  build_decomposed(ctx, K, G, /*recompute=*/false);
-
-  auto* typed =
-      dynamic_cast<nm::isotropic_tangent<policy>*>(ctx.find("stiffness"));
-  ASSERT_NE(typed, nullptr);
-  ASSERT_FALSE(typed->recomputes());
-
-  typed->template set_parameter<bool>("recompute", true);
-
-  EXPECT_FALSE(typed->recomputes())
-      << "recomputes() must report what was bound, not the live parameter";
-  const auto* prop = ctx.find_property("stiffness", "tangent");
-  ASSERT_NE(prop, nullptr);
-  EXPECT_FALSE(static_cast<bool>(prop->traits().update));
+  EXPECT_EQ(typed->recomputations(), 2u);
+  EXPECT_NEAR(ctx.get<tensor2>("elastic", "stress")(0, 0),
+              (2 * K + 4.0 * G / 3.0) * 0.001, 1e-12);
 }
 
 // ---------------------------------------------------------------------------
@@ -252,14 +239,23 @@ TEST(TangentGenerator, DrivesJ2PlasticityIdenticallyToLinearElasticity) {
     p.insert<std::string>("name", "strain_in");
     auto& src = ctx.create<nm::external_strain_source<policy>>(p);
 
-    p.clear();
-    p.insert<std::string>("name", "stiffness");
     if (decomposed) {
-      p.insert<T>("K", K);
-      p.insert<T>("G", G);
-      p.insert<bool>("recompute", false);
+      p.clear();
+      p.insert<std::string>("name", "K");
+      p.insert<T>("value", K);
+      ctx.create<nm::constant_scalar<policy>>(p);
+      p.clear();
+      p.insert<std::string>("name", "G");
+      p.insert<T>("value", G);
+      ctx.create<nm::constant_scalar<policy>>(p);
+      p.clear();
+      p.insert<std::string>("name", "stiffness");
+      p.insert<std::string>("K_source", "K");
+      p.insert<std::string>("G_source", "G");
       ctx.create<nm::isotropic_tangent<policy>>(p);
     } else {
+      p.clear();
+      p.insert<std::string>("name", "stiffness");
       p.insert<std::string>("strain_producer_name", "strain_in");
       p.insert<T>("K", K);
       p.insert<T>("G", G);
@@ -287,7 +283,7 @@ TEST(TangentGenerator, DrivesJ2PlasticityIdenticallyToLinearElasticity) {
 
     std::vector<T> out;
     for (int step = 1; step <= 30; ++step) {
-      const auto eps = uniaxial(0.02 * step);   // enough to pass sigma_0 = 50
+      const auto eps = uniaxial(0.02 * step);
       src.bind(eps, eps);
       ctx.update();
       out.push_back(ctx.get<tensor2>("j2", "stress")(0, 0));
@@ -308,18 +304,16 @@ TEST(TangentGenerator, DrivesJ2PlasticityIdenticallyToLinearElasticity) {
   EXPECT_TRUE(went_plastic) << "the path must yield for this to mean anything";
 }
 
-
 // ---------------------------------------------------------------------------
 // The optional tangent_source
 // ---------------------------------------------------------------------------
 
 /// Absent tangent_source falls back to the stress source; supplied is honoured.
-/// The two must stay distinguishable.
 TEST(TangentSource, AbsentFallsBackToTheStressSource) {
   ctx_type ctx;
   param_type p;
   p.insert<std::string>("name", "strain_in");
-  auto& src = ctx.create<nm::external_strain_source<policy>>(p);
+  ctx.create<nm::external_strain_source<policy>>(p);
   p.clear();
   p.insert<std::string>("name", "elastic");
   p.insert<std::string>("strain_producer_name", "strain_in");
@@ -333,27 +327,25 @@ TEST(TangentSource, AbsentFallsBackToTheStressSource) {
   cfg.stress_source = "elastic";
   ASSERT_FALSE(cfg.tangent_source.has_value());
   EXPECT_NO_THROW(u::material_point_evaluator<policy>(ctx, cfg));
-
-  (void)src;
 }
 
 TEST(TangentSource, SuppliedResolvesTheTangentElsewhere) {
   ctx_type ctx;
-  build_decomposed(ctx, K, G, /*recompute=*/false);
+  build_decomposed(ctx, K, G);
 
   u::material_point_evaluator<policy>::config cfg;
   cfg.strain_source = "strain_in";
   cfg.stress_source = "elastic";  // linear_stress publishes only "stress"
   EXPECT_THROW(u::material_point_evaluator<policy>(ctx, cfg), u::fatal_error);
 
-  cfg.tangent_source = "stiffness";  // the generator
+  cfg.tangent_source = "stiffness";
   EXPECT_NO_THROW(u::material_point_evaluator<policy>(ctx, cfg));
 }
 
 /// The decomposed pair driving a UMAT end to end.
 TEST(TangentSource, DecomposedPairDrivesTheEvaluatorLikeLinearElasticity) {
   ctx_type dec;
-  build_decomposed(dec, K, G, /*recompute=*/false);
+  build_decomposed(dec, K, G);
   u::material_point_evaluator<policy>::config dcfg;
   dcfg.strain_source = "strain_in";
   dcfg.stress_source = "elastic";
