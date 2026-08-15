@@ -207,10 +207,10 @@ private:
     std::unique_ptr<context_type> ctx;
     std::unique_ptr<evaluator_type> solid;
     std::unique_ptr<ps_evaluator_type> ps;
-    /// How many constants the context was built from. The graph is built once
-    /// and reused, so a later call arriving with a different count would mean
-    /// the cached parameters no longer describe this material.
-    std::size_t nprops{0};
+    /// The constants the context was built from. The graph is built once and
+    /// reused, so a later call arriving with different ones would mean the
+    /// cached parameters no longer describe this material.
+    std::vector<double> props;
   };
 
   static std::unordered_map<std::string, thread_state, transparent_string_hash,
@@ -230,16 +230,21 @@ private:
     auto& cache = thread_cache();
     if (auto it = cache.find(key); it != cache.end()) {
       // PROPS cannot vary for a given material name — two *MATERIAL blocks must
-      // have distinct names — so a changed count means the deck contradicts the
-      // cached graph. Checking the size is one comparison; checking the values
-      // is not worth it per integration point.
-      if (it->second.nprops != props.size())
+      // have distinct names — so anything different means the deck contradicts
+      // the cached graph, and the constants baked into it would be silently
+      // wrong for every subsequent call. Comparing the VALUES, not just the
+      // count: a same-length array with different numbers is the case that
+      // actually reaches a material, and NPROPS doubles is nothing next to an
+      // evaluation.
+      if (!std::equal(it->second.props.begin(), it->second.props.end(),
+                      props.begin(), props.end()))
         throw fatal_error(
             "numsim UMAT: material '" + std::string(key) +
-            "' was built from " + std::to_string(it->second.nprops) +
-            " constants but this call supplies " +
-            std::to_string(props.size()) +
-            " — PROPS must be constant for a given material name");
+            "' was built from a different set of " +
+            std::to_string(it->second.props.size()) +
+            " constants than this call supplies — PROPS must be constant for a "
+            "given material name; use distinct *MATERIAL names for distinct "
+            "constants");
       return it->second;
     }
 
@@ -269,7 +274,7 @@ private:
       thread_state ts;
       ts.ctx = std::make_unique<context_type>();
       m.build(*ts.ctx, props);
-      ts.nprops = props.size();
+      ts.props.assign(props.begin(), props.end());
       if (!ts.ctx->is_finalized())
         throw fatal_error(
             "the builder returned without calling finalize() on the context");
