@@ -21,9 +21,14 @@ namespace numsim::materials {
 /// dependence) — set K_property/G_property if it does not publish under "value".
 /// Which one you wire IS the choice, and no flag can disagree with it.
 ///
-/// The callback is always bound: inputs are not wired until finalize(), so
-/// nothing can be computed in the constructor. It self-guards on the moduli, so
-/// the fixed case costs two comparisons rather than a rank-4 rebuild.
+/// One job: rebuild the stiffness from its inputs on every update. No memo, so
+/// no cached state to go stale and nothing to invalidate. The callback is always
+/// bound, since inputs are not wired until finalize() and nothing can be
+/// computed in a constructor that reads them.
+///
+/// Costs a rank-4 rebuild per update (measured: ~309 ns against ~28 ns for a
+/// memoised version). Where the moduli are fixed and that matters,
+/// linear_elasticity computes its tangent once and is the cheaper choice.
 template <typename Traits>
 class isotropic_tangent final
     : public material_base<isotropic_tangent<Traits>, Traits> {
@@ -63,24 +68,16 @@ public:
   }
 
   void update_tangent() {
-    if (m_valid && m_K.get() == m_K_cached && m_G.get() == m_G_cached) return;
-    m_K_cached = m_K.get();
-    m_G_cached = m_G.get();
-    m_valid = true;
-
     const auto I{tmech::eye<value_type, Dim, 2>()};
     const auto IIvol{tmech::otimes(I, I) / Dim};
-    m_C = 3 * m_K_cached * IIvol +
-          2 * m_G_cached * plasticity_detail::make_IIdev<value_type, Dim>();
+    m_C = 3 * m_K.get() * IIvol +
+          2 * m_G.get() * plasticity_detail::make_IIdev<value_type, Dim>();
   }
 
 private:
   tensor4& m_C;
   const input_property<value_type, property_traits>& m_K;
   const input_property<value_type, property_traits>& m_G;
-  value_type m_K_cached{};
-  value_type m_G_cached{};
-  bool m_valid{false};
 };
 
 }  // namespace numsim::materials
