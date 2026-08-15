@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_context.h"
@@ -14,6 +15,7 @@
 #include "numsim-materials/umat/external_state_source.h"
 #include "numsim-materials/umat/material_point_evaluator.h"
 #include "numsim-materials/umat/statev_map.h"
+#include "numsim-materials/umat/tensor_conversion.h"
 
 namespace {
 
@@ -62,11 +64,33 @@ nm::external_strain_source<policy>& build_decomposed(ctx_type& ctx, T k, T g) {
   return src;
 }
 
+/// v * (e1 (x) e1) — a uniaxial strain, built as a tensor expression.
 tensor2 uniaxial(T v) {
-  tensor2 e;
-  e.fill(0.0);
-  e(0, 0) = v;
-  return e;
+  tmech::tensor<T, 3, 1> e1;
+  e1.fill(0.0);
+  e1(0) = 1.0;
+  tensor2 out;
+  out = v * tmech::otimes(e1, e1);
+  return out;
+}
+
+/// The isotropic stiffness the generator should produce, built independently.
+tensor4 isotropic(T k, T g) {
+  const auto I = tmech::eye<T, 3, 2>();
+  const auto IIsym = (tmech::otimesu(I, I) + tmech::otimesl(I, I)) * 0.5;
+  const auto IIvol = tmech::otimes(I, I) / 3.0;
+  tensor4 C;
+  C = 3.0 * k * IIvol + 2.0 * g * (IIsym - IIvol);
+  return C;
+}
+
+/// Exact tensor equality, expressed through tmech rather than a component loop.
+/// norm(a - b) is identically zero only when every component matches.
+template <typename A, typename B>
+::testing::AssertionResult TensorsIdentical(const A& a, const B& b) {
+  const auto d = tmech::norm(a - b);
+  if (d == T{0}) return ::testing::AssertionSuccess();
+  return ::testing::AssertionFailure() << "norm(a - b) = " << d;
 }
 
 // ---------------------------------------------------------------------------
@@ -131,20 +155,13 @@ TEST(TangentGenerator, MatchesLinearElasticityExactly) {
     dec.update();
     mono.update();
 
-    const auto& a = dec.get<tensor2>("elastic", "stress");
-    const auto& b = mono.get<tensor2>("elastic", "stress");
-    for (int i = 0; i < 3; ++i)
-      for (int j = 0; j < 3; ++j)
-        EXPECT_DOUBLE_EQ(a(i, j), b(i, j)) << "step " << step;
+    EXPECT_TRUE(TensorsIdentical(dec.get<tensor2>("elastic", "stress"),
+                                 mono.get<tensor2>("elastic", "stress")))
+        << "step " << step;
   }
 
-  const auto& Cd = dec.get<tensor4>("stiffness", "tangent");
-  const auto& Cm = mono.get<tensor4>("elastic", "tangent");
-  for (int i = 0; i < 3; ++i)
-    for (int j = 0; j < 3; ++j)
-      for (int k = 0; k < 3; ++k)
-        for (int l = 0; l < 3; ++l)
-          EXPECT_DOUBLE_EQ(Cd(i, j, k, l), Cm(i, j, k, l));
+  EXPECT_TRUE(TensorsIdentical(dec.get<tensor4>("stiffness", "tangent"),
+                               mono.get<tensor4>("elastic", "tangent")));
 }
 
 // ---------------------------------------------------------------------------
@@ -171,14 +188,16 @@ TEST(TangentGenerator, TangentIsBuiltOnTheFirstUpdateNotAtConstruction) {
   auto& src = build_decomposed(ctx, K, G);
 
   // Default-constructed until something runs the callback.
-  EXPECT_DOUBLE_EQ(ctx.get<tensor4>("stiffness", "tangent")(0, 0, 0, 0), 0.0);
+  tensor4 zero;
+  zero.fill(0.0);
+  EXPECT_TRUE(TensorsIdentical(ctx.get<tensor4>("stiffness", "tangent"), zero));
 
   const auto eps = uniaxial(0.001);
   src.bind(eps, eps);
   ctx.update();
 
-  EXPECT_NEAR(ctx.get<tensor4>("stiffness", "tangent")(0, 0, 0, 0),
-              K + 4.0 * G / 3.0, 1e-9);
+  EXPECT_TRUE(tmech::almost_equal(ctx.get<tensor4>("stiffness", "tangent"),
+                                  isotropic(K, G), 1e-12));
 }
 
 /// Repeated updates with fixed moduli must keep giving the same answer. The
@@ -190,9 +209,9 @@ TEST(TangentGenerator, RepeatedUpdatesWithFixedModuliAreStable) {
   const auto eps = uniaxial(0.001);
   src.bind(eps, eps);
   ctx.update();
-  const T first = ctx.get<tensor2>("elastic", "stress")(0, 0);
+  const tensor2 first = ctx.get<tensor2>("elastic", "stress");
   for (int i = 0; i < 20; ++i) ctx.update();
-  EXPECT_DOUBLE_EQ(ctx.get<tensor2>("elastic", "stress")(0, 0), first);
+  EXPECT_TRUE(TensorsIdentical(ctx.get<tensor2>("elastic", "stress"), first));
 }
 
 /// And when a modulus does move, the stiffness follows on the next update —
@@ -204,15 +223,18 @@ TEST(TangentGenerator, StiffnessFollowsAChangedModulus) {
   const auto eps = uniaxial(0.001);
   src.bind(eps, eps);
   ctx.update();
-  const T before = ctx.get<tensor2>("elastic", "stress")(0, 0);
-  EXPECT_NEAR(before, (K + 4.0 * G / 3.0) * 0.001, 1e-12);
+  tensor2 expected;
+  expected = tmech::dcontract(isotropic(K, G), eps);
+  EXPECT_TRUE(tmech::almost_equal(ctx.get<tensor2>("elastic", "stress"),
+                                  expected, 1e-12));
 
   // Write the constant material's published value directly.
   ctx.get_mutable<T>("K", "value") = 2 * K;
   ctx.update();
 
-  EXPECT_NEAR(ctx.get<tensor2>("elastic", "stress")(0, 0),
-              (2 * K + 4.0 * G / 3.0) * 0.001, 1e-12);
+  expected = tmech::dcontract(isotropic(2 * K, G), eps);
+  EXPECT_TRUE(tmech::almost_equal(ctx.get<tensor2>("elastic", "stress"),
+                                  expected, 1e-12));
 }
 
 // ---------------------------------------------------------------------------
@@ -271,13 +293,13 @@ TEST(TangentGenerator, DrivesJ2PlasticityIdenticallyToLinearElasticity) {
     ctx.create<nm::j2_plasticity<policy>>(p);
     ctx.finalize();
 
-    std::vector<T> out;
+    std::vector<std::pair<tensor2, T>> out;
     for (int step = 1; step <= 30; ++step) {
       const auto eps = uniaxial(0.02 * step);
       src.bind(eps, eps);
       ctx.update();
-      out.push_back(ctx.get<tensor2>("j2", "stress")(0, 0));
-      out.push_back(ctx.get<T>("j2", "equivalent_plastic_strain"));
+      out.emplace_back(ctx.get<tensor2>("j2", "stress"),
+                       ctx.get<T>("j2", "equivalent_plastic_strain"));
       ctx.commit();
     }
     return out;
@@ -288,8 +310,12 @@ TEST(TangentGenerator, DrivesJ2PlasticityIdenticallyToLinearElasticity) {
   ASSERT_EQ(with_generator.size(), with_monolith.size());
   bool went_plastic = false;
   for (std::size_t i = 0; i < with_generator.size(); ++i) {
-    EXPECT_DOUBLE_EQ(with_generator[i], with_monolith[i]) << "sample " << i;
-    if (i % 2 == 1 && with_generator[i] > 1e-8) went_plastic = true;
+    EXPECT_TRUE(TensorsIdentical(with_generator[i].first,
+                                 with_monolith[i].first))
+        << "stress at step " << i;
+    EXPECT_DOUBLE_EQ(with_generator[i].second, with_monolith[i].second)
+        << "equivalent plastic strain at step " << i;
+    if (with_generator[i].second > 1e-8) went_plastic = true;
   }
   EXPECT_TRUE(went_plastic) << "the path must yield for this to mean anything";
 }
@@ -370,10 +396,17 @@ TEST(TangentSource, DecomposedPairDrivesTheEvaluatorLikeLinearElasticity) {
                     .ddsdde = dd, .statev = dsv});
     meval.evaluate({.stran = stran, .dstran = dstran, .stress = ms,
                     .ddsdde = md, .statev = msv});
-    for (std::size_t i = 0; i < 6; ++i)
-      EXPECT_DOUBLE_EQ(ds[i], ms[i]) << "step " << step << " stress " << i;
-    for (std::size_t i = 0; i < 36; ++i)
-      EXPECT_DOUBLE_EQ(dd[i], md[i]) << "step " << step << " ddsdde " << i;
+
+    // Compare in tensor space rather than slot by slot: a slot permutation on
+    // both sides would cancel in a componentwise check, and the tensors are
+    // what the host actually consumes.
+    EXPECT_TRUE(TensorsIdentical(u::stress_from_buffer<T>(ds),
+                                 u::stress_from_buffer<T>(ms)))
+        << "stress at step " << step;
+    EXPECT_TRUE(TensorsIdentical(u::tangent_from_buffer<T>(dd),
+                                 u::tangent_from_buffer<T>(md)))
+        << "tangent at step " << step;
+
     for (std::size_t i = 0; i < 6; ++i) stran[i] += dstran[i];
   }
 }
