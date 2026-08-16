@@ -24,6 +24,7 @@ add_numsim_test(test_material_point_evaluator test_material_point_evaluator.cpp)
 add_numsim_test(test_plane_stress_evaluator test_plane_stress_evaluator.cpp)
 add_numsim_test(test_umat_interface test_umat_interface.cpp)
 add_numsim_test(test_tangent_generator test_tangent_generator.cpp)
+add_numsim_test(test_weighted_sum test_weighted_sum.cpp)
 target_link_libraries(test_umat_interface PRIVATE Threads::Threads)
 
 # Data dumper for plotting (not a test — standalone executable)
