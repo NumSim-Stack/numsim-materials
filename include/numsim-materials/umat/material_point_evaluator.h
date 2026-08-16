@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -43,7 +44,7 @@ public:
   struct config {
     /// Name of the external_strain_source material.
     std::string strain_source;
-    /// Material producing the stress and tangent the host wants back.
+    /// Material producing the stress the host wants back.
     std::string stress_source;
     std::string stress_property{"stress"};
     std::string tangent_property{"tangent"};
@@ -59,6 +60,14 @@ public:
     /// Additional host-owned history to keep out of STATEV, beyond the strain
     /// and time sources (which are excluded automatically).
     std::vector<statev_exclusion> extra_exclusions{};
+    /// Unset means "same as stress_source", which is how monolithic materials
+    /// are configured. Set it when the stiffness is its own material.
+    /// optional, not an empty string, so unset and "" stay distinct.
+    ///
+    /// Appended rather than inserted: this header is embedded in third-party
+    /// UMATs, and a new field in the middle would silently re-bind the trailing
+    /// arguments of an existing aggregate initialiser.
+    std::optional<std::string> tangent_source{};
   };
 
   /// One host call's arguments.
@@ -111,8 +120,9 @@ public:
 
     m_stress =
         resolve_property<tensor2>(m_cfg.stress_source, m_cfg.stress_property);
-    m_tangent =
-        resolve_property<tensor4>(m_cfg.stress_source, m_cfg.tangent_property);
+    const std::string& tangent_owner =
+        m_cfg.tangent_source ? *m_cfg.tangent_source : m_cfg.stress_source;
+    m_tangent = resolve_property<tensor4>(tangent_owner, m_cfg.tangent_property);
 
     if (!m_cfg.plastic_strain_property.empty()) {
       const auto src = connection_source::parse(m_cfg.plastic_strain_property);

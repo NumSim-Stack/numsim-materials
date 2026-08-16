@@ -6,7 +6,10 @@
 #include "numsim-materials/solvers/backward_euler.h"
 #include "numsim-materials/solvers/vector_newton.h"
 #include "numsim-materials/materials/scalar_stepper.h"
+#include "numsim-materials/materials/constant_scalar.h"
+#include "numsim-materials/materials/isotropic_tangent.h"
 #include "numsim-materials/materials/linear_elasticity.h"
+#include "numsim-materials/materials/linear_stress.h"
 #include "numsim-materials/materials/autocatalytic_reaction.h"
 #include "numsim-materials/materials/tensor_component_stepper.h"
 #include "numsim-materials/materials/scalar_identity_weight.h"
@@ -69,6 +72,9 @@ void register_default_materials() {
   auto& factory = material_factory<Traits>::instance();
   factory.template register_type<scalar_stepper<Traits>>("scalar_stepper");
   factory.template register_type<linear_elasticity<Traits>>("linear_elasticity");
+  factory.template register_type<constant_scalar<Traits>>("constant_scalar");
+  factory.template register_type<isotropic_tangent<Traits>>("isotropic_tangent");
+  factory.template register_type<linear_stress<Traits>>("linear_stress");
   factory.template register_type<autocatalytic_reaction<Traits>>("autocatalytic_reaction");
   factory.template register_type<backward_euler<Traits>>("backward_euler");
   factory.template register_type<tensor_component_stepper<1, Traits>>("tensor_component_stepper_rank1");
