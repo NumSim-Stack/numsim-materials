@@ -30,7 +30,7 @@ const char* kElastic = R"({
     {"type": "linear_stress", "name": "elastic",
      "tangent_source": "stiffness", "strain_source": "strain_in"}
   ],
-  "props": ["K.value", "G.value"]
+  "constants": ["K::value", "G::value"]
 })";
 
 registry::config elastic_config() {
@@ -100,8 +100,8 @@ TEST(JsonModel, DeckConstantsDriveAModelDefinedEntirelyInJson) {
               300.0 + 4.0 * 140.0 / 3.0, 1e-9);
 }
 
-/// The values written in the document are placeholders for anything listed in
-/// "props" — the deck wins.
+/// Values in the document are placeholders for anything listed in "constants"
+/// — the deck wins.
 TEST(JsonModel, DocumentValuesArePlaceholdersForBoundConstants) {
   // The document says 0 for both; if substitution failed the tangent would be
   // zero rather than wrong-but-plausible.
@@ -119,21 +119,38 @@ TEST(JsonModel, RejectsAMalformedDocument) {
   EXPECT_THROW(u::make_json_builder<policy>(R"({"nope": 1})"), u::fatal_error);
 }
 
-TEST(JsonModel, RejectsAPropsEntryThatIsNotMaterialDotParameter) {
+/// A document using the old "props" spelling would otherwise be accepted with
+/// every constant unbound, leaving the placeholders as the material's moduli —
+/// wrong but plausible, and completely silent.
+TEST(JsonModel, RejectsAnUnrecognisedTopLevelKey) {
+  const char* old_spelling = R"({
+    "materials": [{"type": "constant_scalar", "name": "K", "value": 0}],
+    "props": ["K::value"]
+  })";
+  EXPECT_THROW(u::make_json_builder<policy>(old_spelling), u::fatal_error);
+
+  const char* typo = R"({
+    "materials": [{"type": "constant_scalar", "name": "K", "value": 0}],
+    "constant": ["K::value"]
+  })";
+  EXPECT_THROW(u::make_json_builder<policy>(typo), u::fatal_error);
+}
+
+TEST(JsonModel, RejectsAConstantsEntryThatIsNotQualified) {
   const char* doc = R"({
     "materials": [{"type": "constant_scalar", "name": "K", "value": 0}],
-    "props": ["Kvalue"]
+    "constants": ["Kvalue"]
   })";
   EXPECT_THROW(u::make_json_builder<policy>(doc), u::fatal_error);
 }
 
-/// A props entry naming a material the document does not define is a typo that
+/// A constants entry naming a material the document does not define is a typo that
 /// would otherwise substitute nothing and leave the placeholder in place — a
 /// wrong-but-plausible modulus rather than an error.
-TEST(JsonModel, RejectsAPropsEntryTargetingAnUndefinedMaterial) {
+TEST(JsonModel, RejectsAConstantsEntryTargetingAnUndefinedMaterial) {
   const char* doc = R"({
     "materials": [{"type": "constant_scalar", "name": "K", "value": 0}],
-    "props": ["Gee.value"]
+    "constants": ["Gee::value"]
   })";
   EXPECT_THROW(u::make_json_builder<policy>(doc), u::fatal_error);
 }

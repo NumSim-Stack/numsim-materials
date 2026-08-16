@@ -10,6 +10,7 @@
 #include <nlohmann/json.hpp>
 #include "numsim-materials/default_materials.h"
 #include "numsim-materials/io/json_material_factory.h"
+#include "numsim-materials/core/input_types.h"
 #include "numsim-materials/umat/errors.h"
 #include "numsim-materials/umat/external_state_source.h"
 #include "numsim-materials/umat/umat_interface.h"
@@ -22,8 +23,11 @@
 /// so a new material means editing a config file.
 ///
 /// The document is the one io/json_material_factory already understands, plus
-/// an optional "props" array binding the deck's *USER MATERIAL constants to
-/// named parameters:
+/// an optional "constants" array binding the deck's *USER MATERIAL constants to
+/// named parameters. It is spelled "constants" rather than "props" because in
+/// this library a PROPERTY is a graph node — reusing that word for the deck's
+/// numbers would name two unrelated things the same. "constants" is also what
+/// the deck itself calls them (*USER MATERIAL, CONSTANTS=).
 ///
 ///     {
 ///       "materials": [
@@ -35,14 +39,19 @@
 ///         {"type": "linear_stress", "name": "elastic",
 ///          "tangent_source": "stiffness", "strain_source": "strain_in"}
 ///       ],
-///       "props": ["K.value", "G.value"]
+///       "constants": ["K::value", "G::value"]
 ///     }
 ///
-/// PROPS[i] replaces the parameter named by props[i], written "material.param",
-/// before that material is created. Values in the document are therefore
-/// placeholders for anything listed there. Pairing this with constant_scalar
-/// means a deck constant enters as a graph property, so consumers are ordered
-/// after it and follow it — see materials/isotropic_tangent.h.
+/// PROPS[i] replaces the parameter named by constants[i], written
+/// "material::parameter" — the same qualified-name syntax the rest of the
+/// library uses for wiring ("time::state"), parsed by the same
+/// connection_source::parse. Note the right-hand side is a PARAMETER here, not
+/// a property.
+///
+/// Values written in the document are placeholders for anything listed there.
+/// Pairing this with constant_scalar means a deck constant enters as a graph
+/// property, so consumers are ordered after it and follow it — see
+/// materials/isotropic_tangent.h.
 namespace numsim::materials::umat {
 
 /// Register the host-driven source materials with the runtime factory.
@@ -59,15 +68,18 @@ void register_umat_materials() {
       "external_scalar_source");
 }
 
-/// Split "material.parameter". Both halves must be non-empty.
-inline std::pair<std::string, std::string> split_props_target(
-    const std::string& target) {
-  const auto dot = target.find('.');
-  if (dot == std::string::npos || dot == 0 || dot + 1 == target.size())
+/// Parse a "material::parameter" target with the library's existing splitter,
+/// so this does not invent a second syntax for a qualified name.
+inline connection_source parse_constant_target(const std::string& target) {
+  try {
+    auto src = connection_source::parse(target);
+    if (src.material.empty() || src.property.empty()) throw std::invalid_argument("");
+    return src;
+  } catch (const std::invalid_argument&) {
     throw fatal_error(
-        "json_model: props entry '" + target +
-        "' must be written \"material.parameter\"");
-  return {target.substr(0, dot), target.substr(dot + 1)};
+        "json_model: constants entry '" + target +
+        "' must be written \"material::parameter\"");
+  }
 }
 
 /// Build a registry builder from a JSON document.
@@ -90,26 +102,42 @@ typename umat_registry<Traits>::builder make_json_builder(
   if (!parsed.contains("materials") || !parsed["materials"].is_array())
     throw fatal_error("json_model: the document needs a \"materials\" array");
 
+  // An unrecognised top-level key is a setup fault, not something to ignore.
+  // A document still spelling the binding array "props" would otherwise be
+  // accepted with every constant silently unbound, leaving the placeholders in
+  // the document as the material's moduli. json_to_parameters already warns
+  // about unknown keys per material; this is the same check one level up.
+  for (const auto& [key, value] : parsed.items()) {
+    if (key == "materials" || key == "constants") continue;
+    throw fatal_error(
+        "json_model: unrecognised top-level key \"" + key +
+        "\"; the document takes \"materials\" and \"constants\"" +
+        (key == "props" ? " (the binding array is named \"constants\", since "
+                          "\"property\" already means a graph node here)"
+                        : ""));
+  }
+
   // Validate the props bindings now rather than on first use, so a typo is
   // reported when the model is registered rather than mid-analysis.
-  std::vector<std::pair<std::string, std::string>> bindings;
-  if (parsed.contains("props")) {
-    if (!parsed["props"].is_array())
-      throw fatal_error("json_model: \"props\" must be an array of "
-                        "\"material.parameter\" strings");
-    for (const auto& entry : parsed["props"]) {
+  std::vector<connection_source> bindings;
+  if (parsed.contains("constants")) {
+    if (!parsed["constants"].is_array())
+      throw fatal_error("json_model: \"constants\" must be an array of "
+                        "\"material::parameter\" strings");
+    for (const auto& entry : parsed["constants"]) {
       if (!entry.is_string())
-        throw fatal_error("json_model: every \"props\" entry must be a string");
-      auto binding = split_props_target(entry.get<std::string>());
+        throw fatal_error(
+            "json_model: every \"constants\" entry must be a string");
+      auto binding = parse_constant_target(entry.get<std::string>());
       const bool known = std::any_of(
           parsed["materials"].begin(), parsed["materials"].end(),
           [&](const nlohmann::json& m) {
             return m.contains("name") &&
-                   m["name"].get<std::string>() == binding.first;
+                   m["name"].get<std::string>() == binding.material;
           });
       if (!known)
-        throw fatal_error("json_model: props entry targets material '" +
-                          binding.first +
+        throw fatal_error("json_model: constants entry targets material '" +
+                          binding.material +
                           "', which the document does not define");
       bindings.push_back(std::move(binding));
     }
@@ -136,8 +164,8 @@ typename umat_registry<Traits>::builder make_json_builder(
     for (std::size_t i = 0; i < bindings.size(); ++i)
       for (auto& material : doc["materials"])
         if (material.contains("name") &&
-            material["name"].get<std::string>() == bindings[i].first)
-          material[bindings[i].second] = props[i];
+            material["name"].get<std::string>() == bindings[i].material)
+          material[bindings[i].property] = props[i];
 
     for (const auto& material : doc["materials"])
       create_from_json<Traits>(ctx, material);
