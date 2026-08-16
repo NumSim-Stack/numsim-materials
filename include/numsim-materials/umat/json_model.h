@@ -52,6 +52,13 @@
 /// Pairing this with constant_scalar means a deck constant enters as a graph
 /// property, so consumers are ordered after it and follow it — see
 /// materials/isotropic_tangent.h.
+///
+/// An entry naming a props_scalar binds the SLOT rather than the value: that
+/// material is told which constant it owns and reads the number from the host
+/// on every call, instead of having it baked into the graph. The document is
+/// otherwise unchanged — swap constant_scalar for props_scalar and nothing
+/// downstream notices — which is what a host with genuinely varying constants
+/// needs, CalculiX interpolating them by temperature being the case in hand.
 namespace numsim::materials::umat {
 
 /// Register the host-driven source materials with the runtime factory.
@@ -162,10 +169,20 @@ typename umat_registry<Traits>::builder make_json_builder(
     // a second thread building the same model is unaffected.
     nlohmann::json doc = parsed;
     for (std::size_t i = 0; i < bindings.size(); ++i)
-      for (auto& material : doc["materials"])
-        if (material.contains("name") &&
-            material["name"].get<std::string>() == bindings[i].material)
+      for (auto& material : doc["materials"]) {
+        if (!material.contains("name") ||
+            material["name"].get<std::string>() != bindings[i].material)
+          continue;
+        // Same binding, two binding TIMES. A props_scalar is told which slot it
+        // owns and reads the number on every call; anything else has the number
+        // copied in now and keeps it for the life of the graph. The position in
+        // "constants" is the slot either way, so the document says the same
+        // thing and only the material type decides when it is read.
+        if (material.value("type", std::string{}) == "props_scalar")
+          material["index"] = i;
+        else
           material[bindings[i].property] = props[i];
+      }
 
     for (const auto& material : doc["materials"])
       create_from_json<Traits>(ctx, material);

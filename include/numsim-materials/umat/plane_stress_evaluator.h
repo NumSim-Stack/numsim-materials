@@ -66,6 +66,17 @@ public:
   /// Iterations the last evaluate() needed, for diagnostics.
   [[nodiscard]] int last_iterations() const noexcept { return m_last_iters; }
 
+  /// Bind the host's constants once for the whole out-of-plane solve. They do
+  /// not depend on the iterate, so binding inside the loop would be repeated
+  /// work with no effect.
+  void bind_props(std::span<const value_type> props) {
+    m_inner->bind_props(props);
+  }
+
+  [[nodiscard]] bool has_live_props() const noexcept {
+    return m_inner->has_live_props();
+  }
+
   void evaluate(const call& c) {
     if (c.statev.size() < nstatv())
       throw fatal_error(

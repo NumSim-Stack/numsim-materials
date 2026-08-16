@@ -179,10 +179,13 @@ public:
   void evaluate(std::string_view cmname, std::span<const double> props,
                 const call& c) {
     auto& ts = thread_state_for(cmname, props);
-    if (c.ec == element_case::plane_stress)
+    if (c.ec == element_case::plane_stress) {
+      ts.ps->bind_props(props);
       ts.ps->evaluate(c);
-    else
+    } else {
+      ts.solid->bind_props(props);
       ts.solid->evaluate(c);
+    }
   }
 
   /// Drop this thread's cached contexts. Only needed if models are
@@ -236,7 +239,13 @@ private:
       // count: a same-length array with different numbers is the case that
       // actually reaches a material, and NPROPS doubles is nothing next to an
       // evaluation.
-      if (!std::equal(it->second.props.begin(), it->second.props.end(),
+      //
+      // Unless the model reads its constants per call, in which case a changed
+      // array is the point rather than a contradiction: nothing was baked into
+      // the graph for it to contradict. material_point_evaluator::bind_props
+      // does the range check those models actually need.
+      if (!it->second.solid->has_live_props() &&
+          !std::equal(it->second.props.begin(), it->second.props.end(),
                       props.begin(), props.end()))
         throw fatal_error(
             "numsim UMAT: material '" + std::string(key) +

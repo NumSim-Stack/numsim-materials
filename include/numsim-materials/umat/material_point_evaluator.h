@@ -1,6 +1,7 @@
 #ifndef NUMSIM_MATERIALS_UMAT_MATERIAL_POINT_EVALUATOR_H
 #define NUMSIM_MATERIALS_UMAT_MATERIAL_POINT_EVALUATOR_H
 
+#include <algorithm>
 #include <cstddef>
 #include <memory>
 #include <optional>
@@ -11,6 +12,7 @@
 
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_context.h"
+#include "numsim-materials/materials/props_scalar.h"
 #include "numsim-materials/umat/errors.h"
 #include "numsim-materials/umat/external_state_source.h"
 #include "numsim-materials/umat/statev_map.h"
@@ -130,6 +132,15 @@ public:
     }
 
     m_statev = std::make_unique<statev_map<Traits>>(m_ctx, exclusions);
+
+    // Materials that read the host's constants on every call. Collected rather
+    // than configured: listing them would be a second place to keep in step
+    // with the graph, and a missed entry is a silently stale modulus.
+    for (auto* material : m_ctx.materials())
+      if (auto* reader = dynamic_cast<props_scalar<Traits>*>(material)) {
+        m_props_readers.push_back(reader);
+        m_props_needed = std::max(m_props_needed, reader->index() + 1);
+      }
   }
 
   /// Doubles this material needs in STATEV — what *DEPVAR must be at least.
@@ -208,6 +219,33 @@ public:
 
     stress_to_buffer<value_type>(*m_stress, stress6);
     tangent_to_buffer<value_type>(*m_tangent, tangent36);
+  }
+
+  /// Copy the host's material constants into the graph.
+  ///
+  /// Call once per host call, BEFORE evaluate()/evaluate_canonical(). Separate
+  /// from `call` on purpose: the plane-stress solve runs the graph repeatedly
+  /// for one host call, and the constants are the same for every iterate, so
+  /// they bind once outside that loop.
+  ///
+  /// A no-op unless the model contains props_scalar materials — a model whose
+  /// constants were baked in at build time never reaches the loop.
+  void bind_props(std::span<const value_type> props) {
+    if (m_props_readers.empty()) return;
+    if (props.size() < m_props_needed)
+      throw fatal_error(
+          "material_point_evaluator: the model reads " +
+          std::to_string(m_props_needed) +
+          " host constants but this call supplied " +
+          std::to_string(props.size()) + " — check *USER MATERIAL, CONSTANTS=");
+    for (auto* reader : m_props_readers) reader->bind(props);
+  }
+
+  /// True when the constants are read per call rather than baked into the
+  /// graph. The registry uses this to decide whether a changed PROPS array
+  /// contradicts the cached context or is simply the model working as intended.
+  [[nodiscard]] bool has_live_props() const noexcept {
+    return !m_props_readers.empty();
   }
 
   /// Write the updated history back. No commit(): the host owns the timestep.
@@ -347,6 +385,8 @@ private:
   const numsim_core::history_property<tensor2, property_traits>*
       m_plastic_strain{nullptr};
   std::unique_ptr<statev_map<Traits>> m_statev;
+  std::vector<props_scalar<Traits>*> m_props_readers;
+  std::size_t m_props_needed{0};
 };
 
 }  // namespace numsim::materials::umat
