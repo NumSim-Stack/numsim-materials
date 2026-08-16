@@ -51,6 +51,24 @@ else()
   FetchContent_MakeAvailable(tmech)
 endif()
 
+# --- Dependencies (nlohmann/json for the configuration layer) ---
+# Fetched rather than left optional. Model configuration is meant to be JSON
+# driven, so a build without it is missing the primary way to define a material,
+# not an extra. It was previously reached only via __has_include against whatever
+# happened to be installed system-wide, which meant the JSON tests silently
+# vanished on a machine without it.
+find_package(nlohmann_json 3.11 QUIET)
+if(NOT nlohmann_json_FOUND)
+  FetchContent_Declare(
+    nlohmann_json
+    GIT_REPOSITORY https://github.com/nlohmann/json
+    GIT_TAG v3.11.3
+    GIT_SHALLOW TRUE
+  )
+  set(JSON_BuildTests OFF CACHE INTERNAL "")
+  FetchContent_MakeAvailable(nlohmann_json)
+endif()
+
 # --- Dependencies (Eigen for linear algebra) ---
 find_package(Eigen3 QUIET)
 if(NOT Eigen3_FOUND)
@@ -76,7 +94,7 @@ target_include_directories(${PROJECT_NAME}
 )
 
 target_compile_features(${PROJECT_NAME} INTERFACE cxx_std_23)
-target_link_libraries(${PROJECT_NAME} INTERFACE numsim-core)
+target_link_libraries(${PROJECT_NAME} INTERFACE numsim-core nlohmann_json::nlohmann_json)
 
 # tmech is header-only — add its include path without linking a target
 # (linking would pull it into the install export set)
