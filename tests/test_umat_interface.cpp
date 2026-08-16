@@ -166,6 +166,10 @@ struct Registration {
     // against an already-built name the NPROPS-consistency check fires first
     // and require_props is never reached.
     registry::instance().register_model("COLDNAME", build_deck_elastic, de);
+    // Likewise used by exactly one test: it has to warm the cache itself with a
+    // known set of constants, so any other test touching it would decide the
+    // outcome.
+    registry::instance().register_model("VALUEPROBE", build_deck_elastic, de);
 
     // Deliberately lower-case, to prove the registry folds case on both sides.
     registry::config lc;
@@ -765,6 +769,35 @@ TEST(UmatInterface, ChangingNpropsForTheSameNameIsFatal) {
   call_umat("STIFF", stress, statev.data(), ddsdde, stran, dstran, 0.0, 0.1, 3,
             3, 6, 0, &pnewdt, nullptr, nullptr, nullptr, nullptr, three, 3);
   EXPECT_EQ(FatalProbe::count, 1);
+  EXPECT_NE(FatalProbe::last.find("constant"), std::string::npos)
+      << FatalProbe::last;
+}
+
+/// The same contradiction with the count held fixed — two constants either way,
+/// different numbers. This is the case that actually reaches a material: a
+/// count check accepts it and every subsequent call silently returns the FIRST
+/// call's stiffness, giving a converged analysis with the wrong moduli.
+TEST(UmatInterface, ChangingPropsValuesForTheSameNameIsFatal) {
+  FatalProbe probe;
+  std::vector<T> statev(1, 0.0);
+  const T stran[6] = {0, 0, 0, 0, 0, 0};
+  const T dstran[6] = {0.001, 0, 0, 0, 0, 0};
+  T stress[6] = {0}, ddsdde[36] = {0}, pnewdt = 1.0;
+  const T soft[2] = {100.0, 40.0};
+  const T stiff[2] = {300.0, 140.0};
+
+  // Builds the context, and shows which constants it was built from.
+  call_umat("VALUEPROBE", stress, statev.data(), ddsdde, stran, dstran, 0.0, 0.1,
+            3, 3, 6, 0, &pnewdt, nullptr, nullptr, nullptr, nullptr, soft, 2);
+  ASSERT_EQ(FatalProbe::count, 0);
+  ASSERT_NEAR(ddsdde[0], 100.0 + 4.0 * 40.0 / 3.0, 1e-9);
+
+  // Same name, same count, different values.
+  call_umat("VALUEPROBE", stress, statev.data(), ddsdde, stran, dstran, 0.0, 0.1,
+            3, 3, 6, 0, &pnewdt, nullptr, nullptr, nullptr, nullptr, stiff, 2);
+  EXPECT_EQ(FatalProbe::count, 1)
+      << "a same-length PROPS with different numbers must be reported, not "
+         "silently served from the cached graph";
   EXPECT_NE(FatalProbe::last.find("constant"), std::string::npos)
       << FatalProbe::last;
 }
