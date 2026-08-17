@@ -395,6 +395,41 @@ T uniaxial_tangent(const std::string& name, const T* props, int nprops) {
   return ddsdde[0];
 }
 
+/// The registry's plane-stress dispatch, which binds through a different call
+/// than the solid path. PropsScalar.PlaneStressUsesTheLiveConstants covers the
+/// evaluator's forward; nothing covered the registry line that calls it, so
+/// deleting it passed the whole suite.
+TEST(PropsScalarJson, PlaneStressBindsThroughTheRegistry) {
+  constexpr T K = 100.0, G = 40.0;
+  const T props[2] = {K, G};
+  const fortran_name cm("LIVEELASTIC");
+
+  T statev[2] = {0, 0};
+  const T stran[3] = {0, 0, 0};
+  const T dstran[3] = {0.001, 0, 0};
+  T stress[3] = {0}, ddsdde[9] = {0}, pnewdt = 1.0;
+  T sse = 0, spd = 0, scd = 0, rpl = 0, ddsddt[3] = {0}, drplde[3] = {0};
+  T drpldt = 0;
+  const T time[2] = {0, 0};
+  T dtime = 0.1;
+  const T temp = 0, dtemp = 0, predef = 0, dpred = 0, celent = 1;
+  const T coords[3] = {0}, drot[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+  const T dfg[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+  int noel = 1, npt = 1, layer = 1, kspt = 1, jstep = 1, kinc = 1;
+  int ndi = 2, nshr = 1, ntens = 3, nstatv = 2, nprops = 2;
+
+  umat_(stress, statev, ddsdde, &sse, &spd, &scd, &rpl, ddsddt, drplde, &drpldt,
+        stran, dstran, time, &dtime, &temp, &dtemp, &predef, &dpred, cm.buf,
+        &ndi, &nshr, &ntens, &nstatv, props, &nprops, coords, drot, &pnewdt,
+        &celent, dfg, dfg, &noel, &npt, &layer, &kspt, &jstep, &kinc, 80);
+
+  EXPECT_DOUBLE_EQ(pnewdt, 1.0);
+  const T E = 9 * K * G / (3 * K + G);
+  const T nu = (3 * K - 2 * G) / (2 * (3 * K + G));
+  EXPECT_NEAR(ddsdde[0], E / (1 - nu * nu), 1e-9)
+      << "the constants must reach the material on the plane-stress path too";
+}
+
 /// Position is the slot: no "index" in the document, yet K takes PROPS[0].
 TEST(PropsScalarJson, ConstantsPositionBindsTheSlot) {
   const T props[2] = {250.0, 90.0};
