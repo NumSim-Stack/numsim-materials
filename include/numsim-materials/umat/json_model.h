@@ -2,9 +2,11 @@
 #define NUMSIM_MATERIALS_UMAT_JSON_MODEL_H
 
 #include <algorithm>
+#include <cstddef>
 #include <mutex>
 #include <span>
 #include <string>
+#include <typeindex>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -118,18 +120,36 @@ void require_declared_parameter(const nlohmann::json& material,
   // free to name a material the caller registers later.
   if (!factory.contains(type)) return;
 
+  // Declared AND numeric. Every material declares "name", and most declare
+  // *_source strings, so checking mere existence accepts targets that can only
+  // fail later — with a JSON type error rather than anything about decks.
   const auto wanted = bound_parameter(material, binding).parameter;
-  std::vector<std::string> declared;
-  for (const auto& [key, unused] : factory.schema(type)) declared.push_back(key);
-  if (std::find(declared.begin(), declared.end(), wanted) != declared.end())
-    return;
+  const auto schema = factory.schema(type);
+  std::vector<std::string> numeric;
+  bool declared = false, wanted_is_numeric = false;
+  for (const auto& [key, param] : schema) {
+    const auto tid = param->type_id();
+    const bool is_num = tid == std::type_index(typeid(double)) ||
+                        tid == std::type_index(typeid(float)) ||
+                        tid == std::type_index(typeid(int)) ||
+                        tid == std::type_index(typeid(std::size_t));
+    if (is_num) numeric.push_back(key);
+    if (key == wanted) {
+      declared = true;
+      wanted_is_numeric = is_num;
+    }
+  }
+  if (declared && wanted_is_numeric) return;
 
+  std::sort(numeric.begin(), numeric.end());
   std::string known;
-  std::sort(declared.begin(), declared.end());
-  for (const auto& key : declared) known += (known.empty() ? "" : ", ") + key;
-  throw fatal_error("json_model: constants entry '" + target +
-                    "' names parameter '" + wanted + "', which " + type +
-                    " does not declare — it takes: " + known);
+  for (const auto& key : numeric) known += (known.empty() ? "" : ", ") + key;
+  throw fatal_error(
+      "json_model: constants entry '" + target + "' names " +
+      (declared
+           ? "'" + wanted + "', which " + type + " does not take as a number"
+           : "parameter '" + wanted + "', which " + type + " does not declare") +
+      " — a host constant can bind: " + (known.empty() ? "(nothing)" : known));
 }
 
 /// Parse a "material::parameter" target with the library's existing splitter,
