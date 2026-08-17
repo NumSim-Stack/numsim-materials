@@ -15,16 +15,11 @@
 #include "numsim-materials/umat/external_state_source.h"
 #include "numsim-materials/umat/umat_interface.h"
 
-/// Define a UMAT model from JSON rather than from compiled C++.
+/// Define a UMAT model from JSON rather than compiled C++, so a new material is
+/// a config edit and not a rebuild of the shared library.
 ///
-/// A builder written as a lambda means rebuilding the shared library for every
-/// new material. This turns a document into the same builder the registry
-/// takes, so a new material is a config edit.
-///
-/// The document is io/json_material_factory's, plus an optional "constants"
-/// array binding the deck's *USER MATERIAL constants to named parameters.
-/// Spelled "constants", not "props": a PROPERTY here is a graph node, and it is
-/// what the deck calls them (*USER MATERIAL, CONSTANTS=).
+/// io/json_material_factory's document, plus an optional "constants" array
+/// binding the deck's *USER MATERIAL constants to named parameters:
 ///
 ///     {
 ///       "materials": [
@@ -39,14 +34,13 @@
 ///       "constants": ["K::value", "G::value"]
 ///     }
 ///
-/// PROPS[i] replaces the parameter named by constants[i], written
-/// "material::parameter" — the library's existing qualified-name syntax
-/// ("time::state"), parsed by connection_source::parse. The right-hand side is
-/// a PARAMETER, not a property.
+/// PROPS[i] replaces the PARAMETER named by constants[i], in the library's own
+/// qualified-name syntax ("time::state") and parsed by the same
+/// connection_source::parse. Values in the document are placeholders for
+/// anything listed there.
 ///
-/// Values in the document are placeholders for anything listed there. Paired
-/// with constant_scalar, a deck constant enters as a graph property, so
-/// consumers are ordered after it — see materials/isotropic_tangent.h.
+/// Named "constants", not "props": a PROPERTY here is a graph node, and it is
+/// what the deck calls them (*USER MATERIAL, CONSTANTS=).
 namespace numsim::materials::umat {
 
 /// Host-driven source materials. Kept out of register_default_materials() so
