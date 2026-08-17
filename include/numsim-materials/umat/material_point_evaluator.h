@@ -62,13 +62,10 @@ public:
     /// Additional host-owned history to keep out of STATEV, beyond the strain
     /// and time sources (which are excluded automatically).
     std::vector<statev_exclusion> extra_exclusions{};
-    /// Unset means "same as stress_source", which is how monolithic materials
-    /// are configured. Set it when the stiffness is its own material.
-    /// optional, not an empty string, so unset and "" stay distinct.
-    ///
-    /// Appended rather than inserted: this header is embedded in third-party
-    /// UMATs, and a new field in the middle would silently re-bind the trailing
-    /// arguments of an existing aggregate initialiser.
+    /// Unset means "same as stress_source"; set it when the stiffness is its
+    /// own material. Optional rather than "" so the two stay distinct, and
+    /// APPENDED — a field inserted mid-struct would silently re-bind the
+    /// trailing arguments of an existing aggregate initialiser.
     std::optional<std::string> tangent_source{};
   };
 

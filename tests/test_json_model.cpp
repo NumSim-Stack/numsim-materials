@@ -18,8 +18,7 @@ using policy = nm::material_policy_default;
 using T = policy::value_type;
 using registry = u::umat_registry<policy>;
 
-/// Elastic model with the moduli bound to the deck's constants. Nothing here is
-/// compiled: adding a material means editing this string.
+/// Moduli bound to the deck's constants; nothing here is compiled.
 const char* kElastic = R"({
   "materials": [
     {"type": "external_strain_source", "name": "strain_in"},
@@ -88,8 +87,8 @@ const Registration registration_{};
 
 // ---------------------------------------------------------------------------
 
-/// The point of the whole exercise: the model is a document, the constants come
-/// from the deck, and neither requires recompiling the UMAT.
+/// The point: the model is a document and the constants come from the deck,
+/// with no recompile either way.
 TEST(JsonModel, DeckConstantsDriveAModelDefinedEntirelyInJson) {
   const T soft[2] = {100.0, 40.0};
   const T stiff[2] = {300.0, 140.0};
@@ -119,9 +118,8 @@ TEST(JsonModel, RejectsAMalformedDocument) {
   EXPECT_THROW(u::make_json_builder<policy>(R"({"nope": 1})"), u::fatal_error);
 }
 
-/// A document using the old "props" spelling would otherwise be accepted with
-/// every constant unbound, leaving the placeholders as the material's moduli —
-/// wrong but plausible, and completely silent.
+/// The old "props" spelling would be accepted with every constant unbound,
+/// leaving the placeholders as the moduli — wrong, plausible, silent.
 TEST(JsonModel, RejectsAnUnrecognisedTopLevelKey) {
   const char* old_spelling = R"({
     "materials": [{"type": "constant_scalar", "name": "K", "value": 0}],
@@ -144,12 +142,10 @@ TEST(JsonModel, RejectsAConstantsEntryThatIsNotQualified) {
   EXPECT_THROW(u::make_json_builder<policy>(doc), u::fatal_error);
 }
 
-/// The other half of the target. nlohmann::json CREATES a missing key rather
-/// than failing, so a misspelled parameter would be written where nothing reads
-/// it while the real one kept the document's placeholder: with K=7 as the
-/// placeholder and the deck supplying 250, the tangent came back
-/// 7 + 4(90)/3 = 127 instead of 370, behind nothing louder than a stderr
-/// warning.
+/// The other half of the target. json CREATES a missing key rather than
+/// failing, so a misspelled parameter went where nothing reads it while the
+/// real one kept its placeholder: 7 + 4(90)/3 = 127 instead of 370, behind
+/// nothing louder than a stderr warning.
 TEST(JsonModel, RejectsAConstantsEntryNamingAnUndeclaredParameter) {
   const char* doc = R"({
     "materials": [
@@ -159,8 +155,7 @@ TEST(JsonModel, RejectsAConstantsEntryNamingAnUndeclaredParameter) {
   })";
   EXPECT_THROW(u::make_json_builder<policy>(doc), u::fatal_error);
 
-  // The correctly spelled one still registers, so the check is not simply
-  // rejecting everything.
+  // The correct spelling still registers.
   const char* good = R"({
     "materials": [
       {"type": "constant_scalar", "name": "K", "value": 7.0}
@@ -170,9 +165,9 @@ TEST(JsonModel, RejectsAConstantsEntryNamingAnUndeclaredParameter) {
   EXPECT_NO_THROW(u::make_json_builder<policy>(good));
 }
 
-/// Repeating a target makes the later host constant overwrite the earlier, so
-/// one deck value is dropped and whatever it should have bound keeps its
-/// placeholder — a zero modulus, in the case that prompted this.
+/// A repeat overwrites, dropping one deck value and leaving what it should
+/// have bound at its placeholder — a zero modulus, in the case that prompted
+/// this.
 TEST(JsonModel, RejectsADuplicateConstantsTarget) {
   const char* doc = R"({
     "materials": [
@@ -183,8 +178,8 @@ TEST(JsonModel, RejectsADuplicateConstantsTarget) {
   })";
   EXPECT_THROW(u::make_json_builder<policy>(doc), u::fatal_error);
 
-  // Two entries against the same MATERIAL but different parameters is
-  // legitimate, so the key has to be the whole target.
+  // Two entries against one material with different parameters is legitimate,
+  // so the key is the whole target.
   const char* two_params = R"({
     "materials": [
       {"type": "isotropic_tangent", "name": "stiffness",
@@ -197,9 +192,8 @@ TEST(JsonModel, RejectsADuplicateConstantsTarget) {
   EXPECT_NO_THROW(u::make_json_builder<policy>(two_params));
 }
 
-/// A constants entry naming a material the document does not define is a typo that
-/// would otherwise substitute nothing and leave the placeholder in place — a
-/// wrong-but-plausible modulus rather than an error.
+/// A target naming an undefined material would substitute nothing and leave the
+/// placeholder — a wrong-but-plausible modulus rather than an error.
 TEST(JsonModel, RejectsAConstantsEntryTargetingAnUndefinedMaterial) {
   const char* doc = R"({
     "materials": [{"type": "constant_scalar", "name": "K", "value": 0}],
@@ -208,13 +202,10 @@ TEST(JsonModel, RejectsAConstantsEntryTargetingAnUndefinedMaterial) {
   EXPECT_THROW(u::make_json_builder<policy>(doc), u::fatal_error);
 }
 
-// One material NAME carries one PROPS array, and supplying different constants
-// for a name whose graph is already built is fatal. That belongs to the
-// registry rather than to this layer, so it is tested against the registry
-// directly — see UmatInterface.ChangingPropsValuesForTheSameNameIsFatal.
+// Changing the constants for one material name is fatal, but that belongs to
+// the registry — see UmatInterface.ChangingPropsValuesForTheSameNameIsFatal.
 
-/// Fewer constants than the document binds is a *DEPVAR-style setup error, and
-/// must be fatal rather than a cutback.
+/// Too few constants is a setup error: fatal, not a cutback.
 TEST(JsonModel, TooFewDeckConstantsIsFatal) {
   const T only_one[1] = {100.0};
   const fortran_name cm("JSONELASTIC");
