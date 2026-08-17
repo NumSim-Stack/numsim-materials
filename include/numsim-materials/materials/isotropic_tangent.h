@@ -18,9 +18,10 @@ namespace numsim::materials {
 /// K_property/G_property if it does not publish under "value". Which one you
 /// wire IS the choice, so no flag can disagree with it.
 ///
-/// Rebuilds on every update: no memo, so no cached state to go stale. Costs
-/// ~309 ns against ~28 ns memoised — where the moduli are fixed and that
-/// matters, linear_elasticity computes its tangent once.
+/// Rebuilds on every update: no memo, so no cached state to go stale. The pair
+/// costs ~315 ns per update against ~26 ns for linear_elasticity, which
+/// computes its tangent once — so where the moduli are fixed and 12x matters,
+/// that is still the cheaper material.
 template <typename Traits>
 class isotropic_tangent final
     : public material_base<isotropic_tangent<Traits>, Traits> {
