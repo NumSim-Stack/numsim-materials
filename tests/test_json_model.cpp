@@ -144,6 +144,59 @@ TEST(JsonModel, RejectsAConstantsEntryThatIsNotQualified) {
   EXPECT_THROW(u::make_json_builder<policy>(doc), u::fatal_error);
 }
 
+/// The other half of the target. nlohmann::json CREATES a missing key rather
+/// than failing, so a misspelled parameter would be written where nothing reads
+/// it while the real one kept the document's placeholder: with K=7 as the
+/// placeholder and the deck supplying 250, the tangent came back
+/// 7 + 4(90)/3 = 127 instead of 370, behind nothing louder than a stderr
+/// warning.
+TEST(JsonModel, RejectsAConstantsEntryNamingAnUndeclaredParameter) {
+  const char* doc = R"({
+    "materials": [
+      {"type": "constant_scalar", "name": "K", "value": 7.0}
+    ],
+    "constants": ["K::vlaue"]
+  })";
+  EXPECT_THROW(u::make_json_builder<policy>(doc), u::fatal_error);
+
+  // The correctly spelled one still registers, so the check is not simply
+  // rejecting everything.
+  const char* good = R"({
+    "materials": [
+      {"type": "constant_scalar", "name": "K", "value": 7.0}
+    ],
+    "constants": ["K::value"]
+  })";
+  EXPECT_NO_THROW(u::make_json_builder<policy>(good));
+}
+
+/// Repeating a target makes the later host constant overwrite the earlier, so
+/// one deck value is dropped and whatever it should have bound keeps its
+/// placeholder — a zero modulus, in the case that prompted this.
+TEST(JsonModel, RejectsADuplicateConstantsTarget) {
+  const char* doc = R"({
+    "materials": [
+      {"type": "constant_scalar", "name": "K", "value": 0},
+      {"type": "constant_scalar", "name": "G", "value": 0}
+    ],
+    "constants": ["K::value", "K::value"]
+  })";
+  EXPECT_THROW(u::make_json_builder<policy>(doc), u::fatal_error);
+
+  // Two entries against the same MATERIAL but different parameters is
+  // legitimate, so the key has to be the whole target.
+  const char* two_params = R"({
+    "materials": [
+      {"type": "isotropic_tangent", "name": "stiffness",
+       "K_source": "K", "G_source": "G"},
+      {"type": "constant_scalar", "name": "K", "value": 0},
+      {"type": "constant_scalar", "name": "G", "value": 0}
+    ],
+    "constants": ["stiffness::K_property", "stiffness::G_property"]
+  })";
+  EXPECT_NO_THROW(u::make_json_builder<policy>(two_params));
+}
+
 /// A constants entry naming a material the document does not define is a typo that
 /// would otherwise substitute nothing and leave the placeholder in place — a
 /// wrong-but-plausible modulus rather than an error.
