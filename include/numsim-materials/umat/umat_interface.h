@@ -236,15 +236,27 @@ private:
       // count: a same-length array with different numbers is the case that
       // actually reaches a material, and NPROPS doubles is nothing next to an
       // evaluation.
-      if (!std::equal(it->second.props.begin(), it->second.props.end(),
-                      props.begin(), props.end()))
+      //
+      // Two different faults, so two messages. A wrong count is a deck error;
+      // equal counts with different numbers is a dispatch error, and there the
+      // useful thing is WHICH constant disagrees — a check that only ever
+      // explains is worth the words.
+      if (it->second.props.size() != props.size())
         throw fatal_error(
-            "numsim UMAT: material '" + std::string(key) +
-            "' was built from a different set of " +
+            "numsim UMAT: material '" + std::string(key) + "' was built from " +
             std::to_string(it->second.props.size()) +
-            " constants than this call supplies — PROPS must be constant for a "
-            "given material name; use distinct *MATERIAL names for distinct "
-            "constants");
+            " constants but this call supplies " + std::to_string(props.size()) +
+            " — NPROPS cannot vary for a given material name");
+
+      for (std::size_t i = 0; i < props.size(); ++i)
+        if (it->second.props[i] != props[i])
+          throw fatal_error(
+              "numsim UMAT: material '" + std::string(key) + "' constant " +
+              std::to_string(i + 1) + " was baked into the graph as " +
+              std::to_string(it->second.props[i]) + " but this call supplies " +
+              std::to_string(props[i]) +
+              " — PROPS must be constant for a given material name; use "
+              "distinct *MATERIAL names for distinct constants");
       return it->second;
     }
 
