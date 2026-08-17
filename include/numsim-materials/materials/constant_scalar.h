@@ -7,17 +7,10 @@ namespace numsim::materials {
 
 /// A fixed scalar, published as a graph property.
 ///
-/// Lets a quantity that some material derives from — a modulus, a yield stress —
-/// be a real graph edge instead of a parameter. The consumer is then ordered
-/// after it by the topological sort, which is not true of a parameter: nothing
-/// connects a parameter to the material that reads it.
-///
-/// The property is PLAIN, not history, so statev_map never sees it and it costs
-/// no STATEV slot. Use external_scalar_source instead when the value genuinely
-/// changes per call and a consumer needs its old/new pair.
-///
-/// No update callback: the value is set once, at construction, so the engine
-/// skips this property entirely.
+/// Makes a modulus or yield stress a real edge instead of a parameter, so the
+/// consumer is ordered after it. Plain, not history, so it costs no STATEV
+/// slot; use external_scalar_source when a consumer needs an old/new pair.
+/// No update callback — the value is set once, at construction.
 template <typename Traits>
 class constant_scalar final
     : public material_base<constant_scalar<Traits>, Traits> {

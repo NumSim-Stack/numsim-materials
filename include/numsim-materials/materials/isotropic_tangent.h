@@ -9,26 +9,18 @@ namespace numsim::materials {
 
 /// Isotropic elastic stiffness as a material, with K and G as graph inputs.
 ///
-/// linear_elasticity owns its tangent, and a material reading its own property
-/// creates no graph edge — so elastic::stress sorts before elastic::tangent and
-/// would consume a stale stiffness. Consuming ANOTHER material's property is a
-/// real edge, which the topological sort honours.
+/// A material reading its OWN property creates no edge, so linear_elasticity's
+/// stress sorts before its tangent and would consume a stale stiffness. Reading
+/// another material's property is a real edge the sort honours — which is why
+/// the moduli are inputs rather than parameters.
 ///
-/// The moduli are inputs rather than parameters for the same reason: a
-/// parameter has no edge to the material that reads it, so nothing orders a
-/// change to it against the values derived from it. Wire from constant_scalar
-/// when they are fixed, or from any scalar producer when they vary (temperature
-/// dependence) — set K_property/G_property if it does not publish under "value".
-/// Which one you wire IS the choice, and no flag can disagree with it.
+/// Wire from constant_scalar when fixed, or any scalar producer when they vary;
+/// K_property/G_property if it does not publish under "value". Which one you
+/// wire IS the choice, so no flag can disagree with it.
 ///
-/// One job: rebuild the stiffness from its inputs on every update. No memo, so
-/// no cached state to go stale and nothing to invalidate. The callback is always
-/// bound, since inputs are not wired until finalize() and nothing can be
-/// computed in a constructor that reads them.
-///
-/// Costs a rank-4 rebuild per update (measured: ~309 ns against ~28 ns for a
-/// memoised version). Where the moduli are fixed and that matters,
-/// linear_elasticity computes its tangent once and is the cheaper choice.
+/// Rebuilds on every update: no memo, so no cached state to go stale. Costs
+/// ~309 ns against ~28 ns memoised — where the moduli are fixed and that
+/// matters, linear_elasticity computes its tangent once.
 template <typename Traits>
 class isotropic_tangent final
     : public material_base<isotropic_tangent<Traits>, Traits> {
