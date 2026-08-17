@@ -130,9 +130,8 @@ public:
 
     m_statev = std::make_unique<statev_map<Traits>>(m_ctx, exclusions);
 
-    // Materials that read the host's constants on every call. Collected rather
-    // than configured: listing them would be a second place to keep in step
-    // with the graph, and a missed entry is a silently stale modulus.
+    // Collected rather than configured: a hand-listed set is a second thing to
+    // keep in step with the graph, and a missed entry is a stale modulus.
     for (auto* material : m_ctx.materials())
       if (auto* reader = dynamic_cast<props_scalar<Traits>*>(material)) {
         m_props_readers.push_back(reader);
@@ -200,15 +199,11 @@ public:
                           value_type dtime, value_type* stress6,
                           value_type* tangent36,
                           std::span<const value_type> drot = {}) {
-    // A model that reads its constants per call publishes zero for every one of
-    // them until bind_props() runs. Left to itself that means moduli of zero, an
-    // all-zero DDSDDE and a host that fails to converge with nothing naming the
-    // cause — a plausible number for a modulus, and a degenerate one.
-    //
-    // Catches never-bound, not stale: the plane-stress solve runs this repeatedly
-    // for one host call and must not have to re-bind per iterate, so there is no
-    // way to tell "deliberately the same constants" from "forgot to re-bind".
-    // Under the registry that gap does not exist — it binds on every call.
+    // Every reader publishes zero until bind_props() runs: moduli of zero, an
+    // all-zero DDSDDE, and a host that fails to converge with nothing naming
+    // the cause. Catches never-bound, not stale — the plane-stress solve
+    // re-runs this per iterate without re-binding, so the two are
+    // indistinguishable from here. The registry binds on every call.
     if (!m_props_readers.empty() && !m_props_bound)
       throw fatal_error(
           "material_point_evaluator: this model reads its material constants "
@@ -234,15 +229,10 @@ public:
     tangent_to_buffer<value_type>(*m_tangent, tangent36);
   }
 
-  /// Copy the host's material constants into the graph.
-  ///
-  /// Call once per host call, BEFORE evaluate()/evaluate_canonical(). Separate
-  /// from `call` on purpose: the plane-stress solve runs the graph repeatedly
-  /// for one host call, and the constants are the same for every iterate, so
-  /// they bind once outside that loop.
-  ///
-  /// A no-op unless the model contains props_scalar materials — a model whose
-  /// constants were baked in at build time never reaches the loop.
+  /// Copy the host's material constants into the graph, once per host call and
+  /// before evaluating. Separate from `call` because the plane-stress solve
+  /// runs the graph repeatedly for one call and the constants do not change
+  /// between iterates. A no-op without props_scalar materials.
   void bind_props(std::span<const value_type> props) {
     if (m_props_readers.empty()) return;
     if (props.size() < m_props_needed)
@@ -260,13 +250,12 @@ public:
     return !m_props_readers.empty();
   }
 
-  /// True when host constant @p slot is read per call, so a changed value there
-  /// is the model working as intended rather than a contradiction.
+  /// True when host constant @p slot is read per call, so a change there is
+  /// intended rather than a contradiction.
   ///
-  /// Per slot, not per model: a document may mix the two binding times — a
-  /// temperature-dependent modulus beside a genuinely fixed yield stress — and
-  /// answering this for the whole model would wave the baked constants through
-  /// as well, leaving them silently at their first value.
+  /// Per slot, not per model: a document may mix the two binding times, and
+  /// answering for the whole model would wave the BAKED constants through as
+  /// well, leaving them silently at their first value.
   [[nodiscard]] bool is_live_prop(std::size_t slot) const noexcept {
     return slot < m_live_slots.size() && m_live_slots[slot];
   }

@@ -12,27 +12,22 @@ namespace numsim::materials {
 
 /// A scalar taken from the host's material-constants array on every call.
 ///
-/// constant_scalar bakes its number into the graph at construction, which is
-/// right when the constants are fixed for a material name — Abaqus PROPS,
-/// where two *MATERIAL blocks must have distinct names. This one records only
-/// WHICH slot it owns and reads the number from the host each call, for hosts
-/// whose constants genuinely vary: CalculiX interpolates the *USER MATERIAL
-/// constants by temperature, so they can differ from one call to the next.
+/// constant_scalar bakes its number in at construction, which is right when the
+/// constants are fixed for a material name (Abaqus PROPS). This one records only
+/// WHICH slot it owns, for hosts whose constants vary — CalculiX interpolates
+/// them by temperature.
 ///
-/// Rebuilding the graph per call would also be correct — nothing is retained
-/// between calls — but it measures 22x an evaluation even from a hand-written
-/// builder (6.7 us against 302 ns), against nothing at all for reading a slot.
+/// Rebuilding the graph per call would also be correct, since nothing is
+/// retained between calls, but it measures 22x an evaluation (6.7 us against
+/// 302 ns) where reading a slot is free.
 ///
-/// bind() DEREFERENCES. It never stores the pointer, and that is the whole
-/// safety argument: a host constants array may be a per-call temporary, so a
-/// kept pointer reads a dead stack slot on the next call — and usually returns
-/// the right number anyway, because the slot is commonly reused. That failure
-/// survives every test and breaks somewhere else.
+/// bind() DEREFERENCES and keeps no pointer: a host array may be a per-call
+/// temporary, and a kept pointer would read a dead stack slot next call —
+/// usually returning the right number, because the slot is commonly reused.
 ///
-/// The property is PLAIN and there is NO update callback, exactly as in
-/// constant_scalar. Two consequences, both load-bearing: statev_map never sees
-/// it, so it costs no STATEV slot; and the value is in place before
-/// ctx.update() runs, so where the sort happens to put it cannot matter.
+/// Plain property, no update callback, as constant_scalar: nothing reaches
+/// statev_map, and the value is in place before ctx.update() so ordering
+/// cannot matter.
 ///
 /// Parameters:
 ///   "name":  material name
@@ -48,11 +43,10 @@ public:
   explicit props_scalar(Args&&... args)
       : base(std::forward<Args>(args)...),
         m_value(base::template add_output<value_type>("value")),
-        // By value, not by reference into the parameter store: a later insert()
-        // can relocate anything past the handler's small buffer.
+        // By value: a later insert() can relocate anything past the handler's
+        // small buffer.
         m_index(base::template get_parameter<std::size_t>("index")) {
-    // Until the first bind(). A model that never binds would otherwise publish
-    // whatever the property storage happened to hold.
+    // Until the first bind(), rather than whatever the storage held.
     m_value = value_type{};
   }
 
@@ -64,9 +58,8 @@ public:
 
   /// Copy this material's constant out of the host's array.
   ///
-  /// Callers under the UMAT layer go through material_point_evaluator, which
-  /// range-checks every reader once per call and reports a short array as the
-  /// setup fault it is. The check here is the backstop for direct C++ use.
+  /// material_point_evaluator range-checks every reader once per call, so this
+  /// is the backstop for direct C++ use.
   void bind(std::span<const value_type> props) {
     if (m_index >= props.size())
       throw std::out_of_range(

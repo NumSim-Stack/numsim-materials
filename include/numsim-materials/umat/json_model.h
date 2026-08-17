@@ -77,26 +77,23 @@ void ensure_materials_registered() {
   });
 }
 
-/// What a binding writes into the document.
-///
-/// One function for both the validation and the substitution below: checking
-/// one parameter name and then writing a different one is exactly how a target
-/// ends up half-verified, which is the defect this validation exists to close.
+/// What a binding writes into the document. One function for both the
+/// validation and the substitution below — checking one parameter name and
+/// writing another is how a target ends up half-verified.
 struct constant_binding_target {
   std::string parameter;
-  /// props_scalar is told which SLOT it owns and reads the number itself on
-  /// every call; everything else has the number written in now.
+  /// props_scalar is told its SLOT and reads the number itself each call;
+  /// everything else has the number written in now.
   bool writes_slot{false};
 };
 
 inline constant_binding_target bound_parameter(
     const nlohmann::json& material, const connection_source& binding) {
   if (material.value("type", std::string{}) == "props_scalar") {
-    // The target names the graph property the constant will arrive on, which
-    // props_scalar publishes as "value" just as constant_scalar does. Keeping
-    // the spelling identical across the two binding times is the point —
-    // swapping the type must not force "constants" to be rewritten — so the
-    // parameter actually written ("index") is not what the document says.
+    // The target names the property the constant arrives on — "value", as for
+    // constant_scalar — so swapping the type does not force "constants" to be
+    // rewritten. The parameter written ("index") is therefore not what the
+    // document says.
     if (binding.property != "value")
       throw fatal_error(
           "json_model: a props_scalar target names the property it publishes, "
@@ -245,8 +242,8 @@ typename umat_registry<Traits>::builder make_json_builder(
         if (!material.contains("name") ||
             material["name"].get<std::string>() != bindings[i].material)
           continue;
-        // Same binding, two binding TIMES — resolved by the same function that
-        // validated the target at registration, so the two cannot drift.
+        // Resolved by the function that validated the target, so the two
+        // cannot drift.
         const auto target = bound_parameter(material, bindings[i]);
         material[target.parameter] =
             target.writes_slot ? nlohmann::json(i) : nlohmann::json(props[i]);

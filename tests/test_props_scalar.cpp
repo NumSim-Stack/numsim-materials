@@ -50,8 +50,7 @@ TEST(PropsScalar, PublishesTheConstantAtItsIndex) {
   EXPECT_DOUBLE_EQ(ctx.get<T>("K", "value"), 22.0);
 }
 
-/// Before the first bind the property must be a definite value rather than
-/// whatever the property storage happened to hold.
+/// A definite value before the first bind, not whatever the storage held.
 TEST(PropsScalar, IsZeroBeforeTheFirstBind) {
   ctx_type ctx;
   param_type p;
@@ -74,9 +73,8 @@ TEST(PropsScalar, RejectsAnIndexPastTheSuppliedConstants) {
   EXPECT_THROW(k.bind(std::span<const T>(props, 2)), std::out_of_range);
 }
 
-/// Plain, not history — so it costs no STATEV slot. This is the property that
-/// makes it usable for a modulus at all; external_scalar_source would consume
-/// one slot per constant.
+/// Plain, not history: no STATEV slot. external_scalar_source would cost one
+/// per constant.
 TEST(PropsScalar, CostsNoStatevSlot) {
   ctx_type ctx;
   param_type p;
@@ -167,8 +165,7 @@ T call_once(u::material_point_evaluator<policy>& eval,
   return ddsdde[0];
 }
 
-/// The whole point: the same graph, two different constant sets, two different
-/// stiffnesses — with no rebuild in between.
+/// The point: one graph, two constant sets, two stiffnesses, no rebuild.
 TEST(PropsScalar, ChangedConstantsChangeTheTangentWithoutARebuild) {
   ctx_type ctx;
   build_live(ctx);
@@ -183,13 +180,9 @@ TEST(PropsScalar, ChangedConstantsChangeTheTangentWithoutARebuild) {
   EXPECT_NEAR(call_once(eval, soft), c1111(100.0, 40.0), 1e-9);
 }
 
-/// The stored-pointer trap. A host constants array may be a per-call temporary;
-/// an implementation that kept `const double*` and dereferenced it during
-/// update() would read whatever now occupies that memory.
-///
-/// Here the buffer is deliberately overwritten AFTER bind_props and before the
-/// graph runs. Dereferencing at bind time makes that irrelevant; keeping the
-/// pointer makes the tangent follow the clobbered values.
+/// The stored-pointer trap. The buffer is overwritten AFTER bind_props and
+/// before the graph runs: dereferencing at bind time makes that irrelevant,
+/// keeping the pointer makes the tangent follow the clobbered values.
 TEST(PropsScalar, ReadsTheConstantsAtBindTimeNotAtUpdateTime) {
   ctx_type ctx;
   build_live(ctx);
@@ -219,8 +212,7 @@ TEST(PropsScalar, ReadsTheConstantsAtBindTimeNotAtUpdateTime) {
 }
 
 /// Every reader publishes zero until bind_props runs, so an unbound model would
-/// otherwise evaluate with moduli of zero: an all-zero DDSDDE, a host that fails
-/// to converge, and nothing naming the cause.
+/// evaluate with moduli of zero and an all-zero DDSDDE.
 TEST(PropsScalar, EvaluatingBeforeBindingIsFatal) {
   ctx_type ctx;
   build_live(ctx);
@@ -245,10 +237,8 @@ TEST(PropsScalar, EvaluatingBeforeBindingIsFatal) {
   EXPECT_NEAR(ddsdde[0], c1111(100.0, 40.0), 1e-9);
 }
 
-/// The plane-stress path binds once for the whole out-of-plane solve. Nothing
-/// else here exercises it, and it is the one place binding meets an ITERATIVE
-/// evaluator — if a change moved the bind inside the loop, or dropped the
-/// forward, only this notices.
+/// The one place binding meets an ITERATIVE evaluator. If a change moved the
+/// bind inside the loop, or dropped the forward, only this notices.
 TEST(PropsScalar, PlaneStressUsesTheLiveConstants) {
   ctx_type ctx;
   build_live(ctx);
@@ -270,15 +260,14 @@ TEST(PropsScalar, PlaneStressUsesTheLiveConstants) {
   ps.bind_props(props);
   ps.evaluate(c);
 
-  // Condensed plane-stress modulus, from the constants the host supplied.
+  // Condensed modulus, derived from the constants the host supplied.
   const T E = 9 * K * G / (3 * K + G);
   const T nu = (3 * K - 2 * G) / (2 * (3 * K + G));
   EXPECT_NEAR(ddsdde[0], E / (1 - nu * nu), 1e-9);
   EXPECT_NEAR(stress[2], 0.0, 1e-10) << "sigma_33 must be driven to zero";
 }
 
-/// Too few constants is a *USER MATERIAL setup error, so it must be fatal
-/// rather than something a smaller increment could fix.
+/// Too few constants is a setup error: fatal, not a cutback.
 TEST(PropsScalar, TooFewConstantsIsFatalAtTheEvaluator) {
   ctx_type ctx;
   build_live(ctx);
@@ -288,8 +277,7 @@ TEST(PropsScalar, TooFewConstantsIsFatalAtTheEvaluator) {
   EXPECT_THROW(eval.bind_props(std::span<const T>(only_one, 1)), u::fatal_error);
 }
 
-/// A model with baked constants must not pay for machinery it does not use,
-/// and must still report itself as such to the registry.
+/// A baked-constant model reports itself as such and pays for nothing.
 TEST(PropsScalar, BakedConstantModelsHaveNoLiveProps) {
   ctx_type ctx;
   param_type p;
@@ -325,8 +313,8 @@ TEST(PropsScalar, BakedConstantModelsHaveNoLiveProps) {
 // Through JSON and the real umat_ entry point
 // ---------------------------------------------------------------------------
 
-/// Identical to the baked document except for the material type — which is the
-/// claim the JSON layer makes, so it is worth asserting rather than describing.
+/// Identical to the baked document but for the material type — the claim the
+/// JSON layer makes, so it is asserted rather than described.
 const char* kLive = R"({
   "materials": [
     {"type": "external_strain_source", "name": "strain_in"},
@@ -348,9 +336,8 @@ registry::config json_config() {
   return cfg;
 }
 
-/// K baked, G live, both listed in "constants". A document is free to mix the
-/// two binding times — a temperature-dependent modulus beside a genuinely fixed
-/// one — and the consistency check has to be answered per slot, not per model.
+/// K baked, G live. A document may mix the two binding times, so the
+/// consistency check has to be answered per slot rather than per model.
 const char* kMixed = R"({
   "materials": [
     {"type": "external_strain_source", "name": "strain_in"},
@@ -367,8 +354,8 @@ const char* kMixed = R"({
 struct Registration {
   Registration() {
     u::register_json_model<policy>("LIVEELASTIC", kLive, json_config());
-    // One name per mixed test: each has to warm the cache itself with known
-    // constants, so sharing a name would let test order decide the outcome.
+    // One name per test: each warms the cache itself, so sharing would let
+    // test order decide the outcome.
     u::register_json_model<policy>("MIXEDBAKED", kMixed, json_config());
     u::register_json_model<policy>("MIXEDLIVE", kMixed, json_config());
   }
@@ -408,19 +395,16 @@ T uniaxial_tangent(const std::string& name, const T* props, int nprops) {
   return ddsdde[0];
 }
 
-/// The constants array position is the slot: no "index" appears in the
-/// document, yet K takes PROPS[0] and G takes PROPS[1].
+/// Position is the slot: no "index" in the document, yet K takes PROPS[0].
 TEST(PropsScalarJson, ConstantsPositionBindsTheSlot) {
   const T props[2] = {250.0, 90.0};
   EXPECT_NEAR(uniaxial_tangent("LIVEELASTIC", props, 2), c1111(250.0, 90.0),
               1e-9);
 }
 
-/// The target names the graph property the constant arrives on — "value" — and
-/// not the "index" parameter the builder actually writes. Keeping the spelling
-/// identical to constant_scalar's is what lets the type be swapped without
-/// rewriting "constants", so the wrong spelling has to be rejected rather than
-/// quietly accepted.
+/// The target names the property the constant arrives on — "value" — not the
+/// "index" the builder writes. Identical spelling to constant_scalar is what
+/// lets the type be swapped, so the wrong one is rejected.
 TEST(PropsScalarJson, RejectsATargetNamingIndexRatherThanTheProperty) {
   const char* names_index = R"({
     "materials": [{"type": "props_scalar", "name": "K"}],
@@ -435,9 +419,8 @@ TEST(PropsScalarJson, RejectsATargetNamingIndexRatherThanTheProperty) {
   EXPECT_NO_THROW(u::make_json_builder<policy>(names_property));
 }
 
-/// Same material NAME, changed constants, no rebuild and no fatal error — the
-/// registry's PROPS-consistency check must stand down for a model that reads
-/// its constants per call, because there is nothing baked in to contradict.
+/// The registry's consistency check stands down for live constants: nothing
+/// was baked in for a changed array to contradict.
 TEST(PropsScalarJson, ChangedDeckConstantsAreHonouredNotRejected) {
   const T first[2] = {100.0, 40.0};
   const T second[2] = {300.0, 140.0};
@@ -452,11 +435,9 @@ TEST(PropsScalarJson, ChangedDeckConstantsAreHonouredNotRejected) {
 // Mixed documents: baked and live constants side by side
 // ---------------------------------------------------------------------------
 
-/// Changing a BAKED constant must still be fatal even though the same document
-/// has a live one. Answering has_live_props() for the whole model instead let
-/// this through: G tracked the deck while K silently kept its first value, and
-/// the returned tangent was wrong-but-plausible with no diagnostic — exactly
-/// the failure the check exists to catch.
+/// A changed BAKED constant is still fatal beside a live one. Answering
+/// has_live_props() per model let this through: G tracked the deck while K
+/// kept its first value, with no diagnostic.
 TEST(PropsScalarJson, ChangingABakedConstantIsFatalEvenBesideALiveOne) {
   const T first[2] = {100.0, 40.0};
   const T changed_both[2] = {300.0, 140.0};  // K baked, G live
@@ -473,15 +454,12 @@ TEST(PropsScalarJson, ChangingABakedConstantIsFatalEvenBesideALiveOne) {
   EXPECT_EQ(fatal_count, 1)
       << "a changed baked constant must be reported, not served from the "
          "cached graph because some OTHER constant is live";
-  // The wrong-but-plausible answer this used to return, named so a regression
-  // cannot pass by returning it.
+  // The wrong-but-plausible answer this used to return.
   EXPECT_FALSE(std::abs(got - c1111(100.0, 140.0)) < 1e-9)
       << "K kept its first value while G followed the deck";
 }
 
-/// The other half: with the baked constant left alone, changing only the live
-/// one is honoured. Without this, the fix above could simply reject every mixed
-/// document and still pass.
+/// The other half, so the fix cannot pass by rejecting every mixed document.
 TEST(PropsScalarJson, ChangingOnlyTheLiveConstantIsHonouredInAMixedDocument) {
   const T first[2] = {100.0, 40.0};
   const T live_changed[2] = {100.0, 140.0};  // K unchanged, G changed
