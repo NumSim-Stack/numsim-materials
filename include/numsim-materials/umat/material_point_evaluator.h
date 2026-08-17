@@ -141,6 +141,8 @@ public:
         m_props_readers.push_back(reader);
         m_props_needed = std::max(m_props_needed, reader->index() + 1);
       }
+    m_live_slots.assign(m_props_needed, false);
+    for (const auto* reader : m_props_readers) m_live_slots[reader->index()] = true;
   }
 
   /// Doubles this material needs in STATEV — what *DEPVAR must be at least.
@@ -201,6 +203,20 @@ public:
                           value_type dtime, value_type* stress6,
                           value_type* tangent36,
                           std::span<const value_type> drot = {}) {
+    // A model that reads its constants per call publishes zero for every one of
+    // them until bind_props() runs. Left to itself that means moduli of zero, an
+    // all-zero DDSDDE and a host that fails to converge with nothing naming the
+    // cause — a plausible number for a modulus, and a degenerate one.
+    //
+    // Catches never-bound, not stale: the plane-stress solve runs this repeatedly
+    // for one host call and must not have to re-bind per iterate, so there is no
+    // way to tell "deliberately the same constants" from "forgot to re-bind".
+    // Under the registry that gap does not exist — it binds on every call.
+    if (!m_props_readers.empty() && !m_props_bound)
+      throw fatal_error(
+          "material_point_evaluator: this model reads its material constants "
+          "per call — call bind_props() before evaluating");
+
     // STATEV is the only state store: reload it every call, so a repeated call
     // on an unconverged iterate starts from t_n, not from the previous trial.
     m_statev->unpack(statev);
@@ -239,13 +255,23 @@ public:
           " host constants but this call supplied " +
           std::to_string(props.size()) + " — check *USER MATERIAL, CONSTANTS=");
     for (auto* reader : m_props_readers) reader->bind(props);
+    m_props_bound = true;
   }
 
-  /// True when the constants are read per call rather than baked into the
-  /// graph. The registry uses this to decide whether a changed PROPS array
-  /// contradicts the cached context or is simply the model working as intended.
+  /// True when any constant is read per call rather than baked into the graph.
   [[nodiscard]] bool has_live_props() const noexcept {
     return !m_props_readers.empty();
+  }
+
+  /// True when host constant @p slot is read per call, so a changed value there
+  /// is the model working as intended rather than a contradiction.
+  ///
+  /// Per slot, not per model: a document may mix the two binding times — a
+  /// temperature-dependent modulus beside a genuinely fixed yield stress — and
+  /// answering this for the whole model would wave the baked constants through
+  /// as well, leaving them silently at their first value.
+  [[nodiscard]] bool is_live_prop(std::size_t slot) const noexcept {
+    return slot < m_live_slots.size() && m_live_slots[slot];
   }
 
   /// Write the updated history back. No commit(): the host owns the timestep.
@@ -386,7 +412,9 @@ private:
       m_plastic_strain{nullptr};
   std::unique_ptr<statev_map<Traits>> m_statev;
   std::vector<props_scalar<Traits>*> m_props_readers;
+  std::vector<bool> m_live_slots;
   std::size_t m_props_needed{0};
+  bool m_props_bound{false};
 };
 
 }  // namespace numsim::materials::umat

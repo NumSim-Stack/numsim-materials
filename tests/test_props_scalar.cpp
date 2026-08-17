@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <cmath>
 #include <cstddef>
 #include <span>
 #include <stdexcept>
@@ -217,6 +218,65 @@ TEST(PropsScalar, ReadsTheConstantsAtBindTimeNotAtUpdateTime) {
          "pointer during update()";
 }
 
+/// Every reader publishes zero until bind_props runs, so an unbound model would
+/// otherwise evaluate with moduli of zero: an all-zero DDSDDE, a host that fails
+/// to converge, and nothing naming the cause.
+TEST(PropsScalar, EvaluatingBeforeBindingIsFatal) {
+  ctx_type ctx;
+  build_live(ctx);
+  u::material_point_evaluator<policy> eval(ctx, live_config());
+
+  const T stran[6] = {0, 0, 0, 0, 0, 0};
+  const T dstran[6] = {0.001, 0, 0, 0, 0, 0};
+  std::vector<T> stress(6, 0.0), ddsdde(36, 0.0), statev;
+  u::material_point_evaluator<policy>::call c;
+  c.stran = stran;
+  c.dstran = dstran;
+  c.stress = stress;
+  c.ddsdde = ddsdde;
+  c.statev = statev;
+
+  EXPECT_THROW(eval.evaluate(c), u::fatal_error);
+
+  // Bound, it evaluates normally — the guard must not be a one-way latch.
+  const T props[2] = {100.0, 40.0};
+  eval.bind_props(props);
+  EXPECT_NO_THROW(eval.evaluate(c));
+  EXPECT_NEAR(ddsdde[0], c1111(100.0, 40.0), 1e-9);
+}
+
+/// The plane-stress path binds once for the whole out-of-plane solve. Nothing
+/// else here exercises it, and it is the one place binding meets an ITERATIVE
+/// evaluator — if a change moved the bind inside the loop, or dropped the
+/// forward, only this notices.
+TEST(PropsScalar, PlaneStressUsesTheLiveConstants) {
+  ctx_type ctx;
+  build_live(ctx);
+  u::plane_stress_evaluator<policy> ps(ctx, live_config(), {});
+
+  constexpr T K = 100.0, G = 40.0;
+  const T props[2] = {K, G};
+  const T stran[3] = {0, 0, 0};
+  const T dstran[3] = {0.001, 0, 0};
+  std::vector<T> stress(3, 0.0), ddsdde(9, 0.0), statev(ps.nstatv(), 0.0);
+  u::material_point_evaluator<policy>::call c;
+  c.stran = stran;
+  c.dstran = dstran;
+  c.stress = stress;
+  c.ddsdde = ddsdde;
+  c.statev = statev;
+  c.ec = u::element_case::plane_stress;
+
+  ps.bind_props(props);
+  ps.evaluate(c);
+
+  // Condensed plane-stress modulus, from the constants the host supplied.
+  const T E = 9 * K * G / (3 * K + G);
+  const T nu = (3 * K - 2 * G) / (2 * (3 * K + G));
+  EXPECT_NEAR(ddsdde[0], E / (1 - nu * nu), 1e-9);
+  EXPECT_NEAR(stress[2], 0.0, 1e-10) << "sigma_33 must be driven to zero";
+}
+
 /// Too few constants is a *USER MATERIAL setup error, so it must be fatal
 /// rather than something a smaller increment could fix.
 TEST(PropsScalar, TooFewConstantsIsFatalAtTheEvaluator) {
@@ -288,9 +348,29 @@ registry::config json_config() {
   return cfg;
 }
 
+/// K baked, G live, both listed in "constants". A document is free to mix the
+/// two binding times — a temperature-dependent modulus beside a genuinely fixed
+/// one — and the consistency check has to be answered per slot, not per model.
+const char* kMixed = R"({
+  "materials": [
+    {"type": "external_strain_source", "name": "strain_in"},
+    {"type": "constant_scalar", "name": "K", "value": 0},
+    {"type": "props_scalar", "name": "G"},
+    {"type": "isotropic_tangent", "name": "stiffness",
+     "K_source": "K", "G_source": "G"},
+    {"type": "linear_stress", "name": "elastic",
+     "tangent_source": "stiffness", "strain_source": "strain_in"}
+  ],
+  "constants": ["K::value", "G::value"]
+})";
+
 struct Registration {
   Registration() {
     u::register_json_model<policy>("LIVEELASTIC", kLive, json_config());
+    // One name per mixed test: each has to warm the cache itself with known
+    // constants, so sharing a name would let test order decide the outcome.
+    u::register_json_model<policy>("MIXEDBAKED", kMixed, json_config());
+    u::register_json_model<policy>("MIXEDLIVE", kMixed, json_config());
   }
 };
 const Registration registration_{};
@@ -347,6 +427,50 @@ TEST(PropsScalarJson, ChangedDeckConstantsAreHonouredNotRejected) {
               1e-9);
   EXPECT_NEAR(uniaxial_tangent("LIVEELASTIC", second, 2), c1111(300.0, 140.0),
               1e-9);
+}
+
+// ---------------------------------------------------------------------------
+// Mixed documents: baked and live constants side by side
+// ---------------------------------------------------------------------------
+
+/// Changing a BAKED constant must still be fatal even though the same document
+/// has a live one. Answering has_live_props() for the whole model instead let
+/// this through: G tracked the deck while K silently kept its first value, and
+/// the returned tangent was wrong-but-plausible with no diagnostic — exactly
+/// the failure the check exists to catch.
+TEST(PropsScalarJson, ChangingABakedConstantIsFatalEvenBesideALiveOne) {
+  const T first[2] = {100.0, 40.0};
+  const T changed_both[2] = {300.0, 140.0};  // K baked, G live
+
+  ASSERT_NEAR(uniaxial_tangent("MIXEDBAKED", first, 2), c1111(100.0, 40.0),
+              1e-9);
+
+  int fatal_count = 0;
+  static int* counter = &fatal_count;
+  u::set_fatal_handler([](const char*) { ++*counter; });
+  const T got = uniaxial_tangent("MIXEDBAKED", changed_both, 2);
+  u::set_fatal_handler(nullptr);
+
+  EXPECT_EQ(fatal_count, 1)
+      << "a changed baked constant must be reported, not served from the "
+         "cached graph because some OTHER constant is live";
+  // The wrong-but-plausible answer this used to return, named so a regression
+  // cannot pass by returning it.
+  EXPECT_FALSE(std::abs(got - c1111(100.0, 140.0)) < 1e-9)
+      << "K kept its first value while G followed the deck";
+}
+
+/// The other half: with the baked constant left alone, changing only the live
+/// one is honoured. Without this, the fix above could simply reject every mixed
+/// document and still pass.
+TEST(PropsScalarJson, ChangingOnlyTheLiveConstantIsHonouredInAMixedDocument) {
+  const T first[2] = {100.0, 40.0};
+  const T live_changed[2] = {100.0, 140.0};  // K unchanged, G changed
+
+  EXPECT_NEAR(uniaxial_tangent("MIXEDLIVE", first, 2), c1111(100.0, 40.0),
+              1e-9);
+  EXPECT_NEAR(uniaxial_tangent("MIXEDLIVE", live_changed, 2),
+              c1111(100.0, 140.0), 1e-9);
 }
 
 }  // namespace

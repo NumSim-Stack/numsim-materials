@@ -240,20 +240,31 @@ private:
       // actually reaches a material, and NPROPS doubles is nothing next to an
       // evaluation.
       //
-      // Unless the model reads its constants per call, in which case a changed
-      // array is the point rather than a contradiction: nothing was baked into
-      // the graph for it to contradict. material_point_evaluator::bind_props
-      // does the range check those models actually need.
-      if (!it->second.solid->has_live_props() &&
-          !std::equal(it->second.props.begin(), it->second.props.end(),
-                      props.begin(), props.end()))
+      // A changed COUNT is a dispatch mistake either way: one material name
+      // carries one *USER MATERIAL block, whatever its constants mean.
+      if (it->second.props.size() != props.size())
         throw fatal_error(
             "numsim UMAT: material '" + std::string(key) +
-            "' was built from a different set of " +
-            std::to_string(it->second.props.size()) +
-            " constants than this call supplies — PROPS must be constant for a "
-            "given material name; use distinct *MATERIAL names for distinct "
-            "constants");
+            "' was built from " + std::to_string(it->second.props.size()) +
+            " constants but this call supplies " + std::to_string(props.size()) +
+            " — NPROPS cannot vary for a given material name");
+
+      // Then per SLOT, skipping the ones the model reads live. Asking
+      // has_live_props() for the whole model instead would wave a mixed
+      // document's BAKED constants through as well: they would keep the first
+      // call's values while the live ones tracked the deck, silently, which is
+      // the defect this check exists to catch.
+      for (std::size_t i = 0; i < props.size(); ++i)
+        if (!it->second.solid->is_live_prop(i) &&
+            it->second.props[i] != props[i])
+          throw fatal_error(
+              "numsim UMAT: material '" + std::string(key) + "' constant " +
+              std::to_string(i + 1) + " was baked into the graph as " +
+              std::to_string(it->second.props[i]) + " but this call supplies " +
+              std::to_string(props[i]) +
+              " — PROPS must be constant for a given material name; use "
+              "distinct *MATERIAL names for distinct constants, or a "
+              "props_scalar for a constant that genuinely varies per call");
       return it->second;
     }
 
