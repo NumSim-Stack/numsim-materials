@@ -166,9 +166,8 @@ struct Registration {
     // against an already-built name the NPROPS-consistency check fires first
     // and require_props is never reached.
     registry::instance().register_model("COLDNAME", build_deck_elastic, de);
-    // Likewise used by exactly one test: it has to warm the cache itself with a
-    // known set of constants, so any other test touching it would decide the
-    // outcome.
+    // One test only: it warms the cache itself, so a shared name would let
+    // test order decide the outcome.
     registry::instance().register_model("VALUEPROBE", build_deck_elastic, de);
 
     // Deliberately lower-case, to prove the registry folds case on both sides.
@@ -769,17 +768,16 @@ TEST(UmatInterface, ChangingNpropsForTheSameNameIsFatal) {
   call_umat("STIFF", stress, statev.data(), ddsdde, stran, dstran, 0.0, 0.1, 3,
             3, 6, 0, &pnewdt, nullptr, nullptr, nullptr, nullptr, three, 3);
   EXPECT_EQ(FatalProbe::count, 1);
-  // Both counts, so a user reading NPROPS=3 is not left matching one number.
+  // Both counts, so NPROPS=3 is not left to be matched against one number.
   EXPECT_NE(FatalProbe::last.find("2 constants"), std::string::npos)
       << FatalProbe::last;
   EXPECT_NE(FatalProbe::last.find("supplies 3"), std::string::npos)
       << FatalProbe::last;
 }
 
-/// The same contradiction with the count held fixed — two constants either way,
-/// different numbers. This is the case that actually reaches a material: a
-/// count check accepts it and every subsequent call silently returns the FIRST
-/// call's stiffness, giving a converged analysis with the wrong moduli.
+/// Same count, different numbers — the case that reaches a material. A count
+/// check accepts it and serves the first call's stiffness forever: a converged
+/// analysis with the wrong moduli.
 TEST(UmatInterface, ChangingPropsValuesForTheSameNameIsFatal) {
   FatalProbe probe;
   std::vector<T> statev(1, 0.0);
@@ -801,8 +799,7 @@ TEST(UmatInterface, ChangingPropsValuesForTheSameNameIsFatal) {
   EXPECT_EQ(FatalProbe::count, 1)
       << "a same-length PROPS with different numbers must be reported, not "
          "silently served from the cached graph";
-  // The message has to name WHICH constant disagrees and both values: this
-  // check never changes a result, it only ever explains one.
+  // Must name which constant disagrees, and both values.
   EXPECT_NE(FatalProbe::last.find("constant 1"), std::string::npos)
       << FatalProbe::last;
   EXPECT_NE(FatalProbe::last.find("100.0"), std::string::npos)
