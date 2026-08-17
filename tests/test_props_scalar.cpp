@@ -416,6 +416,25 @@ TEST(PropsScalarJson, ConstantsPositionBindsTheSlot) {
               1e-9);
 }
 
+/// The target names the graph property the constant arrives on — "value" — and
+/// not the "index" parameter the builder actually writes. Keeping the spelling
+/// identical to constant_scalar's is what lets the type be swapped without
+/// rewriting "constants", so the wrong spelling has to be rejected rather than
+/// quietly accepted.
+TEST(PropsScalarJson, RejectsATargetNamingIndexRatherThanTheProperty) {
+  const char* names_index = R"({
+    "materials": [{"type": "props_scalar", "name": "K"}],
+    "constants": ["K::index"]
+  })";
+  EXPECT_THROW(u::make_json_builder<policy>(names_index), u::fatal_error);
+
+  const char* names_property = R"({
+    "materials": [{"type": "props_scalar", "name": "K"}],
+    "constants": ["K::value"]
+  })";
+  EXPECT_NO_THROW(u::make_json_builder<policy>(names_property));
+}
+
 /// Same material NAME, changed constants, no rebuild and no fatal error — the
 /// registry's PROPS-consistency check must stand down for a model that reads
 /// its constants per call, because there is nothing baked in to contradict.

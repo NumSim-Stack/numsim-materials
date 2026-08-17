@@ -89,14 +89,34 @@ void ensure_materials_registered() {
   });
 }
 
-/// The parameter a binding will actually write.
+/// What a binding writes into the document.
 ///
-/// Its own function because it is the single place that has to stay in step
-/// with the substitution loop below — validating one name and writing another
-/// is how a target ends up half-checked.
-inline std::string bound_parameter(const nlohmann::json& /*material*/,
-                                   const connection_source& binding) {
-  return binding.property;
+/// One function for both the validation and the substitution below: checking
+/// one parameter name and then writing a different one is exactly how a target
+/// ends up half-verified, which is the defect this validation exists to close.
+struct constant_binding_target {
+  std::string parameter;
+  /// props_scalar is told which SLOT it owns and reads the number itself on
+  /// every call; everything else has the number written in now.
+  bool writes_slot{false};
+};
+
+inline constant_binding_target bound_parameter(
+    const nlohmann::json& material, const connection_source& binding) {
+  if (material.value("type", std::string{}) == "props_scalar") {
+    // The target names the graph property the constant will arrive on, which
+    // props_scalar publishes as "value" just as constant_scalar does. Keeping
+    // the spelling identical across the two binding times is the point —
+    // swapping the type must not force "constants" to be rewritten — so the
+    // parameter actually written ("index") is not what the document says.
+    if (binding.property != "value")
+      throw fatal_error(
+          "json_model: a props_scalar target names the property it publishes, "
+          "which is \"value\" — got \"" + binding.property +
+          "\"; the slot comes from the entry's position in \"constants\"");
+    return {"index", true};
+  }
+  return {binding.property, false};
 }
 
 /// Reject a target naming a parameter the material does not declare.
@@ -122,7 +142,7 @@ void require_declared_parameter(const nlohmann::json& material,
   // after this one.
   if (!factory.contains(type)) return;
 
-  const auto wanted = bound_parameter(material, binding);
+  const auto wanted = bound_parameter(material, binding).parameter;
   std::vector<std::string> declared;
   for (const auto& [key, unused] : factory.schema(type)) declared.push_back(key);
   if (std::find(declared.begin(), declared.end(), wanted) != declared.end())
@@ -245,15 +265,11 @@ typename umat_registry<Traits>::builder make_json_builder(
         if (!material.contains("name") ||
             material["name"].get<std::string>() != bindings[i].material)
           continue;
-        // Same binding, two binding TIMES. A props_scalar is told which slot it
-        // owns and reads the number on every call; anything else has the number
-        // copied in now and keeps it for the life of the graph. The position in
-        // "constants" is the slot either way, so the document says the same
-        // thing and only the material type decides when it is read.
-        if (material.value("type", std::string{}) == "props_scalar")
-          material["index"] = i;
-        else
-          material[bindings[i].property] = props[i];
+        // Same binding, two binding TIMES — resolved by the same function that
+        // validated the target at registration, so the two cannot drift.
+        const auto target = bound_parameter(material, bindings[i]);
+        material[target.parameter] =
+            target.writes_slot ? nlohmann::json(i) : nlohmann::json(props[i]);
       }
 
     for (const auto& material : doc["materials"])
