@@ -165,6 +165,28 @@ TEST(JsonModel, RejectsAConstantsEntryNamingAnUndeclaredParameter) {
   EXPECT_NO_THROW(u::make_json_builder<policy>(good));
 }
 
+/// Declared is not enough: every material declares "name", and most declare
+/// *_source strings. Binding a host constant to one of those can only fail
+/// later, with a JSON type error that says nothing about decks.
+TEST(JsonModel, RejectsAConstantsEntryNamingANonNumericParameter) {
+  const char* to_name = R"({
+    "materials": [{"type": "constant_scalar", "name": "K", "value": 0}],
+    "constants": ["K::name"]
+  })";
+  EXPECT_THROW(u::make_json_builder<policy>(to_name), u::fatal_error);
+
+  const char* to_source = R"({
+    "materials": [
+      {"type": "constant_scalar", "name": "K", "value": 0},
+      {"type": "constant_scalar", "name": "G", "value": 0},
+      {"type": "isotropic_tangent", "name": "stiffness",
+       "K_source": "K", "G_source": "G"}
+    ],
+    "constants": ["stiffness::K_source"]
+  })";
+  EXPECT_THROW(u::make_json_builder<policy>(to_source), u::fatal_error);
+}
+
 /// A repeat overwrites, dropping one deck value and leaving what it should
 /// have bound at its placeholder — a zero modulus, in the case that prompted
 /// this.
@@ -182,12 +204,11 @@ TEST(JsonModel, RejectsADuplicateConstantsTarget) {
   // so the key is the whole target.
   const char* two_params = R"({
     "materials": [
-      {"type": "isotropic_tangent", "name": "stiffness",
-       "K_source": "K", "G_source": "G"},
-      {"type": "constant_scalar", "name": "K", "value": 0},
-      {"type": "constant_scalar", "name": "G", "value": 0}
+      {"type": "external_strain_source", "name": "strain_in"},
+      {"type": "linear_elasticity", "name": "el",
+       "strain_producer_name": "strain_in", "K": 0, "G": 0}
     ],
-    "constants": ["stiffness::K_property", "stiffness::G_property"]
+    "constants": ["el::K", "el::G"]
   })";
   EXPECT_NO_THROW(u::make_json_builder<policy>(two_params));
 }
