@@ -207,9 +207,8 @@ private:
     std::unique_ptr<context_type> ctx;
     std::unique_ptr<evaluator_type> solid;
     std::unique_ptr<ps_evaluator_type> ps;
-    /// The constants the context was built from. The graph is built once and
-    /// reused, so a later call arriving with different ones would mean the
-    /// cached parameters no longer describe this material.
+    /// What the context was built from; the graph is reused, so different
+    /// constants on a later call would no longer describe this material.
     std::vector<double> props;
   };
 
@@ -229,18 +228,10 @@ private:
     const auto key = normalise_cmname(cmname.data(), cmname.size(), buf);
     auto& cache = thread_cache();
     if (auto it = cache.find(key); it != cache.end()) {
-      // PROPS cannot vary for a given material name — two *MATERIAL blocks must
-      // have distinct names — so anything different means the deck contradicts
-      // the cached graph, and the constants baked into it would be silently
-      // wrong for every subsequent call. Comparing the VALUES, not just the
-      // count: a same-length array with different numbers is the case that
-      // actually reaches a material, and NPROPS doubles is nothing next to an
-      // evaluation.
-      //
-      // Two different faults, so two messages. A wrong count is a deck error;
-      // equal counts with different numbers is a dispatch error, and there the
-      // useful thing is WHICH constant disagrees — a check that only ever
-      // explains is worth the words.
+      // PROPS cannot vary for one material name, so anything different
+      // contradicts the graph the constants were baked into. Values, not just
+      // the count: same length with different numbers is the case that reaches
+      // a material. Two faults, two messages — the check only ever explains.
       if (it->second.props.size() != props.size())
         throw fatal_error(
             "numsim UMAT: material '" + std::string(key) + "' was built from " +
