@@ -84,8 +84,7 @@ tensor4 isotropic(T k, T g) {
   return C;
 }
 
-/// Exact tensor equality, expressed through tmech rather than a component loop.
-/// norm(a - b) is identically zero only when every component matches.
+/// Exact tensor equality: norm(a - b) is zero only if every component matches.
 template <typename A, typename B>
 ::testing::AssertionResult TensorsIdentical(const A& a, const B& b) {
   const auto d = tmech::norm(a - b);
@@ -97,8 +96,8 @@ template <typename A, typename B>
 // Ordering — what the decomposition exists for
 // ---------------------------------------------------------------------------
 
-/// A cross-material property is ordered before its consumer; an intra-material
-/// one is not. Both the moduli and the stiffness are edges here.
+/// Cross-material properties are ordered before their consumer; intra-material
+/// ones are not. Both the moduli and the stiffness are edges here.
 TEST(TangentGenerator, EveryProducerIsOrderedBeforeItsConsumer) {
   ctx_type ctx;
   build_decomposed(ctx, K, G);
@@ -168,9 +167,8 @@ TEST(TangentGenerator, MatchesLinearElasticityExactly) {
 // Constants as materials
 // ---------------------------------------------------------------------------
 
-/// constant_scalar publishes a PLAIN property, so it costs no STATEV slot and
-/// needs no exclusion. A history property here would be one wasted slot per
-/// integration point, per constant.
+/// constant_scalar is a PLAIN property: no STATEV slot, no exclusion. History
+/// would cost one slot per integration point, per constant.
 TEST(TangentGenerator, ConstantsCostNoStatevSlot) {
   ctx_type ctx;
   build_decomposed(ctx, K, G);
@@ -179,10 +177,9 @@ TEST(TangentGenerator, ConstantsCostNoStatevSlot) {
   EXPECT_EQ(map.nstatv(), 0u);
 }
 
-/// Inputs are not wired until finalize(), so nothing can be computed in the
-/// constructor: the stiffness is built on the first update, not before it.
-/// Everything that reads it goes through ctx.update() first, but the ordering
-/// is worth pinning because it differs from the parameter-based version.
+/// Inputs are not wired until finalize(), so the stiffness is built on the
+/// first update, not in the constructor. Differs from the parameter version,
+/// so worth pinning.
 TEST(TangentGenerator, TangentIsBuiltOnTheFirstUpdateNotAtConstruction) {
   ctx_type ctx;
   auto& src = build_decomposed(ctx, K, G);
@@ -200,9 +197,7 @@ TEST(TangentGenerator, TangentIsBuiltOnTheFirstUpdateNotAtConstruction) {
                                   isotropic(K, G), 1e-12));
 }
 
-/// Repeated updates with fixed moduli must keep giving the same answer. The
-/// self-guard makes that cheap, but it is an optimisation with no observable
-/// behaviour — this checks the observable part.
+/// Repeated updates with fixed moduli must keep giving the same answer.
 TEST(TangentGenerator, RepeatedUpdatesWithFixedModuliAreStable) {
   ctx_type ctx;
   auto& src = build_decomposed(ctx, K, G);
@@ -214,8 +209,8 @@ TEST(TangentGenerator, RepeatedUpdatesWithFixedModuliAreStable) {
   EXPECT_TRUE(TensorsIdentical(ctx.get<tensor2>("elastic", "stress"), first));
 }
 
-/// And when a modulus does move, the stiffness follows on the next update —
-/// with the ordering guaranteed by the edge, not by registration order.
+/// And when a modulus moves, the stiffness follows — ordered by the edge, not
+/// by registration order.
 TEST(TangentGenerator, StiffnessFollowsAChangedModulus) {
   ctx_type ctx;
   auto& src = build_decomposed(ctx, K, G);
@@ -241,9 +236,8 @@ TEST(TangentGenerator, StiffnessFollowsAChangedModulus) {
 // Composition with a pre-existing consumer
 // ---------------------------------------------------------------------------
 
-/// The drop-in claim, tested against a PRE-EXISTING consumer.
-/// small_strain_plasticity already names its tangent source, so it needs no
-/// change: point elastic_source at the generator.
+/// The drop-in claim, against a PRE-EXISTING consumer: small_strain_plasticity
+/// already names its tangent source, so only elastic_source moves.
 TEST(TangentGenerator, DrivesJ2PlasticityIdenticallyToLinearElasticity) {
   auto drive = [](bool decomposed) {
     ctx_type ctx;

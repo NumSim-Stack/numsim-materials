@@ -8,12 +8,10 @@ namespace numsim::materials {
 
 /// sigma = C : eps, with C supplied by another material.
 ///
-/// linear_elasticity with the tangent as a Global input instead of an owned
-/// output. That is what makes the ordering correct: consuming another
-/// material's property creates a graph edge; reading your own does not.
-///
-/// Pair with any tangent generator. linear_elasticity stays the better choice
-/// when the moduli are fixed — one fewer material, tangent computed once.
+/// linear_elasticity with the tangent as a Global input rather than an owned
+/// output, which is what makes the ordering correct: another material's
+/// property is an edge, your own is not. Pair with any tangent generator;
+/// linear_elasticity stays better when the moduli are fixed.
 template <typename Traits>
 class linear_stress final
     : public material_base<linear_stress<Traits>, Traits> {
