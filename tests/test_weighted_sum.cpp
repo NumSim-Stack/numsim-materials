@@ -140,8 +140,8 @@ TEST(WeightedSum, AbsentTangentSourcesUsesEachTermsOwnMaterial) {
               KA + 4.0 * GA / 3.0, 1e-9);
 }
 
-/// The case tangent_sources exists for: a constituent whose stiffness is its own
-/// material, so its stress and tangent have different owners.
+/// What tangent_sources exists for: a constituent whose stress and tangent have
+/// different owners.
 TEST(WeightedSum, OverridesOneTermsTangentOwner) {
   ctx_type ctx;
   auto& src = add_strain(ctx);
@@ -162,8 +162,7 @@ TEST(WeightedSum, OverridesOneTermsTangentOwner) {
 }
 
 /// An empty entry keeps that term's own tangent, so a NON-LEADING term can be
-/// overridden alone. Without it, a positional list could only ever override a
-/// prefix, and a short list would silently shift every override left.
+/// overridden alone; without it a positional list could only override a prefix.
 TEST(WeightedSum, EmptyEntryKeepsATermsOwnTangent) {
   ctx_type ctx;
   auto& src = add_strain(ctx);
@@ -188,10 +187,9 @@ TEST(WeightedSum, EmptyEntryKeepsATermsOwnTangent) {
               0.5 * cA + 0.5 * cB, 1e-9);
 }
 
-/// A shorter list is rejected. Positional matching means it would otherwise
-/// apply the override to the WRONG constituent: both names resolve,
-/// wire_inputs() succeeds, and the only symptom is a wrong summed tangent —
-/// degraded Newton convergence while the stresses still converge correctly.
+/// A shorter list is rejected: positional matching would apply the override to
+/// the WRONG constituent, and both names still resolve. The only symptom would
+/// be a wrong summed tangent — slow Newton, correct stresses.
 TEST(WeightedSum, RejectsATangentSourcesListThatDoesNotMatchTheTermCount) {
   auto build = [](std::vector<std::string> sources) {
     ctx_type ctx;

@@ -22,13 +22,10 @@ namespace numsim::materials {
 ///   "tangent_sources": optional vector<string> — one per term, naming a
 ///       different material for that term's tangent; "" keeps the term's own.
 ///
-/// An entry must name the material holding the stiffness that produced THAT
-/// term's stress. One entry per term buys alignment, not correctness: a
-/// correct-length list naming the wrong material still wires and still runs,
-/// and the symptom is the same as a misaligned one — correct stresses, a wrong
-/// summed tangent, and nothing worse than slow Newton convergence to show for
-/// it. Nothing can check this, because decoupling stress from tangent is the
-/// whole point of the parameter.
+/// One entry per term buys ALIGNMENT, not correctness: an entry naming the
+/// wrong material wires and runs, and shows only as a wrong summed tangent and
+/// slow Newton convergence. Uncheckable, since decoupling stress from tangent
+/// is the point.
 template <typename Traits>
 class weighted_sum final
     : public material_base<weighted_sum<Traits>, Traits> {
@@ -54,10 +51,9 @@ public:
                               ? base::template get_parameter<std::vector<std::string>>("tangent_sources")
                               : std::vector<std::string>{})
   {
-    // Positional, so a shorter list would silently shift every override onto
-    // the wrong constituent — both names resolve and the only symptom is a
-    // wrong summed tangent. Require one entry per term, and let "" mean "this
-    // term keeps its own", so a non-leading term can be overridden alone.
+    // Positional: a shorter list shifts every override onto the wrong
+    // constituent, and both names still resolve. One entry per term, with ""
+    // meaning "keeps its own" so a non-leading term can be overridden alone.
     if (!m_tangent_sources.empty() &&
         m_tangent_sources.size() != m_terms_param.size())
       throw std::runtime_error(
@@ -97,12 +93,9 @@ public:
     return para;
   }
 
-  // No update() override. The engine drives each output through the callback
-  // registered with add_output, so a material-level update() would never run
-  // here — and one that looked like the entry point would quietly strand any
-  // output wired only into it. (backward_euler and vector_newton do use
-  // update(), but only because they route it themselves with
-  // traits().update = [this]{ this->update(); }.)
+  // No update() override: the engine drives each output through its add_output
+  // callback, so one would never run and would strand any output wired only
+  // into it. (backward_euler/vector_newton route update() themselves.)
 
   void update_stress() noexcept {
     m_stress = tensor2{};

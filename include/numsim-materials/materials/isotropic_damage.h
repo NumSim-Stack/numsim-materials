@@ -52,8 +52,8 @@ public:
         // inputs
         m_stress(base::template add_input<tensor2>(
             m_elastic_source, "stress", EdgeKind::Global)),
-        // Absent tangent_source: same material as the stress. contains()
-        // rather than an empty-string test, so "" is an error, not a fallback.
+        // Absent: same material as the stress. contains() rather than an
+        // empty-string test, so "" is an error and not a fallback.
         m_tangent(base::template add_input<tensor4>(
             base::m_parameter_handler.contains("tangent_source")
                 ? base::template get_parameter<std::string>("tangent_source")
