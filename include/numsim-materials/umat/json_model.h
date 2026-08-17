@@ -68,6 +68,67 @@ void register_umat_materials() {
       "external_scalar_source");
 }
 
+/// Register the materials a document may name, once per Traits.
+///
+/// Hoisted out of the builder so it also runs at REGISTRATION time: the
+/// binding targets are checked against each material's declared parameters,
+/// and that needs a populated factory. Registering types is idempotent.
+template <typename Traits>
+void ensure_materials_registered() {
+  static std::once_flag once;
+  std::call_once(once, [] {
+    register_default_materials<Traits>();
+    register_umat_materials<Traits>();
+  });
+}
+
+/// The parameter a binding will actually write.
+///
+/// Its own function because it is the single place that has to stay in step
+/// with the substitution loop below — validating one name and writing another
+/// is how a target ends up half-checked.
+inline std::string bound_parameter(const nlohmann::json& /*material*/,
+                                   const connection_source& binding) {
+  return binding.property;
+}
+
+/// Reject a target naming a parameter the material does not declare.
+///
+/// Checking only that the MATERIAL exists leaves the other half of the target
+/// unvalidated, and nlohmann::json CREATES a missing key rather than failing —
+/// so a misspelled parameter is written to a key nothing reads while the real
+/// one keeps the document's placeholder. The result is a wrong-but-plausible
+/// modulus behind a stderr warning, in a job that reports no error at all.
+template <typename Traits>
+void require_declared_parameter(const nlohmann::json& material,
+                                const connection_source& binding,
+                                const std::string& target) {
+  if (!material.contains("type") || !material["type"].is_string())
+    throw fatal_error("json_model: material '" + binding.material +
+                      "' has no \"type\", so \"" + target +
+                      "\" cannot be checked against its parameters");
+
+  const auto type = material["type"].get<std::string>();
+  auto& factory = object_store<Traits>::factory_type::instance();
+  // A type the factory does not know is caught when the graph is built. Not
+  // failing here keeps a document free to name a material the caller registers
+  // after this one.
+  if (!factory.contains(type)) return;
+
+  const auto wanted = bound_parameter(material, binding);
+  std::vector<std::string> declared;
+  for (const auto& [key, unused] : factory.schema(type)) declared.push_back(key);
+  if (std::find(declared.begin(), declared.end(), wanted) != declared.end())
+    return;
+
+  std::string known;
+  std::sort(declared.begin(), declared.end());
+  for (const auto& key : declared) known += (known.empty() ? "" : ", ") + key;
+  throw fatal_error("json_model: constants entry '" + target +
+                    "' names parameter '" + wanted + "', which " + type +
+                    " does not declare — it takes: " + known);
+}
+
 /// Parse a "material::parameter" target with the library's existing splitter,
 /// so this does not invent a second syntax for a qualified name.
 inline connection_source parse_constant_target(const std::string& target) {
@@ -117,39 +178,50 @@ typename umat_registry<Traits>::builder make_json_builder(
                         : ""));
   }
 
-  // Validate the props bindings now rather than on first use, so a typo is
-  // reported when the model is registered rather than mid-analysis.
+  // Validate the bindings now rather than on first use, so a typo is reported
+  // when the model is registered rather than mid-analysis. BOTH halves of the
+  // target: a check that stops at the material name is the more dangerous kind,
+  // because it reads as though the whole thing were verified.
   std::vector<connection_source> bindings;
   if (parsed.contains("constants")) {
     if (!parsed["constants"].is_array())
       throw fatal_error("json_model: \"constants\" must be an array of "
                         "\"material::parameter\" strings");
+    ensure_materials_registered<Traits>();
+    std::vector<std::string> seen;
     for (const auto& entry : parsed["constants"]) {
       if (!entry.is_string())
         throw fatal_error(
             "json_model: every \"constants\" entry must be a string");
-      auto binding = parse_constant_target(entry.get<std::string>());
-      const bool known = std::any_of(
-          parsed["materials"].begin(), parsed["materials"].end(),
-          [&](const nlohmann::json& m) {
-            return m.contains("name") &&
-                   m["name"].get<std::string>() == binding.material;
-          });
-      if (!known)
+      const auto target = entry.get<std::string>();
+
+      // One host constant per target. Repeating one makes the later slot
+      // overwrite the earlier, so an earlier constant is dropped and whatever
+      // it should have bound keeps its placeholder — silently.
+      if (std::find(seen.begin(), seen.end(), target) != seen.end())
+        throw fatal_error("json_model: constants entry '" + target +
+                          "' appears twice; each host constant binds one "
+                          "target, and a repeat silently drops the earlier one");
+      seen.push_back(target);
+
+      auto binding = parse_constant_target(target);
+      const nlohmann::json* owner = nullptr;
+      for (const auto& m : parsed["materials"])
+        if (m.contains("name") &&
+            m["name"].get<std::string>() == binding.material)
+          owner = &m;
+      if (!owner)
         throw fatal_error("json_model: constants entry targets material '" +
                           binding.material +
                           "', which the document does not define");
+      require_declared_parameter<Traits>(*owner, binding, target);
       bindings.push_back(std::move(binding));
     }
   }
 
   return [parsed, bindings](material_context<Traits>& ctx,
                             std::span<const double> props) {
-    static std::once_flag once;
-    std::call_once(once, [] {
-      register_default_materials<Traits>();
-      register_umat_materials<Traits>();
-    });
+    ensure_materials_registered<Traits>();
 
     if (props.size() < bindings.size())
       throw fatal_error(
