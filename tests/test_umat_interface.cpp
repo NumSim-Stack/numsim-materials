@@ -769,7 +769,10 @@ TEST(UmatInterface, ChangingNpropsForTheSameNameIsFatal) {
   call_umat("STIFF", stress, statev.data(), ddsdde, stran, dstran, 0.0, 0.1, 3,
             3, 6, 0, &pnewdt, nullptr, nullptr, nullptr, nullptr, three, 3);
   EXPECT_EQ(FatalProbe::count, 1);
-  EXPECT_NE(FatalProbe::last.find("constant"), std::string::npos)
+  // Both counts, so a user reading NPROPS=3 is not left matching one number.
+  EXPECT_NE(FatalProbe::last.find("2 constants"), std::string::npos)
+      << FatalProbe::last;
+  EXPECT_NE(FatalProbe::last.find("supplies 3"), std::string::npos)
       << FatalProbe::last;
 }
 
@@ -798,7 +801,13 @@ TEST(UmatInterface, ChangingPropsValuesForTheSameNameIsFatal) {
   EXPECT_EQ(FatalProbe::count, 1)
       << "a same-length PROPS with different numbers must be reported, not "
          "silently served from the cached graph";
-  EXPECT_NE(FatalProbe::last.find("constant"), std::string::npos)
+  // The message has to name WHICH constant disagrees and both values: this
+  // check never changes a result, it only ever explains one.
+  EXPECT_NE(FatalProbe::last.find("constant 1"), std::string::npos)
+      << FatalProbe::last;
+  EXPECT_NE(FatalProbe::last.find("100.0"), std::string::npos)
+      << FatalProbe::last;
+  EXPECT_NE(FatalProbe::last.find("300.0"), std::string::npos)
       << FatalProbe::last;
 }
 

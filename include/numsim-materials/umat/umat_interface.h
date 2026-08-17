@@ -240,12 +240,14 @@ private:
       // actually reaches a material, and NPROPS doubles is nothing next to an
       // evaluation.
       //
-      // A changed COUNT is a dispatch mistake either way: one material name
-      // carries one *USER MATERIAL block, whatever its constants mean.
+      // Two different faults, so two messages. A wrong count is a deck error;
+      // equal counts with different numbers is a dispatch error, and there the
+      // useful thing is WHICH constant disagrees — a check that only ever
+      // explains is worth the words.
       if (it->second.props.size() != props.size())
         throw fatal_error(
-            "numsim UMAT: material '" + std::string(key) +
-            "' was built from " + std::to_string(it->second.props.size()) +
+            "numsim UMAT: material '" + std::string(key) + "' was built from " +
+            std::to_string(it->second.props.size()) +
             " constants but this call supplies " + std::to_string(props.size()) +
             " — NPROPS cannot vary for a given material name");
 
