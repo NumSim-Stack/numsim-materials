@@ -21,6 +21,14 @@ namespace numsim::materials {
 ///   "terms": vector<pair<string,string>> — (weight_name, constituent_name) pairs
 ///   "tangent_sources": optional vector<string> — one per term, naming a
 ///       different material for that term's tangent; "" keeps the term's own.
+///
+/// An entry must name the material holding the stiffness that produced THAT
+/// term's stress. One entry per term buys alignment, not correctness: a
+/// correct-length list naming the wrong material still wires and still runs,
+/// and the symptom is the same as a misaligned one — correct stresses, a wrong
+/// summed tangent, and nothing worse than slow Newton convergence to show for
+/// it. Nothing can check this, because decoupling stress from tangent is the
+/// whole point of the parameter.
 template <typename Traits>
 class weighted_sum final
     : public material_base<weighted_sum<Traits>, Traits> {
@@ -89,10 +97,12 @@ public:
     return para;
   }
 
-  void update() override {
-    update_stress();
-    update_tangent();
-  }
+  // No update() override. The engine drives each output through the callback
+  // registered with add_output, so a material-level update() would never run
+  // here — and one that looked like the entry point would quietly strand any
+  // output wired only into it. (backward_euler and vector_newton do use
+  // update(), but only because they route it themselves with
+  // traits().update = [this]{ this->update(); }.)
 
   void update_stress() noexcept {
     m_stress = tensor2{};
