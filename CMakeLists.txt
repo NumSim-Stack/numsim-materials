@@ -61,7 +61,13 @@ if(NOT Eigen3_FOUND)
     GIT_SHALLOW TRUE
   )
   set(EIGEN_BUILD_DOC OFF CACHE BOOL "" FORCE)
+  # 3.4.0 gates its tests on BUILD_TESTING; EIGEN_BUILD_TESTING is only honoured
+  # by later versions, so on its own it does nothing and Eigen registers ~780
+  # tests of its own into our ctest run -- including BLAS tests that need
+  # Fortran binaries nobody builds here. Both are set so a bumped tag stays
+  # covered.
   set(EIGEN_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+  set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
   FetchContent_MakeAvailable(eigen)
 endif()
 
