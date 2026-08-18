@@ -43,8 +43,6 @@ public:
   explicit props_scalar(Args&&... args)
       : base(std::forward<Args>(args)...),
         m_value(base::template add_output<value_type>("value")),
-        // By value: a later insert() can relocate anything past the handler's
-        // small buffer.
         m_index(base::template get_parameter<std::size_t>("index")) {
     // Until the first bind(), rather than whatever the storage held.
     m_value = value_type{};
@@ -57,9 +55,6 @@ public:
   }
 
   /// Copy this material's constant out of the host's array.
-  ///
-  /// material_point_evaluator range-checks every reader once per call, so this
-  /// is the backstop for direct C++ use.
   void bind(std::span<const value_type> props) {
     if (m_index >= props.size())
       throw std::out_of_range(
