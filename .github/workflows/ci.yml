@@ -3,8 +3,10 @@ name: CI
 on:
   push:
     branches: [main]
+  # No branch filter: work lands through stacks of PRs that target a feature
+  # branch rather than main, and a base-branch filter meant none of them was
+  # ever built or tested here.
   pull_request:
-    branches: [main]
 
 jobs:
   build-and-test:
