@@ -6,12 +6,17 @@
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/solvers/vector_newton.h"
 
+// default_materials.h has nothing to do with JSON -- it carries the material
+// policies, and material_policy_2d is used unconditionally below. Inside the
+// guard it vanished on any machine without nlohmann installed, taking the 2D
+// test's policy with it.
+#include "numsim-materials/default_materials.h"
+
 // nlohmann/json is an optional dependency (see README), so the JSON round-trip
 // below degrades to nothing rather than making the suite fail to build.
 #if __has_include(<nlohmann/json.hpp>)
 #define NUMSIM_HAVE_JSON 1
 #include <nlohmann/json.hpp>
-#include "numsim-materials/default_materials.h"
 #include "numsim-materials/io/json_material_factory.h"
 #endif
 
