@@ -101,7 +101,12 @@ endif()
 if(TARGET Eigen3::Eigen)
   target_link_libraries(${PROJECT_NAME} INTERFACE Eigen3::Eigen)
 elseif(eigen_SOURCE_DIR)
-  target_include_directories(${PROJECT_NAME} INTERFACE ${eigen_SOURCE_DIR})
+  # BUILD_INTERFACE: the fetched path lives under the build tree, and a raw one
+  # in an exported target's INTERFACE_INCLUDE_DIRECTORIES is rejected at
+  # generate time ("prefixed in the build directory"). A consumer of the
+  # INSTALLED package supplies its own Eigen, exactly as it does for tmech.
+  target_include_directories(${PROJECT_NAME}
+    INTERFACE $<BUILD_INTERFACE:${eigen_SOURCE_DIR}>)
 endif()
 
 # Force C++23 globally — numsim-core headers use <print>/std::println
