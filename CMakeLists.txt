@@ -94,7 +94,19 @@ target_include_directories(${PROJECT_NAME}
 )
 
 target_compile_features(${PROJECT_NAME} INTERFACE cxx_std_23)
-target_link_libraries(${PROJECT_NAME} INTERFACE numsim-core nlohmann_json::nlohmann_json)
+target_link_libraries(${PROJECT_NAME} INTERFACE numsim-core)
+
+# nlohmann/json is header-only, so it gets tmech's treatment: when it is FETCHED
+# rather than found installed, linking the target pulls it into the install
+# export set and install(EXPORT) rejects it for not being exported itself.
+if(nlohmann_json_FOUND)
+  target_link_libraries(${PROJECT_NAME} INTERFACE nlohmann_json::nlohmann_json)
+else()
+  get_target_property(_njson_inc nlohmann_json INTERFACE_INCLUDE_DIRECTORIES)
+  if(_njson_inc)
+    target_include_directories(${PROJECT_NAME} INTERFACE ${_njson_inc})
+  endif()
+endif()
 
 # tmech is header-only — add its include path without linking a target
 # (linking would pull it into the install export set)
