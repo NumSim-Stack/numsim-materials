@@ -72,20 +72,21 @@ endif()
 # --- Dependencies (Eigen for linear algebra) ---
 find_package(Eigen3 QUIET)
 if(NOT Eigen3_FOUND)
+  # SOURCE_SUBDIR names a directory with no CMakeLists.txt, so MakeAvailable
+  # downloads Eigen and stops: its CMake never runs. Eigen is header-only, so
+  # nothing is lost, and the alternative was fighting its build system -- it
+  # gates its ~780 tests on BUILD_TESTING (EIGEN_BUILD_TESTING only exists
+  # after 3.4.0), and suppressing them meant forcing a GLOBAL variable OFF that
+  # our own tests would depend on the moment anyone switched to include(CTest).
+  # Same treatment tmech and nlohmann already get here: take the headers, leave
+  # the build system alone.
   FetchContent_Declare(
     eigen
     GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
     GIT_TAG 3.4.0
     GIT_SHALLOW TRUE
+    SOURCE_SUBDIR  headers-only-do-not-configure
   )
-  set(EIGEN_BUILD_DOC OFF CACHE BOOL "" FORCE)
-  # 3.4.0 gates its tests on BUILD_TESTING; EIGEN_BUILD_TESTING is only honoured
-  # by later versions, so on its own it does nothing and Eigen registers ~780
-  # tests of its own into our ctest run -- including BLAS tests that need
-  # Fortran binaries nobody builds here. Both are set so a bumped tag stays
-  # covered.
-  set(EIGEN_BUILD_TESTING OFF CACHE BOOL "" FORCE)
-  set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
   FetchContent_MakeAvailable(eigen)
 endif()
 
@@ -125,14 +126,12 @@ elseif(tmech_FOUND)
   target_link_libraries(${PROJECT_NAME} INTERFACE tmech::tmech)
 endif()
 
-# Eigen — header-only, same pattern
+# Eigen — header-only, same pattern. Fetched, there is no target to link, so
+# the populated source dir IS the include path.
 if(TARGET Eigen3::Eigen)
   target_link_libraries(${PROJECT_NAME} INTERFACE Eigen3::Eigen)
-elseif(TARGET eigen)
-  get_target_property(_eigen_inc eigen INTERFACE_INCLUDE_DIRECTORIES)
-  if(_eigen_inc)
-    target_include_directories(${PROJECT_NAME} INTERFACE ${_eigen_inc})
-  endif()
+elseif(eigen_SOURCE_DIR)
+  target_include_directories(${PROJECT_NAME} INTERFACE ${eigen_SOURCE_DIR})
 endif()
 
 # Force C++23 globally — numsim-core headers use <print>/std::println
