@@ -168,9 +168,21 @@ install(
 )
 
 # --- Testing ---
+# include(CTest) is the standard entry point: it calls enable_testing() and
+# declares BUILD_TESTING, the switch consumers expect to reach. Only at top
+# level -- embedded in a superproject, that project owns the dashboard targets
+# and its BUILD_TESTING choice should reach us rather than be re-declared.
+if(PROJECT_IS_TOP_LEVEL)
+  include(CTest)
+elseif(NOT DEFINED BUILD_TESTING)
+  set(BUILD_TESTING ON)
+endif()
+
+# Two switches, deliberately: BUILD_TESTING is how a superproject turns off
+# every subproject's tests at once, NUMSIM_BUILD_TESTS is how it turns off only
+# ours. Either being off is enough.
 option(NUMSIM_BUILD_TESTS "Build unit tests" ON)
-if(NUMSIM_BUILD_TESTS)
-  enable_testing()
+if(NUMSIM_BUILD_TESTS AND BUILD_TESTING)
   FetchContent_Declare(
     googletest
     GIT_REPOSITORY https://github.com/google/googletest
