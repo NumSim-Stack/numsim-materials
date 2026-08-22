@@ -69,6 +69,11 @@ target_include_directories(${PROJECT_NAME}
 
 target_compile_features(${PROJECT_NAME} INTERFACE cxx_std_23)
 target_link_libraries(${PROJECT_NAME} INTERFACE numsim-core)
+# Every imported target linked INTERFACE ends up named in the exported target
+# set, and a consumer of the installed package must be able to resolve it. The
+# generated Config re-finds each one; without that, find_package() fails with
+# "the following imported targets are referenced, but are missing".
+set(NUMSIM_MATERIALS_EXPORTED_DEPS numsim-core)
 
 # tmech is header-only — add its include path without linking a target
 # (linking would pull it into the install export set)
@@ -79,12 +84,14 @@ if(TARGET tmech)
   endif()
 elseif(tmech_FOUND)
   target_link_libraries(${PROJECT_NAME} INTERFACE tmech::tmech)
+  list(APPEND NUMSIM_MATERIALS_EXPORTED_DEPS tmech)
 endif()
 
 # Eigen — header-only, same pattern. Fetched, there is no target to link, so
 # the populated source dir IS the include path.
 if(TARGET Eigen3::Eigen)
   target_link_libraries(${PROJECT_NAME} INTERFACE Eigen3::Eigen)
+  list(APPEND NUMSIM_MATERIALS_EXPORTED_DEPS Eigen3)
 elseif(eigen_SOURCE_DIR)
   # BUILD_INTERFACE: the fetched path lives under the build tree, and a raw one
   # in an exported target's INTERFACE_INCLUDE_DIRECTORIES is rejected at
