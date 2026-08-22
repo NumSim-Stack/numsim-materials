@@ -8,6 +8,14 @@
 #include "numsim-materials/materials/scalar_stepper.h"
 #include "numsim-materials/materials/constant_scalar.h"
 #include "numsim-materials/materials/props_scalar.h"
+#include "numsim-materials/materials/small_strain_plasticity.h"
+#include "numsim-materials/materials/rk_plasticity.h"
+#include "numsim-materials/materials/linear_isotropic_hardening.h"
+#include "numsim-materials/materials/exponential_isotropic_hardening.h"
+#include "numsim-materials/materials/linear_damage_law.h"
+#include "numsim-materials/materials/curing_rate.h"
+#include "numsim-materials/materials/strain_energy_state_function.h"
+#include "numsim-materials/materials/vector_strain_state_function.h"
 #include "numsim-materials/materials/isotropic_tangent.h"
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/materials/linear_stress.h"
@@ -75,6 +83,31 @@ void register_default_materials() {
   factory.template register_type<linear_elasticity<Traits>>("linear_elasticity");
   factory.template register_type<constant_scalar<Traits>>("constant_scalar");
   factory.template register_type<props_scalar<Traits>>("props_scalar");
+
+  // Plasticity. small_strain_plasticity and rk_plasticity are templates over
+  // the yield-function TYPE, so the registrable names are the concrete
+  // aliases, not the templates.
+  //
+  // drucker_prager_plasticity is registered but is NOT yet fully configurable
+  // from a document: its yield function carries eta, beta and K_bulk, supplied
+  // through an undeclared "yield_function" parameter as a C++ object, and the
+  // JSON reader has no converter for one. A document can name it; it cannot
+  // yet set those three. j2_plasticity has no such state and is complete.
+  factory.template register_type<j2_plasticity<Traits>>("j2_plasticity");
+  factory.template register_type<drucker_prager_plasticity<Traits>>(
+      "drucker_prager_plasticity");
+  factory.template register_type<j2_rk_plasticity<Traits>>("j2_rk_plasticity");
+
+  factory.template register_type<linear_isotropic_hardening<Traits>>(
+      "linear_isotropic_hardening");
+  factory.template register_type<exponential_isotropic_hardening<Traits>>(
+      "exponential_isotropic_hardening");
+  factory.template register_type<linear_damage_law<Traits>>("linear_damage_law");
+  factory.template register_type<curing_rate<Traits>>("curing_rate");
+  factory.template register_type<strain_energy_state_function<Traits>>(
+      "strain_energy_state_function");
+  factory.template register_type<vector_strain_state_function<Traits>>(
+      "vector_strain_state_function");
   factory.template register_type<isotropic_tangent<Traits>>("isotropic_tangent");
   factory.template register_type<linear_stress<Traits>>("linear_stress");
   factory.template register_type<autocatalytic_reaction<Traits>>("autocatalytic_reaction");
