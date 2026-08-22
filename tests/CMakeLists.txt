@@ -27,6 +27,9 @@ add_numsim_test(test_tangent_generator test_tangent_generator.cpp)
 add_numsim_test(test_json_model test_json_model.cpp)
 add_numsim_test(test_props_scalar test_props_scalar.cpp)
 add_numsim_test(test_material_registry test_material_registry.cpp)
+add_numsim_test(test_material_conformance test_material_conformance.cpp)
+target_compile_definitions(test_material_conformance PRIVATE
+  NUMSIM_MATERIALS_INCLUDE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../include/numsim-materials/materials")
 target_link_libraries(test_umat_interface PRIVATE Threads::Threads)
 
 # Data dumper for plotting (not a test — standalone executable)
