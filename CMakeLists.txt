@@ -113,6 +113,11 @@ set(NUMSIM_MATERIALS_EXPORTED_DEPS numsim-core)
 # export set and install(EXPORT) rejects it for not being exported itself.
 if(nlohmann_json_FOUND)
   target_link_libraries(${PROJECT_NAME} INTERFACE nlohmann_json::nlohmann_json)
+  # Linked INTERFACE, so it is named in the exported target set and the
+  # generated Config has to re-find it. Missing here, a consumer of the
+  # installed package fails with "the link interface contains
+  # nlohmann_json::nlohmann_json but the target was not found".
+  list(APPEND NUMSIM_MATERIALS_EXPORTED_DEPS nlohmann_json)
 else()
   get_target_property(_njson_inc nlohmann_json INTERFACE_INCLUDE_DIRECTORIES)
   if(_njson_inc)
