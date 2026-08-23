@@ -110,31 +110,34 @@ TEST(MaterialConformance, NoSchemaIsEmpty) {
   }
 }
 
-/// Omitting a required parameter must throw, not warn and carry on with a
+/// Omitting a required parameter must throw, not carry on with a
 /// default-constructed value.
+///
+/// NOT generic, deliberately. is_required is a check attached with
+/// .add<is_required>() and the controller exposes no way to ask whether a
+/// parameter is required, so a loop over every type cannot tell "threw because
+/// something was required" from "succeeded because nothing was". The first
+/// version of this test tried anyway and asserted nothing at all: it caught the
+/// exception, ignored both outcomes, and checked only that the loop had run.
+///
+/// So the types are named. If the controller ever exposes required-ness, this
+/// becomes a loop over registered_types() and the list goes.
 TEST(MaterialConformance, MissingRequiredParametersThrow) {
   auto& f = factory_type::instance();
-  int checked = 0;
-  for (const auto& type : f.registered_types()) {
+  for (const char* type : {"linear_elasticity",   // needs K, G
+                           "isotropic_tangent",   // needs K_source, G_source
+                           "linear_stress",       // needs tangent_source, strain_source
+                           "props_scalar",        // needs index
+                           "linear_damage_law"}) {  // needs yield_source, kappa_0, kappa_f
+    ASSERT_TRUE(f.contains(type)) << type << " is not registered";
     nlohmann::json j;
     j["type"] = type;
     j["name"] = "probe";
     nm::material_context<policy> ctx;
-    // Only meaningful for types that require something beyond "name".
-    std::size_t required = 0;
-    for (const auto& [key, param] : f.schema(type))
-      if (key != "name") ++required;
-    if (required == 0) continue;
-    ++checked;
-    try {
-      nm::create_from_json<policy>(ctx, j);
-      // Reaching here is fine only if nothing was actually required.
-    } catch (const std::exception&) {
-      // Threw, which is the contract.
-    }
+    EXPECT_THROW(nm::create_from_json<policy>(ctx, j), std::exception)
+        << type << " accepted a document with only \"name\": a required "
+                   "parameter was silently defaulted";
   }
-  EXPECT_GT(checked, 0) << "no type had parameters beyond name — check failed "
-                           "to exercise anything";
 }
 
 }  // namespace
