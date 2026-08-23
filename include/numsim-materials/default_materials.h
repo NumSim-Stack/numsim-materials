@@ -88,15 +88,17 @@ void register_default_materials() {
   // the yield-function TYPE, so the registrable names are the concrete
   // aliases, not the templates.
   //
-  // drucker_prager_plasticity is registered but is NOT yet fully configurable
-  // from a document: its yield function carries eta, beta and K_bulk, supplied
-  // through an undeclared "yield_function" parameter as a C++ object, and the
-  // JSON reader has no converter for one. A document can name it; it cannot
-  // yet set those three. j2_plasticity has no such state and is complete.
   factory.template register_type<j2_plasticity<Traits>>("j2_plasticity");
-  factory.template register_type<drucker_prager_plasticity<Traits>>(
-      "drucker_prager_plasticity");
   factory.template register_type<j2_rk_plasticity<Traits>>("j2_rk_plasticity");
+
+  // drucker_prager_plasticity is deliberately NOT registered. Its yield
+  // function carries eta, beta and K_bulk and arrives as a C++ object through
+  // an undeclared "yield_function" parameter that the JSON reader cannot
+  // convert. Registered, a document could name it and would silently get a
+  // DEFAULT-constructed yield function -- eta = beta = k = 0 -- which builds,
+  // runs, never yields, and is indistinguishable from elasticity. An unknown
+  // material type is a loud error naming the type; a silently elastic
+  // Drucker-Prager is not. Register it once the yield function is expressible.
 
   factory.template register_type<linear_isotropic_hardening<Traits>>(
       "linear_isotropic_hardening");
