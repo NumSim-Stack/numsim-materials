@@ -21,7 +21,7 @@ const Registration registration_{};
 /// elasticity and damage and essentially nothing else.
 TEST(MaterialRegistry, PlasticityAndFriendsAreReachableFromJson) {
   auto& f = factory_type::instance();
-  for (const char* name : {"j2_plasticity", "drucker_prager_plasticity",
+  for (const char* name : {"j2_plasticity",
                            "j2_rk_plasticity", "linear_isotropic_hardening",
                            "exponential_isotropic_hardening", "linear_damage_law",
                            "curing_rate", "strain_energy_state_function",
@@ -58,20 +58,17 @@ TEST(MaterialRegistry, AJ2ModelRunsFromADocumentAlone) {
       << "the document built, but the model never yielded";
 }
 
-/// drucker_prager_plasticity is reachable by name, but its yield function
-/// carries eta, beta and K_bulk and arrives as a C++ object through an
-/// undeclared "yield_function" parameter. A document can name the material and
-/// cannot yet configure it — asserted so the limitation is recorded rather
-/// than discovered.
-TEST(MaterialRegistry, DruckerPragerIsNamedButNotYetConfigurableFromJson) {
+/// drucker_prager_plasticity is deliberately NOT registered. Its yield function
+/// carries eta, beta and K_bulk and arrives as a C++ object the JSON reader
+/// cannot convert, so a document naming it would get a default-constructed one:
+/// eta = beta = k = 0, which builds, runs, never yields, and is
+/// indistinguishable from elasticity. An unknown type is a loud error; a
+/// silently elastic Drucker-Prager is not.
+TEST(MaterialRegistry, DruckerPragerStaysUnregisteredWhileUnconfigurable) {
   auto& f = factory_type::instance();
-  ASSERT_TRUE(f.contains("drucker_prager_plasticity"));
-  const auto schema = f.schema("drucker_prager_plasticity");
-  bool has_yf = false;
-  for (const auto& [key, param] : schema) has_yf |= (key == "yield_function");
-  EXPECT_FALSE(has_yf)
-      << "yield_function is now in the schema — if it became JSON-convertible, "
-         "this test and the note in default_materials.h should go";
+  EXPECT_FALSE(f.contains("drucker_prager_plasticity"))
+      << "registered, a document could name it and silently get eta=beta=k=0; "
+         "register it once yield_function is expressible in JSON";
 }
 
 }  // namespace
