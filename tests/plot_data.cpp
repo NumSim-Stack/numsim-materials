@@ -7,6 +7,7 @@
 #include "numsim-materials/materials/linear_isotropic_hardening.h"
 #include "numsim-materials/materials/drucker_prager_yield_function.h"
 #include "numsim-materials/materials/small_strain_plasticity.h"
+#include "numsim-materials/materials/j2_plasticity.h"
 #include "numsim-materials/solvers/backward_euler.h"
 #include "numsim-materials/postprocessing/numerical_diff_checker.h"
 

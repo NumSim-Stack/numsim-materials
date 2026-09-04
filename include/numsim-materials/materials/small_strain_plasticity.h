@@ -211,9 +211,10 @@ private:
   yield_fn m_yf{};
 };
 
-template<typename Traits>
-using j2_plasticity = small_strain_plasticity<Traits,
-    j2_yield_function<typename Traits::value_type, Traits::Dim>>;
+// j2_plasticity moved to materials/j2_plasticity.h as a dedicated class: J2 is
+// associative and has no apex, so it used none of this class's generality and
+// paid two rank-4 contractions per step for a tangent that has a closed form.
+// This class now serves the pressure-dependent models it was written for.
 
 /// Drucker-Prager plasticity. The yield function (with η, β, K_bulk) must be
 /// supplied via the "yield_function" parameter at construction.
