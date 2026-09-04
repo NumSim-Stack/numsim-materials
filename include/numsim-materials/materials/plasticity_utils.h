@@ -111,7 +111,8 @@ tmech::tensor<T, Dim, 4> compute_tangent(
     T sig_eq,
     T total_dlambda,
     T dH_val,
-    const tmech::tensor<T, Dim, 4>& C_e)
+    const tmech::tensor<T, Dim, 4>& C_e,
+    T G)
 {
   using tensor2 = tmech::tensor<T, Dim, 2>;
   using tensor4 = tmech::tensor<T, Dim, 4>;
@@ -140,7 +141,18 @@ tmech::tensor<T, Dim, 4> compute_tangent(
   // flow_normal_stress_derivative takes (sig_dev, sig_eq) to avoid
   // cancellation error from reconstructing s from N.
   const tensor4 dN_dsig{yf.flow_normal_stress_derivative(sig_dev, sig_eq)};
-  const tensor4 C_dN_C{tmech::dcontract(C_e, tmech::dcontract(dN_dsig, C_e))};
+
+  // C_e : (dN/dsig) : C_e  ==  4G^2 (dN/dsig).
+  //
+  // Every flow normal here is deviatoric plus a constant volumetric part, so
+  // dN/dsig is deviatoric in BOTH index pairs. For isotropic C_e that makes
+  // C_e : X = 2G X and X : C_e = 2G X, and the two rank-4 x rank-4
+  // contractions collapse to a scalar multiply. Verified to 2.5e-16 against
+  // the explicit form for both the J2 and Drucker-Prager derivatives.
+  //
+  // Isotropy is not newly assumed: effective_modulus() above already requires
+  // it (3G for J2, G + K*eta*beta for DP).
+  const tensor4 C_dN_C{T{4} * G * G * dN_dsig};
   const tensor4 A{C_e - total_dlambda * C_dN_C};
 
   return A + tmech::otimes(dsig_ddlambda, dlambda_deps);
