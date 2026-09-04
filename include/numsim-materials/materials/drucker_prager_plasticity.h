@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_SMALL_STRAIN_PLASTICITY_H
-#define NUMSIM_MATERIALS_SMALL_STRAIN_PLASTICITY_H
+#ifndef NUMSIM_MATERIALS_DRUCKER_PRAGER_PLASTICITY_H
+#define NUMSIM_MATERIALS_DRUCKER_PRAGER_PLASTICITY_H
 
 #include <cmath>
 #include <concepts>
@@ -8,47 +8,34 @@
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_base.h"
 #include "numsim-materials/core/material_ref.h"
-#include "numsim-materials/materials/yield_functions.h"
 #include "numsim-materials/materials/drucker_prager_yield_function.h"
 #include "numsim-materials/materials/plasticity_utils.h"
 #include "numsim-materials/solvers/backward_euler.h"
 
 namespace numsim::materials {
 
-/// Concept for yield functions that support an apex return branch.
-/// All five methods must be present; checking a single sentinel is insufficient.
-template<typename YF, typename T, std::size_t Dim>
-concept has_apex_return = requires(const YF& yf,
-    const tmech::tensor<T, Dim, 2>& t2, T v) {
-  { yf.needs_apex_return(v, v, v) }      -> std::convertible_to<bool>;
-  { yf.apex_modified_sig_eq(t2) }        -> std::convertible_to<T>;
-  { yf.apex_effective_modulus() }         -> std::convertible_to<T>;
-  { yf.apex_plastic_strain(t2, t2, v) };
-  { yf.apex_tangent(v) };
-};
-
 /// Single-stage implicit Euler plasticity (classical return mapping).
 ///
 /// Uses solver.solve() for the Newton iteration. No tableau, no stage
 /// vectors, no overhead. This is the standard radial return for J2.
-template<typename Traits, typename YieldFunction>
-class small_strain_plasticity final
-    : public material_base<small_strain_plasticity<Traits, YieldFunction>, Traits> {
+template<typename Traits>
+class drucker_prager_plasticity final
+    : public material_base<drucker_prager_plasticity<Traits>, Traits> {
 public:
-  using base = material_base<small_strain_plasticity<Traits, YieldFunction>, Traits>;
+  using base = material_base<drucker_prager_plasticity<Traits>, Traits>;
   using value_type = typename base::value_type;
   using input_parameter_controller = typename base::input_parameter_controller;
   static constexpr auto Dim = base::Dim;
   using tensor2 = tmech::tensor<value_type, Dim, 2>;
   using tensor4 = tmech::tensor<value_type, Dim, 4>;
-  using yield_fn = YieldFunction;
+  using yield_fn = drucker_prager_yield_function<value_type, base::Dim>;
   using solver_type = backward_euler<Traits>;
 
   template <typename... Args>
-  explicit small_strain_plasticity(Args&&... args)
+  explicit drucker_prager_plasticity(Args&&... args)
       : base(std::forward<Args>(args)...),
         m_stress(base::template add_output<tensor2>(
-            "stress", &small_strain_plasticity::compute)),
+            "stress", &drucker_prager_plasticity::compute)),
         m_tangent(base::template add_output<tensor4>("tangent")),
         m_eps_p(base::template add_history_output<tensor2>("plastic_strain")),
         m_kappa(base::template add_history_output<value_type>("equivalent_plastic_strain")),
@@ -69,8 +56,9 @@ public:
             base::template get_parameter<std::string>("hardening_source"),
             "hardening_modulus", EdgeKind::Local))
   {
-    if (base::m_parameter_handler.contains("yield_function"))
-      m_yf = base::template get_parameter<yield_fn>("yield_function");
+    m_yf = yield_fn(base::template get_parameter<value_type>("eta"),
+                    base::template get_parameter<value_type>("beta"),
+                    base::template get_parameter<value_type>("K_bulk"));
   }
 
   static input_parameter_controller parameters() {
@@ -81,6 +69,13 @@ public:
     para.template insert<std::string>("solver_source").template add<is_required>();
     para.template insert<value_type>("G").template add<is_required>();
     para.template insert<value_type>("sigma_0").template add<is_required>();
+    // The cone's friction, dilatancy and bulk modulus, as plain scalars.
+    // They used to arrive inside a "yield_function" C++ object, which the JSON
+    // reader cannot convert -- so the material could not be configured from a
+    // document at all (see #33).
+    para.template insert<value_type>("eta").template add<is_required>();
+    para.template insert<value_type>("beta").template add<is_required>();
+    para.template insert<value_type>("K_bulk").template add<is_required>();
     return para;
   }
 
@@ -104,28 +99,21 @@ public:
     // Conservative pre-check using the zero-hardening dlambda bound:
     //   dlambda_max = F_trial / G_eff  ≥  true dlambda  (for H' ≥ 0)
     // If even this upper bound triggers apex, smooth will also.
-    if constexpr (has_apex_return<yield_fn, value_type, Dim>) {
-      const auto G_eff = m_yf.effective_modulus(m_G);
-      const auto dlambda_max = ts.eval.F / G_eff;
-      if (m_yf.needs_apex_return(m_G, dlambda_max, ts.eval.sig_eq)) {
-        do_apex_return(ts.eval.sig, C_e, kappa_n);
-        return;
-      }
+    const auto G_eff_pre = m_yf.effective_modulus(m_G);
+    if (m_yf.needs_apex_return(m_G, ts.eval.F / G_eff_pre, ts.eval.sig_eq)) {
+      do_apex_return(ts.eval.sig, C_e, kappa_n);
+      return;
     }
 
     const auto dlambda = solve_smooth_newton(ts.eval.modified_sig_eq, kappa_n);
 
     // If smooth Newton fails and apex is available, try apex as fallback.
     if (!m_solver.get().converged()) {
-      if constexpr (has_apex_return<yield_fn, value_type, Dim>) {
-        do_apex_return(ts.eval.sig, C_e, kappa_n);
-        if (!m_solver.get().converged())
-          throw std::runtime_error(
-              "small_strain_plasticity: both smooth and apex Newton failed");
-        return;
-      }
-      throw std::runtime_error(
-          "small_strain_plasticity: smooth return-mapping Newton failed");
+      do_apex_return(ts.eval.sig, C_e, kappa_n);
+      if (!m_solver.get().converged())
+        throw std::runtime_error(
+            "drucker_prager_plasticity: both smooth and apex Newton failed");
+      return;
     }
 
     do_smooth_return(ts.eval, C_e, kappa_n, dlambda);
@@ -174,11 +162,8 @@ private:
 
   /// Apex return: deviatoric stress vanishes, only volumetric Newton.
   /// dev(ε_p) = dev(ε), tr(ε_p) += β·Δκ. Tangent is rank-1 volumetric.
-  /// Compiled only when the yield function provides apex support.
   void do_apex_return(const tensor2& sig_trial, const tensor4& C_e,
-                      value_type kappa_n)
-    requires has_apex_return<yield_fn, value_type, Dim>
-  {
+                      value_type kappa_n) {
     const auto phi_apex = m_yf.apex_modified_sig_eq(sig_trial);
     const auto G_eff_apex = m_yf.apex_effective_modulus();
     const auto dkappa = solve_scalar_return(phi_apex, G_eff_apex, kappa_n);
@@ -211,17 +196,7 @@ private:
   yield_fn m_yf{};
 };
 
-// j2_plasticity moved to materials/j2_plasticity.h as a dedicated class: J2 is
-// associative and has no apex, so it used none of this class's generality and
-// paid two rank-4 contractions per step for a tangent that has a closed form.
-// This class now serves the pressure-dependent models it was written for.
-
-/// Drucker-Prager plasticity. The yield function (with η, β, K_bulk) must be
-/// supplied via the "yield_function" parameter at construction.
-template<typename Traits>
-using drucker_prager_plasticity = small_strain_plasticity<Traits,
-    drucker_prager_yield_function<typename Traits::value_type, Traits::Dim>>;
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_SMALL_STRAIN_PLASTICITY_H
+#endif // NUMSIM_MATERIALS_DRUCKER_PRAGER_PLASTICITY_H

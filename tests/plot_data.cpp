@@ -6,7 +6,7 @@
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/materials/linear_isotropic_hardening.h"
 #include "numsim-materials/materials/drucker_prager_yield_function.h"
-#include "numsim-materials/materials/small_strain_plasticity.h"
+#include "numsim-materials/materials/drucker_prager_plasticity.h"
 #include "numsim-materials/materials/j2_plasticity.h"
 #include "numsim-materials/solvers/backward_euler.h"
 #include "numsim-materials/postprocessing/numerical_diff_checker.h"
@@ -141,7 +141,6 @@ run_result run_dp(T increment, int steps,
   p.insert<T>("K", H_mod);
   ctx.create<numsim::materials::linear_isotropic_hardening<policy>>(p);
 
-  dp_yield yf(T{0.3}, T{0.15}, K_val);
 
   p.clear();
   p.insert<std::string>("name", "dp");
@@ -151,7 +150,9 @@ run_result run_dp(T increment, int steps,
   p.insert<std::string>("solver_source", "solver");
   p.insert<T>("G", G_val);
   p.insert<T>("sigma_0", sigma_0);
-  p.insert<dp_yield>("yield_function", yf);
+  p.insert<T>("eta", T{0.3});
+  p.insert<T>("beta", T{0.15});
+  p.insert<T>("K_bulk", K_val);
   ctx.create<dp_plasticity>(p);
 
   p.clear();
