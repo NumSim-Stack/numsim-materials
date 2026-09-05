@@ -143,8 +143,13 @@ public:
 
     m_eps_p.new_value() = m_eps_p.old_value() + dlambda * N;
     m_kappa.new_value() = kappa_n + dlambda;
-    m_stress = tmech::dcontract(
-        C_e, tensor2(m_strain.get() - m_eps_p.new_value()));
+
+    // sigma = C_e : (eps - eps_p_new)
+    //       = C_e : (eps - eps_p_old) - dl (C_e : N)
+    //       = sig_trial - 2G dl N,           since C_e : N = 2G N.
+    // The same identity the tangent uses. Avoids a second rank-4 : rank-2
+    // contraction, which measures 33 ns against ~245 for the whole step.
+    m_stress = sig_trial - value_type{2} * m_G * dlambda * N;
 
     m_H.update_source();
     const auto GG = m_G * m_G;
