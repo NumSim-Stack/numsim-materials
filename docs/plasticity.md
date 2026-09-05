@@ -31,7 +31,7 @@ Current as of `refactor/scalar-newton-split` (PRs #39 and #40).
    │                     │          │  plasticity           │
    └─────────────────────┘          └───────────────────────┘
 
-   rk_plasticity iterates its own Butcher tableau and uses neither.
+   j2_rk_plasticity iterates its own Butcher tableau and uses neither.
 ```
 
 Three plasticity materials, none of them templated on a yield function any
@@ -41,7 +41,7 @@ more:
 |---|---|---|---|
 | `j2_plasticity` | backward Euler (radial return) | von Mises cylinder | associative |
 | `drucker_prager_plasticity` | backward Euler + apex branch | DP cone | **non**-associative (β ≠ η) |
-| `rk_plasticity` | Runge–Kutta, any Butcher tableau | J2 | associative |
+| `j2_rk_plasticity` | Runge–Kutta, any Butcher tableau | von Mises cylinder | associative |
 
 ---
 
@@ -74,7 +74,7 @@ These used to arrive inside a `yield_function` **C++ object**, which the JSON
 reader cannot convert — so the material could not be configured from a document
 at all. As plain scalars it can (issue #33).
 
-### `rk_plasticity`
+### `j2_rk_plasticity`
 
 Takes `K`, `G`, `sigma_0`, the two sources, plus `tolerance`, `max_iter` and a
 `tableau` pointer. Available tableaus: `forward_euler`, `explicit_midpoint`,
@@ -272,11 +272,21 @@ parameters became plain scalars:
 
 ---
 
-## 8. Known gaps
+## 8. What is still generic, and why
 
-- **`rk_plasticity` is still templated** on a yield function with one
-  instantiation (`j2_rk_plasticity`) — the same shape that was removed from
-  `small_strain_plasticity`.
+`plasticity_utils`' free functions — `compute_trial`, `evaluate_at_state`,
+`compute_tangent` — remain templated on a yield function, and that generality is
+real: `drucker_prager_plasticity` instantiates them with the DP cone and
+`j2_rk_plasticity` with the von Mises cylinder. Two callers, two yield
+functions, shared return-mapping algebra.
+
+That is the distinction worth holding onto. A template parameter with **one**
+argument is indirection — it was removed from `small_strain_plasticity` and from
+`rk_plasticity`. A template parameter with two genuinely different arguments is
+what templates are for.
+
+## 9. Known gaps
+
 - **`material_ref`** exists for exactly two call sites (the two backward-Euler
   return maps) and costs ~99 lines of core machinery. It bypasses the
   topological sort, so the plasticity↔solver ordering is not an edge the engine

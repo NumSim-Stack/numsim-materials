@@ -8,7 +8,7 @@
 #include "numsim-materials/materials/linear_isotropic_hardening.h"
 #include "numsim-materials/materials/drucker_prager_plasticity.h"
 #include "numsim-materials/materials/j2_plasticity.h"
-#include "numsim-materials/materials/rk_plasticity.h"
+#include "numsim-materials/materials/j2_rk_plasticity.h"
 #include "numsim-materials/solvers/local_newton.h"
 #include "numsim-materials/solvers/butcher_tableau.h"
 #include "numsim-materials/postprocessing/numerical_diff_checker.h"
