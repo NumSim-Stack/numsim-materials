@@ -78,10 +78,10 @@ run_result run_j2(T increment, int steps,
 
   p.clear();
   p.insert<std::string>("name", "j2");
-  p.insert<std::string>("elastic_source", "elastic");
   p.insert<std::string>("hardening_source", "hardening");
   p.insert<std::string>("strain_source", "stepper");
   p.insert<std::string>("solver_source", "solver");
+  p.insert<T>("K", K_val);
   p.insert<T>("G", G_val);
   p.insert<T>("sigma_0", sigma_0);
   ctx.create<j2_plasticity>(p);
@@ -144,7 +144,6 @@ run_result run_dp(T increment, int steps,
 
   p.clear();
   p.insert<std::string>("name", "dp");
-  p.insert<std::string>("elastic_source", "elastic");
   p.insert<std::string>("hardening_source", "hardening");
   p.insert<std::string>("strain_source", "stepper");
   p.insert<std::string>("solver_source", "solver");
