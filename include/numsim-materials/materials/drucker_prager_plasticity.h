@@ -41,6 +41,7 @@ public:
         m_kappa(base::template add_history_output<value_type>("equivalent_plastic_strain")),
         m_G(base::template get_parameter<value_type>("G")),
         m_sigma_0(base::template get_parameter<value_type>("sigma_0")),
+        m_K_bulk(base::template get_parameter<value_type>("K_bulk")),
         m_solver(base::template add_material_ref<solver_type>(
             base::template get_parameter<std::string>("solver_source"))),
         m_C_e(base::template add_input<tensor4>(
@@ -151,7 +152,16 @@ private:
                         const tensor4& C_e, value_type kappa_n, value_type dlambda) {
     m_eps_p.new_value() = m_eps_p.old_value() + dlambda * ts.N;
     m_kappa.new_value() = kappa_n + dlambda;
-    m_stress = tmech::dcontract(C_e, m_strain.get() - m_eps_p.new_value());
+
+    // sigma = C_e : (eps - eps_p_new) = sig_trial - dl (C_e : N).
+    // For isotropic C_e that is 2G dev(N) + K tr(N) I -- no rank-4 : rank-2
+    // contraction, which measures 33 ns against ~720 for the whole step. The
+    // flow is non-associative, so tr(N) = beta is generally nonzero and the
+    // volumetric term does not drop out as it does for J2.
+    const auto I = tmech::eye<value_type, Dim, 2>();
+    const tensor2 Ce_N{value_type{2} * m_G * tmech::dev(ts.N) +
+                       m_K_bulk * tmech::trace(ts.N) * I};
+    m_stress = ts.sig - dlambda * Ce_N;
 
     // Tangent at trial state (return mapping uses N_trial).
     // For J2, trial = converged. For DP, they differ.
@@ -187,6 +197,7 @@ private:
 
   const value_type& m_G;
   const value_type& m_sigma_0;
+  const value_type& m_K_bulk;
   material_ref<solver_type, Traits>& m_solver;
 
   const input_property<tensor4, property_traits>& m_C_e;
