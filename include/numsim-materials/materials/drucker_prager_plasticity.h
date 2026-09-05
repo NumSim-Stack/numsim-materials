@@ -44,9 +44,6 @@ public:
         m_K_bulk(base::template get_parameter<value_type>("K_bulk")),
         m_solver(base::template add_material_ref<solver_type>(
             base::template get_parameter<std::string>("solver_source"))),
-        m_C_e(base::template add_input<tensor4>(
-            base::template get_parameter<std::string>("elastic_source"),
-            "tangent", EdgeKind::Global)),
         m_strain(base::template add_input<tensor2>(
             base::template get_parameter<std::string>("strain_source"),
             "strain", EdgeKind::Global)),
@@ -59,12 +56,15 @@ public:
   {
     m_yf = yield_fn(base::template get_parameter<value_type>("eta"),
                     base::template get_parameter<value_type>("beta"),
-                    base::template get_parameter<value_type>("K_bulk"));
+                    m_K_bulk);
+    const auto I = tmech::eye<value_type, Dim, 2>();
+    const tensor4 IIvol{tmech::otimes(I, I) / value_type{Dim}};
+    m_C_e = value_type{3} * m_K_bulk * IIvol +
+            value_type{2} * m_G * plasticity_detail::make_IIdev<value_type, Dim>();
   }
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
-    para.template insert<std::string>("elastic_source").template add<is_required>();
     para.template insert<std::string>("hardening_source").template add<is_required>();
     para.template insert<std::string>("strain_source").template add<is_required>();
     para.template insert<std::string>("solver_source").template add<is_required>();
@@ -81,7 +81,7 @@ public:
   }
 
   void compute() {
-    const auto& C_e = m_C_e.get();
+    const auto& C_e = m_C_e;
     const auto kappa_n = m_kappa.old_value();
 
     m_kappa.new_value() = kappa_n;
@@ -200,11 +200,17 @@ private:
   const value_type& m_K_bulk;
   material_ref<solver_type, Traits>& m_solver;
 
-  const input_property<tensor4, property_traits>& m_C_e;
   const input_property<tensor2, property_traits>& m_strain;
   const input_property<value_type, property_traits>& m_H;
   const input_property<value_type, property_traits>& m_dH;
   yield_fn m_yf{};
+
+  /// The elastic stiffness, built here rather than read from another material.
+  /// The tangent collapse requires an isotropic C_e -- C_e : X = 2G X for
+  /// deviatoric X -- so accepting an arbitrary rank-4 tangent advertised a
+  /// generality this material cannot honour. K_bulk and G are already
+  /// parameters, so nothing new is asked of the caller.
+  tensor4 m_C_e{};
 };
 
 
