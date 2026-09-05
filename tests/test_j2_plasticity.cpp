@@ -258,9 +258,9 @@ protected:
 
     p.clear();
     p.insert<std::string>("name", "j2");
-    p.insert<std::string>("elastic_source", "elastic");
     p.insert<std::string>("hardening_source", "hardening");
     p.insert<std::string>("strain_source", "stepper");
+    p.insert<T>("K", T{166.67});
     p.insert<T>("G", T{76.92});
     p.insert<T>("sigma_0", T{50.0});
     p.insert<const numsim::materials::butcher_tableau*>("tableau", &m_tab);
