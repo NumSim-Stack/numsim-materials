@@ -9,7 +9,7 @@
 #include "numsim-materials/materials/drucker_prager_plasticity.h"
 #include "numsim-materials/materials/j2_plasticity.h"
 #include "numsim-materials/materials/rk_plasticity.h"
-#include "numsim-materials/solvers/backward_euler.h"
+#include "numsim-materials/solvers/local_newton.h"
 #include "numsim-materials/solvers/butcher_tableau.h"
 #include "numsim-materials/postprocessing/numerical_diff_checker.h"
 
@@ -44,7 +44,7 @@ protected:
     // Newton-Raphson solver
     p.clear();
     p.insert<std::string>("name", "solver");
-    ctx.create<numsim::materials::backward_euler<policy>>(p);
+    ctx.create<numsim::materials::local_newton<policy>>(p);
 
     // Linear isotropic hardening (Local edge — called in inner loop)
     p.clear();
@@ -158,7 +158,7 @@ protected:
 
     p.clear();
     p.insert<std::string>("name", "solver");
-    ctx.create<numsim::materials::backward_euler<policy>>(p);
+    ctx.create<numsim::materials::local_newton<policy>>(p);
 
     p.clear();
     p.insert<std::string>("name", "hardening");

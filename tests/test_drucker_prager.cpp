@@ -10,7 +10,7 @@
 #include "numsim-materials/materials/drucker_prager_yield_function.h"
 #include "numsim-materials/materials/drucker_prager_plasticity.h"
 #include "numsim-materials/materials/rk_plasticity.h"
-#include "numsim-materials/solvers/backward_euler.h"
+#include "numsim-materials/solvers/local_newton.h"
 #include "numsim-materials/solvers/butcher_tableau.h"
 #include "numsim-materials/postprocessing/numerical_diff_checker.h"
 
@@ -104,7 +104,7 @@ protected:
 
     p.clear();
     p.insert<std::string>("name", "solver");
-    ctx.create<numsim::materials::backward_euler<policy>>(p);
+    ctx.create<numsim::materials::local_newton<policy>>(p);
 
     p.clear();
     p.insert<std::string>("name", "hardening");
@@ -209,7 +209,7 @@ protected:
 
     p.clear();
     p.insert<std::string>("name", "solver");
-    ctx.create<numsim::materials::backward_euler<policy>>(p);
+    ctx.create<numsim::materials::local_newton<policy>>(p);
 
     p.clear();
     p.insert<std::string>("name", "hardening");
@@ -282,7 +282,7 @@ T run_dp_max_tangent_error(T increment, int steps) {
 
   p.clear();
   p.insert<std::string>("name", "solver");
-  ctx.create<numsim::materials::backward_euler<policy>>(p);
+  ctx.create<numsim::materials::local_newton<policy>>(p);
 
   p.clear();
   p.insert<std::string>("name", "hardening");
@@ -370,7 +370,7 @@ T max_tangent_error(std::vector<double> direction, T increment, int steps) {
 
   p.clear();
   p.insert<std::string>("name", "solver");
-  ctx.create<numsim::materials::backward_euler<policy>>(p);
+  ctx.create<numsim::materials::local_newton<policy>>(p);
 
   p.clear();
   p.insert<std::string>("name", "hardening");
@@ -467,7 +467,7 @@ TEST(DruckerPragerApex, HydrostaticTensionReachesTheApex) {
 
   p.clear();
   p.insert<std::string>("name", "solver");
-  ctx.create<numsim::materials::backward_euler<policy>>(p);
+  ctx.create<numsim::materials::local_newton<policy>>(p);
 
   p.clear();
   p.insert<std::string>("name", "hardening");
@@ -527,7 +527,7 @@ TEST(DruckerPragerApex, ApexStateIsAdmissible) {
   ctx.create<numsim::materials::linear_elasticity<policy>>(p);
   p.clear();
   p.insert<std::string>("name", "solver");
-  ctx.create<numsim::materials::backward_euler<policy>>(p);
+  ctx.create<numsim::materials::local_newton<policy>>(p);
   p.clear();
   p.insert<std::string>("name", "hardening");
   p.insert<std::string>("source", "dp");

@@ -4,6 +4,7 @@
 #include "numsim-materials/materials/tensor_component_stepper.h"
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/materials/scalar_stepper.h"
+#include "numsim-materials/solvers/local_newton.h"
 #include "numsim-materials/materials/scalar_identity_weight.h"
 #include "numsim-materials/materials/autocatalytic_reaction.h"
 #include "numsim-materials/solvers/backward_euler.h"
@@ -159,3 +160,67 @@ TEST(CuringSimulation, ConvergesToFullCure) {
 }
 
 } // namespace
+
+namespace {
+namespace nm_be = numsim::materials;
+
+/// backward_euler is the GRAPH-driven solver, so "function" is required.
+///
+/// It used to default to empty, which silently selected a second,
+/// callback-driven mode inside the same class: no inputs were created, update()
+/// was never bound, and "delta" stayed at zero. A consumer reading it froze at
+/// its start value for the whole analysis with no error -- measured, a cure
+/// that should reach 1.0 sat at 0.01 for 30 steps. That mode is local_newton
+/// now, chosen by naming a type rather than by omitting a parameter.
+TEST(BackwardEulerSetup, RequiresAFunctionToSolve) {
+  using policy = nm_be::material_policy_default;
+  nm_be::material_context<policy> ctx;
+  policy::ParameterHandler p;
+  p.insert<std::string>("name", "solver");
+  EXPECT_THROW(ctx.create<nm_be::backward_euler<policy>>(p),
+               std::invalid_argument)
+      << "omitting \"function\" must fail at setup, not produce an inert "
+         "solver whose consumers silently never advance";
+}
+
+/// A function material that does not publish residual/jacobian is caught at
+/// finalize, by name.
+TEST(BackwardEulerSetup, RejectsAFunctionWithoutResidualOrJacobian) {
+  using policy = nm_be::material_policy_default;
+  using T2 = policy::value_type;
+  nm_be::material_context<policy> ctx;
+  policy::ParameterHandler p;
+  p.insert<std::string>("name", "drv");
+  p.insert<T2>("increment", T2{0.1});
+  ctx.create<nm_be::scalar_stepper<policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "solver");
+  p.insert<std::string>("function", std::string("drv"));
+  ctx.create<nm_be::backward_euler<policy>>(p);
+  EXPECT_THROW(ctx.finalize(), std::runtime_error);
+}
+
+/// local_newton is the material-driven one: no function, no graph inputs, and
+/// its result carries convergence so a caller cannot read the number without
+/// the flag being at hand.
+TEST(LocalNewtonSolver, SolvesAndReportsConvergence) {
+  using policy = nm_be::material_policy_default;
+  using T2 = policy::value_type;
+  nm_be::material_context<policy> ctx;
+  policy::ParameterHandler p;
+  p.insert<std::string>("name", "solver");
+  auto& s = ctx.create<nm_be::local_newton<policy>>(p);
+  ctx.finalize();
+
+  // x^2 - 4 = 0 from x0 = 3
+  const auto ok = s.solve(
+      [](T2 x) { return std::pair<T2, T2>{x * x - T2{4}, T2{2} * x}; }, T2{3});
+  EXPECT_TRUE(ok.converged);
+  EXPECT_NEAR(ok.x, 2.0, 1e-10);
+
+  // No root: x^2 + 1 = 0. Must report failure rather than a plausible number.
+  const auto bad = s.solve(
+      [](T2 x) { return std::pair<T2, T2>{x * x + T2{1}, T2{2} * x}; }, T2{1});
+  EXPECT_FALSE(bad.converged);
+}
+}  // namespace

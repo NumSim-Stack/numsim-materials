@@ -8,7 +8,7 @@
 #include "numsim-materials/materials/drucker_prager_yield_function.h"
 #include "numsim-materials/materials/drucker_prager_plasticity.h"
 #include "numsim-materials/materials/j2_plasticity.h"
-#include "numsim-materials/solvers/backward_euler.h"
+#include "numsim-materials/solvers/local_newton.h"
 #include "numsim-materials/postprocessing/numerical_diff_checker.h"
 
 using policy = numsim::materials::material_policy_default;
@@ -68,7 +68,7 @@ run_result run_j2(T increment, int steps,
 
   p.clear();
   p.insert<std::string>("name", "solver");
-  ctx.create<numsim::materials::backward_euler<policy>>(p);
+  ctx.create<numsim::materials::local_newton<policy>>(p);
 
   p.clear();
   p.insert<std::string>("name", "hardening");
@@ -133,7 +133,7 @@ run_result run_dp(T increment, int steps,
 
   p.clear();
   p.insert<std::string>("name", "solver");
-  ctx.create<numsim::materials::backward_euler<policy>>(p);
+  ctx.create<numsim::materials::local_newton<policy>>(p);
 
   p.clear();
   p.insert<std::string>("name", "hardening");
