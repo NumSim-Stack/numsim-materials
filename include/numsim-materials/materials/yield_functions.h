@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_YIELD_FUNCTIONS_H
-#define NUMSIM_MATERIALS_YIELD_FUNCTIONS_H
+#ifndef YIELD_FUNCTIONS_H
+#define YIELD_FUNCTIONS_H
 
 #include <cmath>
 #include <tmech/tmech.h>
@@ -72,4 +72,4 @@ struct j2_yield_function {
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_YIELD_FUNCTIONS_H
+#endif // YIELD_FUNCTIONS_H

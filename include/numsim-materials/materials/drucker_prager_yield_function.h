@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_DRUCKER_PRAGER_YIELD_FUNCTION_H
-#define NUMSIM_MATERIALS_DRUCKER_PRAGER_YIELD_FUNCTION_H
+#ifndef DRUCKER_PRAGER_YIELD_FUNCTION_H
+#define DRUCKER_PRAGER_YIELD_FUNCTION_H
 
 #include <cmath>
 #include <tmech/tmech.h>
@@ -157,4 +157,4 @@ struct drucker_prager_yield_function {
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_DRUCKER_PRAGER_YIELD_FUNCTION_H
+#endif // DRUCKER_PRAGER_YIELD_FUNCTION_H

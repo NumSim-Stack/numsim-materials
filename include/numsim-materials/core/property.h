@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_PROPERTY_H
-#define NUMSIM_MATERIALS_PROPERTY_H
+#ifndef PROPERTY_H
+#define PROPERTY_H
 
 #include <numsim-core/property_graph/property.h>
 
@@ -12,4 +12,4 @@ namespace numsim::materials {
   using numsim_core::make_property;
 }
 
-#endif // NUMSIM_MATERIALS_PROPERTY_H
+#endif // PROPERTY_H

@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_MATERIAL_INTERFACE_H
-#define NUMSIM_MATERIALS_MATERIAL_INTERFACE_H
+#ifndef MATERIAL_INTERFACE_H
+#define MATERIAL_INTERFACE_H
 
 #include <any>
 #include <functional>
@@ -145,4 +145,4 @@ private:
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_MATERIAL_INTERFACE_H
+#endif // MATERIAL_INTERFACE_H
