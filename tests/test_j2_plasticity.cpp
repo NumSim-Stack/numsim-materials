@@ -6,7 +6,7 @@
 #include "numsim-materials/materials/tensor_component_stepper.h"
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/materials/linear_isotropic_hardening.h"
-#include "numsim-materials/materials/small_strain_plasticity.h"
+#include "numsim-materials/materials/drucker_prager_plasticity.h"
 #include "numsim-materials/materials/j2_plasticity.h"
 #include "numsim-materials/materials/rk_plasticity.h"
 #include "numsim-materials/solvers/backward_euler.h"

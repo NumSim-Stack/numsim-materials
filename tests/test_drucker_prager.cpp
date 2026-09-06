@@ -8,7 +8,7 @@
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/materials/linear_isotropic_hardening.h"
 #include "numsim-materials/materials/drucker_prager_yield_function.h"
-#include "numsim-materials/materials/small_strain_plasticity.h"
+#include "numsim-materials/materials/drucker_prager_plasticity.h"
 #include "numsim-materials/materials/rk_plasticity.h"
 #include "numsim-materials/solvers/backward_euler.h"
 #include "numsim-materials/solvers/butcher_tableau.h"
@@ -113,7 +113,6 @@ protected:
     ctx.create<numsim::materials::linear_isotropic_hardening<policy>>(p);
 
     // Drucker-Prager yield function with friction and dilatancy
-    dp_yield yf(dp_eta, dp_beta, K);
 
     p.clear();
     p.insert<std::string>("name", "dp");
@@ -123,7 +122,9 @@ protected:
     p.insert<std::string>("solver_source", "solver");
     p.insert<T>("G", G);
     p.insert<T>("sigma_0", cohesion);
-    p.insert<dp_yield>("yield_function", yf);
+    p.insert<T>("eta", dp_eta);
+    p.insert<T>("beta", dp_beta);
+    p.insert<T>("K_bulk", K);
     ctx.create<dp_plasticity>(p);
 
     ctx.finalize();
@@ -217,7 +218,6 @@ protected:
     p.insert<T>("K", T{500.0});
     ctx.create<numsim::materials::linear_isotropic_hardening<policy>>(p);
 
-    dp_yield yf(T{0.1}, T{0.05}, T{166.67});
 
     p.clear();
     p.insert<std::string>("name", "dp");
@@ -227,7 +227,9 @@ protected:
     p.insert<std::string>("solver_source", "solver");
     p.insert<T>("G", T{76.92});
     p.insert<T>("sigma_0", T{20.0});
-    p.insert<dp_yield>("yield_function", yf);
+    p.insert<T>("eta", T{0.1});
+    p.insert<T>("beta", T{0.05});
+    p.insert<T>("K_bulk", T{166.67});
     ctx.create<dp_plasticity>(p);
 
     p.clear();
@@ -290,7 +292,6 @@ T run_dp_max_tangent_error(T increment, int steps) {
   p.insert<T>("K", T{500.0});
   ctx.create<numsim::materials::linear_isotropic_hardening<policy>>(p);
 
-  dp_yield yf(T{0.1}, T{0.05}, T{166.67});
 
   p.clear();
   p.insert<std::string>("name", "dp");
@@ -300,7 +301,9 @@ T run_dp_max_tangent_error(T increment, int steps) {
   p.insert<std::string>("solver_source", "solver");
   p.insert<T>("G", T{76.92});
   p.insert<T>("sigma_0", T{20.0});
-  p.insert<dp_yield>("yield_function", yf);
+  p.insert<T>("eta", T{0.1});
+  p.insert<T>("beta", T{0.05});
+  p.insert<T>("K_bulk", T{166.67});
   ctx.create<dp_plasticity>(p);
 
   p.clear();
@@ -378,7 +381,6 @@ T max_tangent_error(std::vector<double> direction, T increment, int steps) {
   p.insert<T>("K", T{500.0});
   ctx.create<numsim::materials::linear_isotropic_hardening<policy>>(p);
 
-  dp_yield yf(T{0.1}, T{0.05}, T{166.67});
   p.clear();
   p.insert<std::string>("name", "dp");
   p.insert<std::string>("elastic_source", "elastic");
@@ -387,7 +389,9 @@ T max_tangent_error(std::vector<double> direction, T increment, int steps) {
   p.insert<std::string>("solver_source", "solver");
   p.insert<T>("G", T{76.92});
   p.insert<T>("sigma_0", T{20.0});
-  p.insert<dp_yield>("yield_function", yf);
+  p.insert<T>("eta", T{0.1});
+  p.insert<T>("beta", T{0.05});
+  p.insert<T>("K_bulk", T{166.67});
   ctx.create<dp_plasticity>(p);
 
   p.clear();
@@ -475,7 +479,6 @@ TEST(DruckerPragerApex, HydrostaticTensionReachesTheApex) {
   p.insert<T>("K", H_mod);
   ctx.create<numsim::materials::linear_isotropic_hardening<policy>>(p);
 
-  dp_yield yf(dp_eta, dp_beta, K);
   p.clear();
   p.insert<std::string>("name", "dp");
   p.insert<std::string>("elastic_source", "elastic");
@@ -484,7 +487,9 @@ TEST(DruckerPragerApex, HydrostaticTensionReachesTheApex) {
   p.insert<std::string>("solver_source", "solver");
   p.insert<T>("G", G);
   p.insert<T>("sigma_0", cohesion);
-  p.insert<dp_yield>("yield_function", yf);
+  p.insert<T>("eta", dp_eta);
+  p.insert<T>("beta", dp_beta);
+  p.insert<T>("K_bulk", K);
   ctx.create<dp_plasticity>(p);
   ctx.finalize();
 
@@ -533,7 +538,6 @@ TEST(DruckerPragerApex, ApexStateIsAdmissible) {
   p.insert<std::string>("source", "dp");
   p.insert<T>("K", H_mod);
   ctx.create<numsim::materials::linear_isotropic_hardening<policy>>(p);
-  dp_yield yf(dp_eta, dp_beta, K);
   p.clear();
   p.insert<std::string>("name", "dp");
   p.insert<std::string>("elastic_source", "elastic");
@@ -541,7 +545,9 @@ TEST(DruckerPragerApex, ApexStateIsAdmissible) {
   p.insert<std::string>("strain_source", "stepper");
   p.insert<std::string>("solver_source", "solver");
   p.insert<T>("G", G); p.insert<T>("sigma_0", cohesion);
-  p.insert<dp_yield>("yield_function", yf);
+  p.insert<T>("eta", dp_eta);
+  p.insert<T>("beta", dp_beta);
+  p.insert<T>("K_bulk", K);
   ctx.create<dp_plasticity>(p);
   ctx.finalize();
 
