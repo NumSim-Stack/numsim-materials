@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_JSON_PARAMETER_CONVERTER_H
-#define NUMSIM_MATERIALS_JSON_PARAMETER_CONVERTER_H
+#ifndef JSON_PARAMETER_CONVERTER_H
+#define JSON_PARAMETER_CONVERTER_H
 
 #include <any>
 #include <functional>
@@ -189,7 +189,7 @@ void json_to_parameters(
 
   adapter::for_each_key(json, [&](const std::string& key) {
     if (key != "type" && !schema_keys.contains(key))
-      std::println("  warning: unknown parameter '{}' in JSON (not in schema)", key);
+      std::println(stderr, "  warning: unknown parameter '{}' in JSON (not in schema)", key);
   });
 
   // Read + insert + validate in one call
@@ -210,4 +210,4 @@ void json_to_parameters(
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_JSON_PARAMETER_CONVERTER_H
+#endif // JSON_PARAMETER_CONVERTER_H

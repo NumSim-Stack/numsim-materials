@@ -10,8 +10,10 @@ namespace numsim::materials {
 ///
 /// Produces:
 ///   "current_state" (history) — curing degree z
-///   "residual"                — R(dz) for solver
-///   "jacobian"                — dR/dz for solver
+///   "residual"                — R(dz) for backward_euler solver
+///   "jacobian"                — dR/dz for backward_euler solver
+///   "rate"                    — dz/dt = k(T)·z^m·(1-z)^n (for RK integrators)
+///   "rate_derivative"         — d(dz/dt)/dz (for implicit RK integrators)
 ///
 /// Consumes:
 ///   time::state, temperature::state (Global)
@@ -34,6 +36,9 @@ public:
             "residual", &autocatalytic_reaction::update_residual)),
         m_jac(base::template add_output<value_type>(
             "jacobian", &autocatalytic_reaction::update_jacobian)),
+        m_rate(base::template add_output<value_type>(
+            "rate", &autocatalytic_reaction::update_rate)),
+        m_drate(base::template add_output<value_type>("rate_derivative")),
         // parameters
         m_timer_name(base::template get_parameter<std::string>("timer_name")),
         m_temp_name(base::template get_parameter<std::string>("temperature_name")),
@@ -104,6 +109,24 @@ public:
                      (m_m * (z_total - value_type{1}) + m_n * z_total);
   }
 
+  /// Compute the raw ODE rate: dz/dt = k(T) * z^m * (1-z)^n
+  /// and its derivative d(dz/dt)/dz. Used by RK integrators.
+  void update_rate() {
+    compute_rate_constant();
+    const auto z = m_his.new_value();
+    if (z >= value_type{1} || z <= value_type{0}) {
+      m_rate = value_type{0};
+      m_drate = value_type{0};
+      return;
+    }
+    const auto zm = std::pow(z, m_m);
+    const auto omz = std::pow(value_type{1} - z, m_n);
+    m_rate = m_k * zm * omz;
+    // d/dz [k * z^m * (1-z)^n] = k * [m*z^(m-1)*(1-z)^n - n*z^m*(1-z)^(n-1)]
+    m_drate = m_k * (m_m * std::pow(z, m_m - 1) * omz
+                   - m_n * zm * std::pow(value_type{1} - z, m_n - 1));
+  }
+
   void compute_rate_constant() {
     const auto theta{value_type{273.15} + m_theta.new_value()};
     m_k = m_A * std::exp(-m_E / (m_R * theta));
@@ -113,6 +136,8 @@ private:
   history_property<value_type>& m_his;
   value_type& m_res;
   value_type& m_jac;
+  value_type& m_rate;
+  value_type& m_drate;
   value_type m_k;
 
   const std::string& m_timer_name;

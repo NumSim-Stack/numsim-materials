@@ -51,6 +51,27 @@ else()
   FetchContent_MakeAvailable(tmech)
 endif()
 
+# --- Dependencies (Eigen for linear algebra) ---
+find_package(Eigen3 QUIET)
+if(NOT Eigen3_FOUND)
+  # SOURCE_SUBDIR names a directory with no CMakeLists.txt, so MakeAvailable
+  # downloads Eigen and stops: its CMake never runs. Eigen is header-only, so
+  # nothing is lost, and the alternative was fighting its build system -- it
+  # gates its ~780 tests on BUILD_TESTING (EIGEN_BUILD_TESTING only exists
+  # after 3.4.0), and suppressing them meant forcing a GLOBAL variable OFF that
+  # our own tests would depend on the moment anyone switched to include(CTest).
+  # Same treatment tmech and nlohmann already get here: take the headers, leave
+  # the build system alone.
+  FetchContent_Declare(
+    eigen
+    GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
+    GIT_TAG 3.4.0
+    GIT_SHALLOW TRUE
+    SOURCE_SUBDIR  headers-only-do-not-configure
+  )
+  FetchContent_MakeAvailable(eigen)
+endif()
+
 # --- Header-only library ---
 add_library(${PROJECT_NAME} INTERFACE)
 add_library(${PROJECT_NAME}::${PROJECT_NAME} ALIAS ${PROJECT_NAME})
@@ -63,6 +84,11 @@ target_include_directories(${PROJECT_NAME}
 
 target_compile_features(${PROJECT_NAME} INTERFACE cxx_std_23)
 target_link_libraries(${PROJECT_NAME} INTERFACE numsim-core)
+# Every imported target linked INTERFACE ends up named in the exported target
+# set, and a consumer of the installed package must be able to resolve it. The
+# generated Config re-finds each one; without that, find_package() fails with
+# "the following imported targets are referenced, but are missing".
+set(NUMSIM_MATERIALS_EXPORTED_DEPS numsim-core)
 
 # tmech is header-only — add its include path without linking a target
 # (linking would pull it into the install export set)
@@ -73,6 +99,21 @@ if(TARGET tmech)
   endif()
 elseif(tmech_FOUND)
   target_link_libraries(${PROJECT_NAME} INTERFACE tmech::tmech)
+  list(APPEND NUMSIM_MATERIALS_EXPORTED_DEPS tmech)
+endif()
+
+# Eigen — header-only, same pattern. Fetched, there is no target to link, so
+# the populated source dir IS the include path.
+if(TARGET Eigen3::Eigen)
+  target_link_libraries(${PROJECT_NAME} INTERFACE Eigen3::Eigen)
+  list(APPEND NUMSIM_MATERIALS_EXPORTED_DEPS Eigen3)
+elseif(eigen_SOURCE_DIR)
+  # BUILD_INTERFACE: the fetched path lives under the build tree, and a raw one
+  # in an exported target's INTERFACE_INCLUDE_DIRECTORIES is rejected at
+  # generate time ("prefixed in the build directory"). A consumer of the
+  # INSTALLED package supplies its own Eigen, exactly as it does for tmech.
+  target_include_directories(${PROJECT_NAME}
+    INTERFACE $<BUILD_INTERFACE:${eigen_SOURCE_DIR}>)
 endif()
 
 # Force C++23 globally — numsim-core headers use <print>/std::println
@@ -134,9 +175,21 @@ install(
 )
 
 # --- Testing ---
+# include(CTest) is the standard entry point: it calls enable_testing() and
+# declares BUILD_TESTING, the switch consumers expect to reach. Only at top
+# level -- embedded in a superproject, that project owns the dashboard targets
+# and its BUILD_TESTING choice should reach us rather than be re-declared.
+if(PROJECT_IS_TOP_LEVEL)
+  include(CTest)
+elseif(NOT DEFINED BUILD_TESTING)
+  set(BUILD_TESTING ON)
+endif()
+
+# Two switches, deliberately: BUILD_TESTING is how a superproject turns off
+# every subproject's tests at once, NUMSIM_BUILD_TESTS is how it turns off only
+# ours. Either being off is enough.
 option(NUMSIM_BUILD_TESTS "Build unit tests" ON)
-if(NUMSIM_BUILD_TESTS)
-  enable_testing()
+if(NUMSIM_BUILD_TESTS AND BUILD_TESTING)
   FetchContent_Declare(
     googletest
     GIT_REPOSITORY https://github.com/google/googletest

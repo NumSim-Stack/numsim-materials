@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_MATERIAL_BASE_H
-#define NUMSIM_MATERIALS_MATERIAL_BASE_H
+#ifndef MATERIAL_BASE_H
+#define MATERIAL_BASE_H
 
 #include <string>
 #include <numsim-core/input_parameter_controller.h>
@@ -92,4 +92,4 @@ private:
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_MATERIAL_BASE_H
+#endif // MATERIAL_BASE_H

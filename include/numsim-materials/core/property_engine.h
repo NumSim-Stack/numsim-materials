@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_PROPERTY_ENGINE_H
-#define NUMSIM_MATERIALS_PROPERTY_ENGINE_H
+#ifndef PROPERTY_ENGINE_H
+#define PROPERTY_ENGINE_H
 
 #include <algorithm>
 #include <print>
@@ -122,10 +122,10 @@ public:
   }
 
   void dump() const {
-    std::println("=== Property execution order ({} properties) ===",
+    std::println(stderr, "=== Property execution order ({} properties) ===",
                  m_property_execution_order.size());
     for (auto* prop : m_property_execution_order)
-      std::println("  {}::{}{}", prop->traits().id.owner, prop->traits().id.name,
+      std::println(stderr, "  {}::{}{}", prop->traits().id.owner, prop->traits().id.name,
                    prop->traits().update ? "" : " (no callback)");
   }
 
@@ -282,4 +282,4 @@ private:
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_PROPERTY_ENGINE_H
+#endif // PROPERTY_ENGINE_H
