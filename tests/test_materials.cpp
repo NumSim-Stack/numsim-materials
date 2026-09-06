@@ -257,6 +257,27 @@ TEST(NewtonScalar, ConvergesAndReportsTheIterationCount) {
 /// linear problem is solved exactly by it, and the loop exits before it can
 /// observe the zero residual. Without the re-check this reports failure on a
 /// correct answer.
+/// A negative root must survive the solver untouched.
+///
+/// backward_euler::solve() used to clamp with std::max(x, 0) on every path,
+/// including its failure paths, so a diverged solve came back as a
+/// plausible-looking zero. That clamp is gone: the non-negativity the plastic
+/// multiplier needs is a KKT statement, applied at the three plasticity call
+/// sites, not a property of scalar Newton.
+///
+/// Carried over from #17, which found the clamp; the class it tested through
+/// no longer has a callback mode, so the assertion moves to the algorithm.
+TEST(NewtonScalar, ANegativeRootSurvives) {
+  const numsim::materials::newton_scalar<T> solver{T{1e-12}, 100};
+  // r(x) = x + 1  ->  root at x = -1
+  const auto r = solver.solve(
+      [](T x) { return std::pair<T, T>{x + T{1}, T{1}}; });
+  EXPECT_TRUE(r.converged);
+  EXPECT_NEAR(r.x, T{-1}, 1e-12)
+      << "newton_scalar is a general scalar Newton -- a negative root must "
+         "survive";
+}
+
 TEST(NewtonScalar, ABudgetExhaustedOnTheRootStillReportsConvergence) {
   const numsim::materials::newton_scalar<T> solver{T{1e-12}, 1};
   const auto r = solver.solve(

@@ -4,6 +4,7 @@
 #include <numsim-core/object_registry.h>
 #include "numsim-materials/core/material_base.h"
 #include "numsim-materials/solvers/backward_euler.h"
+#include "numsim-materials/solvers/vector_newton.h"
 #include "numsim-materials/materials/scalar_stepper.h"
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/materials/autocatalytic_reaction.h"
@@ -80,6 +81,9 @@ void register_default_materials() {
   factory.template register_type<strain_threshold_yield<Traits>>("strain_threshold_yield");
   factory.template register_type<exponential_damage_law<Traits>>("exponential_damage_law");
   factory.template register_type<isotropic_damage<Traits>>("isotropic_damage");
+  // A single registered type covers every unknown combination — the layout is
+  // dispatched from the "unknowns" parameter, not baked into the template.
+  factory.template register_type<vector_newton<Traits>>("vector_newton");
 }
 
 } // namespace numsim::materials

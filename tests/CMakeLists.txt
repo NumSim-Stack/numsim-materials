@@ -1,3 +1,5 @@
+find_package(Threads REQUIRED)
+
 include(GoogleTest)
 
 macro(add_numsim_test TARGET_NAME)
@@ -13,6 +15,15 @@ add_numsim_test(test_damage test_damage.cpp)
 add_numsim_test(test_j2_plasticity test_j2_plasticity.cpp)
 add_numsim_test(test_rk_integrator test_rk_integrator.cpp)
 add_numsim_test(test_drucker_prager test_drucker_prager.cpp)
+add_numsim_test(test_unknown_layout test_unknown_layout.cpp)
+add_numsim_test(test_vector_newton test_vector_newton.cpp)
+add_numsim_test(test_umat_conversion test_umat_conversion.cpp)
+add_numsim_test(test_external_state_source test_external_state_source.cpp)
+add_numsim_test(test_statev_map test_statev_map.cpp)
+add_numsim_test(test_material_point_evaluator test_material_point_evaluator.cpp)
+add_numsim_test(test_plane_stress_evaluator test_plane_stress_evaluator.cpp)
+add_numsim_test(test_umat_interface test_umat_interface.cpp)
+target_link_libraries(test_umat_interface PRIVATE Threads::Threads)
 
 # Data dumper for plotting (not a test — standalone executable)
 add_executable(plot_data plot_data.cpp)
