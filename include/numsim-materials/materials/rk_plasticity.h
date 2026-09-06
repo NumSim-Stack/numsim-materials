@@ -37,16 +37,14 @@ public:
         m_tangent(base::template add_output<tensor4>("tangent")),
         m_eps_p(base::template add_history_output<tensor2>("plastic_strain")),
         m_kappa(base::template add_history_output<value_type>("equivalent_plastic_strain")),
+        m_K(base::template get_parameter<value_type>("K")),
         m_G(base::template get_parameter<value_type>("G")),
         m_sigma_0(base::template get_parameter<value_type>("sigma_0")),
         m_tol(base::template get_parameter<value_type>("tolerance")),
         m_max_iter(base::template get_parameter<int>("max_iter")),
         m_tableau(base::template get_parameter<const butcher_tableau*>("tableau")),
-        m_elastic_source(base::template get_parameter<std::string>("elastic_source")),
         m_hardening_source(base::template get_parameter<std::string>("hardening_source")),
         m_strain_source(base::template get_parameter<std::string>("strain_source")),
-        m_C_e(base::template add_input<tensor4>(
-            m_elastic_source, "tangent", EdgeKind::Global)),
         m_strain(base::template add_input<tensor2>(
             m_strain_source, "strain", EdgeKind::Global)),
         m_H(base::template add_input<value_type>(
@@ -54,6 +52,11 @@ public:
         m_dH(base::template add_input<value_type>(
             m_hardening_source, "hardening_modulus", EdgeKind::Local))
   {
+    const auto I = tmech::eye<value_type, Dim, 2>();
+    const tensor4 IIvol{tmech::otimes(I, I) / value_type{Dim}};
+    m_C_e = value_type{3} * m_K * IIvol +
+            value_type{2} * m_G * plasticity_detail::make_IIdev<value_type, Dim>();
+
     const int s = m_tableau->stages();
     m_dlambda.resize(s, value_type{0});
     m_N_stage.resize(s);
@@ -67,9 +70,9 @@ public:
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
-    para.template insert<std::string>("elastic_source").template add<is_required>();
     para.template insert<std::string>("hardening_source").template add<is_required>();
     para.template insert<std::string>("strain_source").template add<is_required>();
+    para.template insert<value_type>("K").template add<is_required>();
     para.template insert<value_type>("G").template add<is_required>();
     para.template insert<value_type>("sigma_0").template add<is_required>();
     para.template insert<value_type>("tolerance")
@@ -80,7 +83,7 @@ public:
   }
 
   void compute() {
-    const auto& C_e = m_C_e.get();
+    const auto& C_e = m_C_e;
     const auto& eps = m_strain.get();
     const auto kappa_n = m_kappa.old_value();
     const auto eps_p_n = m_eps_p.old_value();
@@ -181,19 +184,25 @@ private:
   history_property<tensor2>& m_eps_p;
   history_property<value_type>& m_kappa;
 
+  const value_type& m_K;
   const value_type& m_G;
   const value_type& m_sigma_0;
   const value_type& m_tol;
   const int& m_max_iter;
   const butcher_tableau* m_tableau;
-  const std::string& m_elastic_source;
   const std::string& m_hardening_source;
   const std::string& m_strain_source;
 
-  const input_property<tensor4, property_traits>& m_C_e;
   const input_property<tensor2, property_traits>& m_strain;
   const input_property<value_type, property_traits>& m_H;
   const input_property<value_type, property_traits>& m_dH;
+
+  /// Built here, not read from an elastic_source. compute_tangent's collapse
+  /// (C_e : X = 2G X) and effective_modulus(G) = 3G both require an isotropic
+  /// C_e, so taking an arbitrary rank-4 tangent promised more than this class
+  /// can deliver -- and pulled a linear_elasticity into the graph whose own
+  /// "stress" output is meaningless once eps_p is nonzero.
+  tensor4 m_C_e{};
 
   yield_fn m_yf{};
   std::vector<value_type> m_dlambda;

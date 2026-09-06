@@ -116,7 +116,6 @@ protected:
 
     p.clear();
     p.insert<std::string>("name", "dp");
-    p.insert<std::string>("elastic_source", "elastic");
     p.insert<std::string>("hardening_source", "hardening");
     p.insert<std::string>("strain_source", "stepper");
     p.insert<std::string>("solver_source", "solver");
@@ -221,7 +220,6 @@ protected:
 
     p.clear();
     p.insert<std::string>("name", "dp");
-    p.insert<std::string>("elastic_source", "elastic");
     p.insert<std::string>("hardening_source", "hardening");
     p.insert<std::string>("strain_source", "stepper");
     p.insert<std::string>("solver_source", "solver");
@@ -295,7 +293,6 @@ T run_dp_max_tangent_error(T increment, int steps) {
 
   p.clear();
   p.insert<std::string>("name", "dp");
-  p.insert<std::string>("elastic_source", "elastic");
   p.insert<std::string>("hardening_source", "hardening");
   p.insert<std::string>("strain_source", "stepper");
   p.insert<std::string>("solver_source", "solver");
@@ -383,7 +380,6 @@ T max_tangent_error(std::vector<double> direction, T increment, int steps) {
 
   p.clear();
   p.insert<std::string>("name", "dp");
-  p.insert<std::string>("elastic_source", "elastic");
   p.insert<std::string>("hardening_source", "hardening");
   p.insert<std::string>("strain_source", "stepper");
   p.insert<std::string>("solver_source", "solver");
@@ -481,7 +477,6 @@ TEST(DruckerPragerApex, HydrostaticTensionReachesTheApex) {
 
   p.clear();
   p.insert<std::string>("name", "dp");
-  p.insert<std::string>("elastic_source", "elastic");
   p.insert<std::string>("hardening_source", "hardening");
   p.insert<std::string>("strain_source", "stepper");
   p.insert<std::string>("solver_source", "solver");
@@ -540,7 +535,6 @@ TEST(DruckerPragerApex, ApexStateIsAdmissible) {
   ctx.create<numsim::materials::linear_isotropic_hardening<policy>>(p);
   p.clear();
   p.insert<std::string>("name", "dp");
-  p.insert<std::string>("elastic_source", "elastic");
   p.insert<std::string>("hardening_source", "hardening");
   p.insert<std::string>("strain_source", "stepper");
   p.insert<std::string>("solver_source", "solver");

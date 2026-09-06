@@ -45,9 +45,10 @@ namespace numsim::materials {
 /// may be nonlinear (see exponential_isotropic_hardening).
 ///
 /// Parameters:
-///   "name", "elastic_source", "hardening_source", "strain_source",
-///   "solver_source", "G", "sigma_0"
-/// -- the same set small_strain_plasticity takes, so this is a drop-in.
+///   "name", "hardening_source", "strain_source", "solver_source",
+///   "K", "G", "sigma_0"
+///
+/// No elastic_source: the stiffness is built from K and G here.
 template <typename Traits>
 class j2_plasticity final
     : public material_base<j2_plasticity<Traits>, Traits> {
@@ -71,11 +72,9 @@ public:
             "equivalent_plastic_strain")),
         m_G(base::template get_parameter<value_type>("G")),
         m_sigma_0(base::template get_parameter<value_type>("sigma_0")),
+        m_K(base::template get_parameter<value_type>("K")),
         m_solver(base::template add_material_ref<solver_type>(
             base::template get_parameter<std::string>("solver_source"))),
-        m_C_e(base::template add_input<tensor4>(
-            base::template get_parameter<std::string>("elastic_source"),
-            "tangent", EdgeKind::Global)),
         m_strain(base::template add_input<tensor2>(
             base::template get_parameter<std::string>("strain_source"),
             "strain", EdgeKind::Global)),
@@ -85,26 +84,41 @@ public:
         m_dH(base::template add_input<value_type>(
             base::template get_parameter<std::string>("hardening_source"),
             "hardening_modulus", EdgeKind::Local)),
-        m_IIdev(plasticity_detail::make_IIdev<value_type, Dim>())
+        m_IIdev(plasticity_detail::make_IIdev<value_type, Dim>()),
+        m_C_e(build_elastic_tangent(m_K, m_G, m_IIdev))
   {}
+
+  /// The elastic stiffness, built here rather than read from another material.
+  ///
+  /// The closed forms below REQUIRE an isotropic C_e -- that is what makes
+  /// C_e : N = 2G N and N : C_e : N = 3G true. Accepting an arbitrary rank-4
+  /// tangent from an elastic_source advertised a generality this material
+  /// cannot honour, and dragged a linear_elasticity into every plasticity graph
+  /// whose own "stress" output (C : eps, ignoring eps_p) is meaningless once
+  /// yielding starts.
+  static tensor4 build_elastic_tangent(value_type K, value_type G,
+                                       const tensor4& IIdev) {
+    const auto I = tmech::eye<value_type, Dim, 2>();
+    return value_type{3} * K * (tmech::otimes(I, I) / value_type{Dim}) +
+           value_type{2} * G * IIdev;
+  }
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
-    para.template insert<std::string>("elastic_source")
-        .template add<is_required>();
     para.template insert<std::string>("hardening_source")
         .template add<is_required>();
     para.template insert<std::string>("strain_source")
         .template add<is_required>();
     para.template insert<std::string>("solver_source")
         .template add<is_required>();
+    para.template insert<value_type>("K").template add<is_required>();
     para.template insert<value_type>("G").template add<is_required>();
     para.template insert<value_type>("sigma_0").template add<is_required>();
     return para;
   }
 
   void compute() {
-    const auto& C_e = m_C_e.get();
+    const auto& C_e = m_C_e;
     const auto kappa_n = m_kappa.old_value();
 
     m_kappa.new_value() = kappa_n;
@@ -143,8 +157,13 @@ public:
 
     m_eps_p.new_value() = m_eps_p.old_value() + dlambda * N;
     m_kappa.new_value() = kappa_n + dlambda;
-    m_stress = tmech::dcontract(
-        C_e, tensor2(m_strain.get() - m_eps_p.new_value()));
+
+    // sigma = C_e : (eps - eps_p_new)
+    //       = C_e : (eps - eps_p_old) - dl (C_e : N)
+    //       = sig_trial - 2G dl N,           since C_e : N = 2G N.
+    // The same identity the tangent uses. Avoids a second rank-4 : rank-2
+    // contraction, which measures 33 ns against ~245 for the whole step.
+    m_stress = sig_trial - value_type{2} * m_G * dlambda * N;
 
     m_H.update_source();
     const auto GG = m_G * m_G;
@@ -162,14 +181,15 @@ private:
 
   const value_type& m_G;
   const value_type& m_sigma_0;
+  const value_type& m_K;
   material_ref<solver_type, Traits>& m_solver;
 
-  const input_property<tensor4, property_traits>& m_C_e;
   const input_property<tensor2, property_traits>& m_strain;
   const input_property<value_type, property_traits>& m_H;
   const input_property<value_type, property_traits>& m_dH;
 
   const tensor4 m_IIdev;
+  const tensor4 m_C_e;
 };
 
 }  // namespace numsim::materials
