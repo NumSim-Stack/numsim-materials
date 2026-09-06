@@ -2,6 +2,7 @@
 #define J2_RK_PLASTICITY_H
 
 #include <cmath>
+#include <stdexcept>
 #include <vector>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_base.h"
@@ -42,7 +43,8 @@ public:
         m_sigma_0(base::template get_parameter<value_type>("sigma_0")),
         m_tol(base::template get_parameter<value_type>("tolerance")),
         m_max_iter(base::template get_parameter<int>("max_iter")),
-        m_tableau(base::template get_parameter<const butcher_tableau*>("tableau")),
+        m_tableau(tableau_by_name(
+            base::template get_parameter<std::string>("tableau"))),
         m_hardening_source(base::template get_parameter<std::string>("hardening_source")),
         m_strain_source(base::template get_parameter<std::string>("strain_source")),
         m_strain(base::template add_input<tensor2>(
@@ -57,13 +59,30 @@ public:
     m_C_e = value_type{3} * m_K * IIvol +
             value_type{2} * m_G * plasticity_detail::make_IIdev<value_type, Dim>();
 
-    const int s = m_tableau->stages();
+    // The stage loop below accumulates only a(i,j) for j < i, plus the
+    // diagonal. A tableau with a(i,j) != 0 for j > i would have those terms
+    // silently DROPPED -- integrating with a method that is not the one named.
+    // Measured with gauss_legendre_4 before this guard: equivalent plastic
+    // strain of -8.8 (negative) and a yield residual of +10880.
+    //
+    // rk_integrator dispatches that case to a fully-implicit solve; this class
+    // has no such path, so it refuses rather than pretending.
+    if (!m_tableau.is_dirk())
+      throw std::invalid_argument(
+          "j2_rk_plasticity: the scheme '" +
+          base::template get_parameter<std::string>("tableau") +
+          "' is fully implicit (it has coupling above the diagonal), which this "
+          "return map cannot integrate -- its stage loop sums only j < i. Use a "
+          "DIRK or explicit scheme: forward_euler, explicit_midpoint, rk4, "
+          "implicit_euler, implicit_midpoint, crank_nicolson, sdirk3");
+
+    const int s = m_tableau.stages();
     m_dlambda.resize(s, value_type{0});
     m_N_stage.resize(s);
     m_is_implicit.resize(s);
     m_diag.resize(s);
     for (int i = 0; i < s; ++i) {
-      m_diag[i] = m_tableau->a(i, i);
+      m_diag[i] = m_tableau.a(i, i);
       m_is_implicit[i] = std::abs(m_diag[i]) >= 1e-30;
     }
   }
@@ -75,6 +94,12 @@ public:
     para.template insert<value_type>("K").template add<is_required>();
     para.template insert<value_type>("G").template add<is_required>();
     para.template insert<value_type>("sigma_0").template add<is_required>();
+    // The scheme by NAME. This parameter was never in the schema at all --
+    // the constructor read it while parameters() never declared it, so it
+    // could only ever be supplied from C++, where insert() bypasses the
+    // schema. That is why the explicit/implicit choice, which is the whole
+    // point of a tableau, was unreachable from a document.
+    para.template insert<std::string>("tableau").template add<is_required>();
     para.template insert<value_type>("tolerance")
         .template add<set_default>(value_type{1e-12});
     para.template insert<int>("max_iter")
@@ -102,7 +127,7 @@ public:
     }
 
     // Multi-stage return mapping
-    const auto& tab = *m_tableau;
+    const auto& tab = m_tableau;
     const int s = tab.stages();
 
     for (int i = 0; i < s; ++i)
@@ -189,7 +214,7 @@ private:
   const value_type& m_sigma_0;
   const value_type& m_tol;
   const int& m_max_iter;
-  const butcher_tableau* m_tableau;
+  const butcher_tableau m_tableau;
   const std::string& m_hardening_source;
   const std::string& m_strain_source;
 

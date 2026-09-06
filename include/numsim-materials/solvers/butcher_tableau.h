@@ -1,6 +1,8 @@
 #ifndef BUTCHER_TABLEAU_H
 #define BUTCHER_TABLEAU_H
 
+#include <stdexcept>
+#include <string>
 #include <Eigen/Dense>
 
 namespace numsim::materials {
@@ -116,6 +118,28 @@ inline butcher_tableau gauss_legendre_4() {
   t.b = Eigen::VectorXd{{0.5, 0.5}};
   t.c = Eigen::VectorXd{{0.5 - s, 0.5 + s}};
   return t;
+}
+
+/// Look a tableau up by name, so the integrator can be chosen from a document
+/// rather than by passing a pointer from C++.
+///
+/// The scheme IS the choice between explicit and implicit time integration --
+/// forward_euler and rk4 are explicit, sdirk3 and gauss_legendre_4 implicit --
+/// and that choice belongs in the deck, not in a recompile.
+inline butcher_tableau tableau_by_name(const std::string& name) {
+  if (name == "forward_euler")     return forward_euler();
+  if (name == "explicit_midpoint") return explicit_midpoint();
+  if (name == "rk4")               return rk4();
+  if (name == "implicit_euler")    return implicit_euler();
+  if (name == "implicit_midpoint") return implicit_midpoint();
+  if (name == "crank_nicolson")    return crank_nicolson();
+  if (name == "sdirk3")            return sdirk3();
+  if (name == "gauss_legendre_4")  return gauss_legendre_4();
+  throw std::invalid_argument(
+      "butcher_tableau: unknown scheme '" + name +
+      "' -- expected one of: forward_euler, explicit_midpoint, rk4, "
+      "implicit_euler, implicit_midpoint, crank_nicolson, sdirk3, "
+      "gauss_legendre_4");
 }
 
 } // namespace numsim::materials
