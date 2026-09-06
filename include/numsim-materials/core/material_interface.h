@@ -3,6 +3,8 @@
 
 #include <any>
 #include <functional>
+#include <stdexcept>
+#include <type_traits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -49,6 +51,41 @@ public:
   template <typename T>
   const T& get_parameter(std::string&& key) const {
     return m_parameter_handler.template get<T>(std::forward<std::string>(key));
+  }
+
+  /// Overwrite a parameter in place, so references bound by get_parameter()
+  /// stay valid and see the new value.
+  ///
+  /// Assigns through the non-const get<T>(), NOT insert(): insert_or_assign
+  /// replaces the whole std::any, relocating anything past its small buffer.
+  ///
+  /// T is deliberately NOT deduced. The stored type must be named exactly, so
+  /// set_parameter<double>("K", 250) is fine while set_parameter("K", 250)
+  /// fails to compile instead of throwing bad_any_cast at run time.
+  ///
+  /// Reaches only what the material re-reads through its bound reference. It
+  /// does NOT affect anything derived at construction (linear_elasticity's
+  /// tangent), copied into a member, or consumed once for wiring (source
+  /// names) — those keep their original values with no error. The write is also
+  /// local to THIS material, since each holds its own copy of the handler.
+  template <typename T>
+  void set_parameter(std::string const& key,
+                     std::type_identity_t<T> const& value) {
+    // The identity is cached in m_name and used as the registry key, so a write
+    // here would leave the parameter disagreeing with both.
+    if (key == "name")
+      throw std::invalid_argument(
+          "material_interface::set_parameter(): 'name' is the material's "
+          "identity and cannot be changed after construction");
+    try {
+      m_parameter_handler.template get<T>(key) = value;
+    } catch (const std::bad_any_cast&) {
+      // Otherwise this surfaces as a bare "bad any_cast" naming nothing, and
+      // from a type that is neither invalid_argument nor runtime_error.
+      throw std::invalid_argument(
+          "material_interface::set_parameter('" + key +
+          "'): the requested type does not match the stored one");
+    }
   }
 
   const auto& get_property_registry() const { return m_property_handler; }
