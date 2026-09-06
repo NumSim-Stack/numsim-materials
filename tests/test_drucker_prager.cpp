@@ -563,4 +563,121 @@ TEST(DruckerPragerApex, ApexStateIsAdmissible) {
   EXPECT_GT(tmech::trace(eps_p), 0.0) << "apex flow must be dilatant";
 }
 
+
+// ---------------------------------------------------------------------------
+// Branch selection between the smooth cone and the apex
+// ---------------------------------------------------------------------------
+
+/// A DP graph driven by a multiaxial stepper, with the parameters used
+/// throughout this file. Held in a struct because material_context is neither
+/// copyable nor movable.
+struct dp_graph {
+  ctx_type ctx;
+  static constexpr T K{166.67};
+  static constexpr T G{76.92};
+  static constexpr T cohesion{20.0};
+  static constexpr T eta{0.1};
+  static constexpr T beta{0.05};
+
+  dp_graph(std::vector<double> direction, T increment, T H_mod) {
+    param_type p;
+    p.insert<std::string>("name", "stepper");
+    p.insert<T>("increment", increment);
+    p.insert<std::vector<double>>("direction", std::move(direction));
+    ctx.create<multiaxial_stepper<policy>>(p);
+
+    p.clear();
+    p.insert<std::string>("name", "solver");
+    ctx.create<numsim::materials::local_newton<policy>>(p);
+
+    p.clear();
+    p.insert<std::string>("name", "hardening");
+    p.insert<std::string>("source", "dp");
+    p.insert<T>("K", H_mod);
+    ctx.create<numsim::materials::linear_isotropic_hardening<policy>>(p);
+
+    p.clear();
+    p.insert<std::string>("name", "dp");
+    p.insert<std::string>("hardening_source", "hardening");
+    p.insert<std::string>("strain_source", "stepper");
+    p.insert<std::string>("solver_source", "solver");
+    p.insert<T>("G", G);
+    p.insert<T>("sigma_0", cohesion);
+    p.insert<T>("eta", eta);
+    p.insert<T>("beta", beta);
+    p.insert<T>("K_bulk", K);
+    ctx.create<dp_plasticity>(p);
+    ctx.finalize();
+  }
+
+  T deviatoric_norm() {
+    const auto& sig = ctx.get<tensor2>("dp", "stress");
+    const auto s = tmech::dev(sig);
+    return std::sqrt(tmech::dcontract(s, s));
+  }
+};
+
+/// The apex branch must be taken only where it is actually the answer.
+///
+/// compute() pre-checks the apex with the ZERO-HARDENING bound
+/// dlambda_max = F_trial / G_eff, which is an UPPER bound on the true
+/// dlambda for H' >= 0. needs_apex_return is monotone increasing in dlambda,
+/// so "the bound triggers apex" does not imply "the true dlambda triggers
+/// apex" -- the implication runs the other way. The branch therefore fires on
+/// a strict superset of the apex region whenever H' > 0.
+///
+/// This state is nowhere near the apex: p = 300 with only eta*p - k = 10 of
+/// pressure overshoot, against q_trial = 40. The true G*dlambda is 6.7, an
+/// order of magnitude below q, so the deviatoric stress must be RETURNED, not
+/// zeroed.
+TEST(DPBranch, SmoothConeIsNotMistakenForTheApex) {
+  dp_graph g({0.6, 0.6, 0.6, 0.26}, T{1.0}, T{500.0});
+  g.ctx.update();
+
+  const auto q = g.deviatoric_norm();
+  EXPECT_GT(q, T{1.0})
+      << "deviatoric stress was zeroed: the apex branch was taken on a state "
+         "whose smooth return is well inside the cone";
+}
+
+/// The states that ARE at the apex must still get there, so the fix above
+/// cannot pass by never taking the branch.
+TEST(DPBranch, HydrostaticTensionStillReachesTheApex) {
+  dp_graph g({1.0, 1.0, 1.0, 0.0}, T{0.05}, T{500.0});
+  bool reached = false;
+  for (int i = 0; i < 40 && !reached; ++i) {
+    g.ctx.update();
+    if (g.deviatoric_norm() < T{1e-10} &&
+        g.ctx.get<T>("dp", "equivalent_plastic_strain") > T{1e-10})
+      reached = true;
+    g.ctx.commit();
+  }
+  EXPECT_TRUE(reached) << "hydrostatic tension never reached the apex branch";
+}
+
+/// The stress response must not jump across the branch boundary.
+///
+/// A finite jump in sigma at a fixed strain increment is not a tangent
+/// accuracy problem -- no tangent describes it, and a host Newton crossing the
+/// surface will cycle rather than converge slowly.
+TEST(DPBranch, StressIsContinuousAcrossTheBranchBoundary) {
+  T prev = -1, worst_jump = 0, typical = 0;
+  for (int i = 0; i <= 40; ++i) {
+    const double shear = 0.10 + 0.001 * i;
+    dp_graph g({0.404, 0.404, 0.404, shear}, T{1.0}, T{500.0});
+    g.ctx.update();
+    const T q = g.deviatoric_norm();
+    if (prev >= 0) {
+      const T jump = std::abs(q - prev);
+      worst_jump = std::max(worst_jump, jump);
+      typical += jump / 40;
+    }
+    prev = q;
+  }
+  EXPECT_LT(worst_jump, 10 * typical + T{1e-9})
+      << "deviatoric stress jumps by " << worst_jump
+      << " between adjacent shear levels, against a typical step of "
+      << typical;
+}
+
 } // namespace
