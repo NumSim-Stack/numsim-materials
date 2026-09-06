@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_VON_MISES_STATE_FUNCTION_H
-#define NUMSIM_MATERIALS_VON_MISES_STATE_FUNCTION_H
+#ifndef VON_MISES_STATE_FUNCTION_H
+#define VON_MISES_STATE_FUNCTION_H
 
 #include <cmath>
 #include <tmech/tmech.h>
@@ -68,4 +68,4 @@ private:
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_VON_MISES_STATE_FUNCTION_H
+#endif // VON_MISES_STATE_FUNCTION_H

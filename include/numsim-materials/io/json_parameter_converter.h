@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_JSON_PARAMETER_CONVERTER_H
-#define NUMSIM_MATERIALS_JSON_PARAMETER_CONVERTER_H
+#ifndef JSON_PARAMETER_CONVERTER_H
+#define JSON_PARAMETER_CONVERTER_H
 
 #include <any>
 #include <functional>
@@ -13,6 +13,7 @@
 #include <variant>
 #include <vector>
 #include <numsim-core/input_parameter_controller.h>
+#include "numsim-materials/core/unknown_spec.h"
 
 namespace numsim::materials {
 
@@ -92,6 +93,8 @@ json_reader_registry<JsonType> make_default_json_registry() {
   reg.template add<double>();
   reg.template add<float>();
   reg.template add<int>();
+  reg.template add<std::size_t>();
+  reg.template add<bool>();
   reg.template add<std::string>();
 
   // Vectors
@@ -129,6 +132,48 @@ json_reader_registry<JsonType> make_default_json_registry() {
         std::vector<sop> result;
         for (const auto& elem : j)
           result.push_back(convert_sop(elem));
+        return result;
+      });
+
+  // unknown_spec list for coupled local systems (vector_newton):
+  //   "unknowns": [{"name": "dgamma", "kind": "scalar"},
+  //                {"name": "backstress", "kind": "sym_tensor"}]
+  // No "dim" — the dimension is fixed by the Traits policy, which keeps the
+  // kind set small enough for an exhaustive switch on the solver side.
+  reg.template add<std::vector<unknown_spec>>(
+      [](const JsonType& j) -> std::any {
+        std::vector<unknown_spec> result;
+        for (const auto& elem : j) {
+          unknown_spec s;
+          s.name = adapter::template get<std::string>(adapter::at(elem, "name"));
+          const auto kind =
+              adapter::template get<std::string>(adapter::at(elem, "kind"));
+          if (kind == "scalar")           s.kind = unknown_kind::scalar;
+          else if (kind == "sym_tensor")  s.kind = unknown_kind::sym_tensor;
+          else
+            throw std::runtime_error(
+                "unknown_spec: unrecognised kind '" + kind +
+                "' (expected \"scalar\" or \"sym_tensor\")");
+          result.push_back(std::move(s));
+        }
+        return result;
+      });
+
+  // Structurally-zero Jacobian blocks:
+  //   "zero_blocks": [["dgamma", "backstress"]]
+  reg.template add<std::vector<block_ref>>(
+      [](const JsonType& j) -> std::any {
+        std::vector<block_ref> result;
+        for (const auto& elem : j) {
+          std::vector<std::string> names;
+          for (const auto& part : elem)
+            names.push_back(adapter::template get<std::string>(part));
+          if (names.size() != 2)
+            throw std::runtime_error(
+                "zero_blocks: each entry must be a [row, column] pair of "
+                "unknown names");
+          result.emplace_back(std::move(names[0]), std::move(names[1]));
+        }
         return result;
       });
 
@@ -189,7 +234,7 @@ void json_to_parameters(
 
   adapter::for_each_key(json, [&](const std::string& key) {
     if (key != "type" && !schema_keys.contains(key))
-      std::println("  warning: unknown parameter '{}' in JSON (not in schema)", key);
+      std::println(stderr, "  warning: unknown parameter '{}' in JSON (not in schema)", key);
   });
 
   // Read + insert + validate in one call
@@ -210,4 +255,4 @@ void json_to_parameters(
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_JSON_PARAMETER_CONVERTER_H
+#endif // JSON_PARAMETER_CONVERTER_H

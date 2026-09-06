@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_OBJECT_STORE_H
-#define NUMSIM_MATERIALS_OBJECT_STORE_H
+#ifndef OBJECT_STORE_H
+#define OBJECT_STORE_H
 
 #include <memory>
 #include <stdexcept>
@@ -38,9 +38,7 @@ public:
                    property_handler& properties, material_handler& materials) {
     auto ptr = std::make_unique<Material>(params, properties, materials);
     auto& ref = *ptr;
-    m_by_name[ref.name()] = ptr.get();
-    m_interfaces.push_back(ptr.get());
-    m_storage.push_back(std::move(ptr));
+    adopt(std::move(ptr), materials);
     return ref;
   }
 
@@ -52,15 +50,13 @@ public:
     auto ptr = factory_type::instance().create(
         type_name, params, properties, materials);
     auto& ref = *ptr;
-    m_by_name[ref.name()] = ptr.get();
-    m_interfaces.push_back(ptr.get());
-    m_storage.push_back(std::move(ptr));
+    adopt(std::move(ptr), materials);
     return ref;
   }
 
   /// Find by name.
-  material_interface_type* find(const std::string& name) const noexcept {
-    auto it = m_by_name.find(name);
+  material_interface_type* find(std::string_view name) const noexcept {
+    auto it = m_by_name.find(std::string(name));
     return it != m_by_name.end() ? it->second : nullptr;
   }
 
@@ -69,6 +65,25 @@ public:
   }
 
 private:
+  /// Take ownership of a fully constructed material and publish it.
+  ///
+  /// Registration happens HERE and not in material_base's constructor, because
+  /// a constructor that throws must leave nothing behind. material_base used to
+  /// register before validating its parameters, and derived constructors can
+  /// throw after that anyway -- a missing required parameter, an unknown
+  /// tableau name, any deck typo. The material handler holds std::ref, and
+  /// query_map has no erase, so a failed construction left a reference to a
+  /// destroyed object under a live name, which wire_materials would later find
+  /// and dynamic_cast. By the time make_unique returns, the object is complete.
+  void adopt(std::unique_ptr<material_interface_type> ptr,
+             material_handler& materials) {
+    materials.set(std::ref(static_cast<material_interface_type&>(*ptr)),
+                  ptr->name());
+    m_by_name[ptr->name()] = ptr.get();
+    m_interfaces.push_back(ptr.get());
+    m_storage.push_back(std::move(ptr));
+  }
+
   std::vector<std::unique_ptr<material_interface_type>> m_storage;
   std::vector<material_interface_type*> m_interfaces;
   std::unordered_map<std::string, material_interface_type*> m_by_name;
@@ -76,4 +91,4 @@ private:
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_OBJECT_STORE_H
+#endif // OBJECT_STORE_H

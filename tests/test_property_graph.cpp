@@ -149,4 +149,42 @@ TEST(PropertyGraph, FactoryConstruction) {
   EXPECT_NEAR(eps(0,0), 0.5, 1e-12);
 }
 
+// --- Error path tests ---
+
+TEST(PropertyGraph, MissingRequiredParameter) {
+  ctx_type ctx;
+  param_type p;
+
+  // Missing "increment" which is required
+  p.clear();
+  p.insert<std::string>("name", "stepper");
+  p.insert<std::vector<std::size_t>>("indices", {0, 0});
+  // No "increment" — should throw during construction
+  using stepper_type = numsim::materials::tensor_component_stepper<2, policy>;
+  EXPECT_THROW(ctx.create<stepper_type>(p), std::invalid_argument);
+}
+
+TEST(PropertyGraph, CircularDependencyDetected) {
+  // Two materials that each depend on the other via Global edges
+  // This should throw during finalize()
+  ctx_type ctx;
+  param_type p;
+
+  p.clear();
+  p.insert<std::string>("name", "a");
+  p.insert<std::string>("strain_producer_name", "b");
+  p.insert<T>("K", T{100});
+  p.insert<T>("G", T{50});
+  ctx.create<numsim::materials::linear_elasticity<policy>>(p);
+
+  p.clear();
+  p.insert<std::string>("name", "b");
+  p.insert<std::string>("strain_producer_name", "a");
+  p.insert<T>("K", T{100});
+  p.insert<T>("G", T{50});
+  ctx.create<numsim::materials::linear_elasticity<policy>>(p);
+
+  EXPECT_THROW(ctx.finalize(), std::runtime_error);
+}
+
 } // namespace
