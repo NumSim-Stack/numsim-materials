@@ -172,7 +172,7 @@ public:
         m_yf, eps, eps_p_new, C_e, m_sigma_0, m_H.get());
     m_tangent = plasticity_detail::compute_tangent<value_type, Dim>(
         m_yf, converged.sig_dev, converged.N, converged.sig_eq,
-        total_dlambda, m_dH.get(), C_e);
+        total_dlambda, m_dH.get(), C_e, m_G);
   }
 
 private:

@@ -169,7 +169,7 @@ private:
     // For J2, trial = converged. For DP, they differ.
     m_H.update_source();
     m_tangent = plasticity_detail::compute_tangent<value_type, Dim>(
-        m_yf, ts.sig_dev, ts.N, ts.sig_eq, dlambda, m_dH.get(), C_e);
+        m_yf, ts.sig_dev, ts.N, ts.sig_eq, dlambda, m_dH.get(), C_e, m_G);
   }
 
   /// Apex return: deviatoric stress vanishes, only volumetric Newton.
