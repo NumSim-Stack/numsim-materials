@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_VECTOR_NEWTON_H
-#define NUMSIM_MATERIALS_VECTOR_NEWTON_H
+#ifndef VECTOR_NEWTON_H
+#define VECTOR_NEWTON_H
 
 #include <algorithm>
 #include <cmath>
@@ -504,4 +504,4 @@ private:
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_VECTOR_NEWTON_H
+#endif // VECTOR_NEWTON_H
