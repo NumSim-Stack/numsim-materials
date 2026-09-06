@@ -1,4 +1,6 @@
 #include <gtest/gtest.h>
+#include <cmath>
+#include <limits>
 #include <print>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_context.h"
@@ -6,9 +8,9 @@
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/materials/linear_isotropic_hardening.h"
 #include "numsim-materials/materials/drucker_prager_yield_function.h"
-#include "numsim-materials/materials/small_strain_plasticity.h"
-#include "numsim-materials/materials/rk_plasticity.h"
-#include "numsim-materials/solvers/backward_euler.h"
+#include "numsim-materials/materials/drucker_prager_plasticity.h"
+#include "numsim-materials/materials/j2_rk_plasticity.h"
+#include "numsim-materials/solvers/local_newton.h"
 #include "numsim-materials/solvers/butcher_tableau.h"
 #include "numsim-materials/postprocessing/numerical_diff_checker.h"
 
@@ -21,6 +23,115 @@ using param_type = policy::ParameterHandler;
 using tensor2 = tmech::tensor<T, 3, 2>;
 using dp_yield = numsim::materials::drucker_prager_yield_function<T, 3>;
 using dp_plasticity = numsim::materials::drucker_prager_plasticity<policy>;
+
+/// Multiaxial strain path: adds increment * direction each update, where
+/// direction is {e11, e22, e33, e12}.
+///
+/// tensor_component_stepper moves ONE component at a time, which is why every
+/// pre-existing test here drives a uniaxial path. Two things are unreachable
+/// that way: the cone apex, which sits on the hydrostatic axis, and any state
+/// where the flow direction has a genuinely multiaxial character.
+template <typename Traits>
+class multiaxial_stepper final
+    : public numsim::materials::material_base<multiaxial_stepper<Traits>, Traits> {
+public:
+  using base = numsim::materials::material_base<multiaxial_stepper<Traits>, Traits>;
+  using value_type = typename base::value_type;
+  using input_parameter_controller = typename base::input_parameter_controller;
+  using base::Dim;
+  using tensor = tmech::tensor<value_type, Dim, 2>;
+
+  template <typename... Args>
+  explicit multiaxial_stepper(Args&&... args)
+      : base(std::forward<Args>(args)...),
+        m_strain(base::template add_output<tensor>(
+            "strain", &multiaxial_stepper::update)),
+        m_inc(base::template get_parameter<value_type>("increment")),
+        m_dir(base::template get_parameter<std::vector<double>>("direction")) {}
+
+  static input_parameter_controller parameters() {
+    input_parameter_controller para{base::parameters()};
+    para.template insert<value_type>("increment")
+        .template add<numsim::materials::is_required>();
+    para.template insert<std::vector<double>>("direction")
+        .template add<numsim::materials::is_required>();
+    return para;
+  }
+
+  void update() override {
+    tensor d;
+    d.fill(value_type{0});
+    d(0, 0) = m_dir[0];
+    d(1, 1) = m_dir[1];
+    d(2, 2) = m_dir[2];
+    d(0, 1) = m_dir[3];
+    d(1, 0) = m_dir[3];
+    m_strain += m_inc * d;
+  }
+
+private:
+  tensor& m_strain;
+  const value_type& m_inc;
+  const std::vector<double>& m_dir;
+};
+
+/// The hydrostatic path, which is what reaches the apex.
+void add_hydrostatic_stepper(ctx_type& ctx, T increment) {
+  param_type p;
+  p.insert<std::string>("name", "stepper");
+  p.insert<T>("increment", increment);
+  p.insert<std::vector<double>>("direction", {1.0, 1.0, 1.0, 0.0});
+  ctx.create<multiaxial_stepper<policy>>(p);
+}
+
+/// A DP graph driven by a multiaxial stepper, with the parameters used
+/// throughout this file. Held in a struct because material_context is neither
+/// copyable nor movable.
+struct dp_graph {
+  ctx_type ctx;
+  static constexpr T K{166.67};
+  static constexpr T G{76.92};
+  static constexpr T cohesion{20.0};
+  static constexpr T eta{0.1};
+  static constexpr T beta{0.05};
+
+  dp_graph(std::vector<double> direction, T increment, T H_mod) {
+    param_type p;
+    p.insert<std::string>("name", "stepper");
+    p.insert<T>("increment", increment);
+    p.insert<std::vector<double>>("direction", std::move(direction));
+    ctx.create<multiaxial_stepper<policy>>(p);
+
+    p.clear();
+    p.insert<std::string>("name", "solver");
+    ctx.create<numsim::materials::local_newton<policy>>(p);
+
+    p.clear();
+    p.insert<std::string>("name", "hardening");
+    p.insert<std::string>("source", "dp");
+    p.insert<T>("K", H_mod);
+    ctx.create<numsim::materials::linear_isotropic_hardening<policy>>(p);
+
+    p.clear();
+    p.insert<std::string>("name", "dp");
+    p.insert<std::string>("hardening_source", "hardening");
+    p.insert<std::string>("strain_source", "stepper");
+    p.insert<std::string>("solver_source", "solver");
+    p.insert<T>("G", G);
+    p.insert<T>("sigma_0", cohesion);
+    p.insert<T>("eta", eta);
+    p.insert<T>("beta", beta);
+    p.insert<T>("K_bulk", K);
+    ctx.create<dp_plasticity>(p);
+    ctx.finalize();
+  }
+
+  T deviatoric_norm() {
+    const auto& sig = ctx.get<tensor2>("dp", "stress");
+    const auto s = tmech::dev(sig);
+    return std::sqrt(tmech::dcontract(s, s));
+  }
+};
 
 class DruckerPragerTest : public ::testing::Test {
 protected:
@@ -42,7 +153,7 @@ protected:
 
     p.clear();
     p.insert<std::string>("name", "solver");
-    ctx.create<numsim::materials::backward_euler<policy>>(p);
+    ctx.create<numsim::materials::local_newton<policy>>(p);
 
     p.clear();
     p.insert<std::string>("name", "hardening");
@@ -51,17 +162,17 @@ protected:
     ctx.create<numsim::materials::linear_isotropic_hardening<policy>>(p);
 
     // Drucker-Prager yield function with friction and dilatancy
-    dp_yield yf(dp_eta, dp_beta, K);
 
     p.clear();
     p.insert<std::string>("name", "dp");
-    p.insert<std::string>("elastic_source", "elastic");
     p.insert<std::string>("hardening_source", "hardening");
     p.insert<std::string>("strain_source", "stepper");
     p.insert<std::string>("solver_source", "solver");
     p.insert<T>("G", G);
     p.insert<T>("sigma_0", cohesion);
-    p.insert<dp_yield>("yield_function", yf);
+    p.insert<T>("eta", dp_eta);
+    p.insert<T>("beta", dp_beta);
+    p.insert<T>("K_bulk", K);
     ctx.create<dp_plasticity>(p);
 
     ctx.finalize();
@@ -114,15 +225,51 @@ TEST_F(DruckerPragerTest, PlasticStrainHasVolumetricComponent) {
   }
 }
 
-TEST_F(DruckerPragerTest, PressureSensitiveYielding) {
-  // DP yields earlier under tension (positive I1) than compression
-  // because F = sqrt(J2) + alpha*I1 - k
-  ctx.update();
-  const auto& sig = ctx.get<tensor2>("dp", "stress");
-  auto I1 = tmech::trace(sig);
-  std::println("  I1 = {:.4f} (positive = tension in uniaxial strain)", I1);
-  // Under uniaxial strain, I1 > 0 → DP yields earlier than pure J2
-  ctx.commit();
+/// Pressure sensitivity, the property that distinguishes DP from J2.
+///
+/// This test used to print I1 and assert nothing at all -- it passed whether
+/// the cone was pressure sensitive, pressure insensitive, or wired backwards.
+/// It now pins the ratio the friction term actually produces.
+///
+/// Under uniaxial strain e the deviatoric part is 2G dev(eps), so
+/// q = 2G|e|/sqrt(3), and p = K e carries the sign. F = q + eta p - k gives
+///
+///   e_tension     = k / (2G/sqrt(3) + eta K)
+///   |e_compression| = k / (2G/sqrt(3) - eta K)
+///
+/// so tension yields first, by a factor that depends on eta. With eta = 0 the
+/// two coincide, which is what makes this a test of the friction term rather
+/// than of yielding in general.
+TEST(DruckerPragerPressure, YieldsEarlierInTensionThanInCompression) {
+  constexpr T increment{0.001};
+  auto strain_at_first_yield = [](double sign) {
+    dp_graph g({sign, 0.0, 0.0, 0.0}, increment, T{500.0});
+    for (int i = 1; i <= 1000; ++i) {
+      g.ctx.update();
+      if (g.ctx.get<T>("dp", "equivalent_plastic_strain") > T{1e-12})
+        return increment * i;
+      g.ctx.commit();
+    }
+    return T{-1};
+  };
+
+  const T e_tension = strain_at_first_yield(+1.0);
+  const T e_compression = strain_at_first_yield(-1.0);
+  ASSERT_GT(e_tension, T{0}) << "tension never yielded";
+  ASSERT_GT(e_compression, T{0}) << "compression never yielded";
+
+  const T shear_term = T{2} * dp_graph::G / std::sqrt(T{3});
+  const T friction_term = dp_graph::eta * dp_graph::K;
+  const T expected_tension = dp_graph::cohesion / (shear_term + friction_term);
+  const T expected_compression =
+      dp_graph::cohesion / (shear_term - friction_term);
+
+  EXPECT_NEAR(e_tension, expected_tension, T{2} * increment);
+  EXPECT_NEAR(e_compression, expected_compression, T{2} * increment);
+  EXPECT_NEAR(e_compression / e_tension,
+              expected_compression / expected_tension, T{0.02})
+      << "tension/compression asymmetry does not match the friction term: "
+      << e_tension << " vs " << e_compression;
 }
 
 // --- Tangent checker for DP ---
@@ -147,7 +294,7 @@ protected:
 
     p.clear();
     p.insert<std::string>("name", "solver");
-    ctx.create<numsim::materials::backward_euler<policy>>(p);
+    ctx.create<numsim::materials::local_newton<policy>>(p);
 
     p.clear();
     p.insert<std::string>("name", "hardening");
@@ -155,17 +302,17 @@ protected:
     p.insert<T>("K", T{500.0});
     ctx.create<numsim::materials::linear_isotropic_hardening<policy>>(p);
 
-    dp_yield yf(T{0.1}, T{0.05}, T{166.67});
 
     p.clear();
     p.insert<std::string>("name", "dp");
-    p.insert<std::string>("elastic_source", "elastic");
     p.insert<std::string>("hardening_source", "hardening");
     p.insert<std::string>("strain_source", "stepper");
     p.insert<std::string>("solver_source", "solver");
     p.insert<T>("G", T{76.92});
     p.insert<T>("sigma_0", T{20.0});
-    p.insert<dp_yield>("yield_function", yf);
+    p.insert<T>("eta", T{0.1});
+    p.insert<T>("beta", T{0.05});
+    p.insert<T>("K_bulk", T{166.67});
     ctx.create<dp_plasticity>(p);
 
     p.clear();
@@ -220,7 +367,7 @@ T run_dp_max_tangent_error(T increment, int steps) {
 
   p.clear();
   p.insert<std::string>("name", "solver");
-  ctx.create<numsim::materials::backward_euler<policy>>(p);
+  ctx.create<numsim::materials::local_newton<policy>>(p);
 
   p.clear();
   p.insert<std::string>("name", "hardening");
@@ -228,17 +375,17 @@ T run_dp_max_tangent_error(T increment, int steps) {
   p.insert<T>("K", T{500.0});
   ctx.create<numsim::materials::linear_isotropic_hardening<policy>>(p);
 
-  dp_yield yf(T{0.1}, T{0.05}, T{166.67});
 
   p.clear();
   p.insert<std::string>("name", "dp");
-  p.insert<std::string>("elastic_source", "elastic");
   p.insert<std::string>("hardening_source", "hardening");
   p.insert<std::string>("strain_source", "stepper");
   p.insert<std::string>("solver_source", "solver");
   p.insert<T>("G", T{76.92});
   p.insert<T>("sigma_0", T{20.0});
-  p.insert<dp_yield>("yield_function", yf);
+  p.insert<T>("eta", T{0.1});
+  p.insert<T>("beta", T{0.05});
+  p.insert<T>("K_bulk", T{166.67});
   ctx.create<dp_plasticity>(p);
 
   p.clear();
@@ -268,6 +415,305 @@ TEST(DPConvergence, TangentErrorIsBounded) {
   auto err = run_dp_max_tangent_error(T{0.02}, 15);
   std::println("  DP tangent error: {:.4e}", err);
   EXPECT_LT(err, 1e-3) << "DP consistent tangent should match numerical derivative";
+}
+
+// ---------------------------------------------------------------------------
+// The cone apex
+// ---------------------------------------------------------------------------
+
+/// Drives hydrostatic TENSION until the return map switches to the apex branch.
+///
+/// Nothing else in this suite reaches it: every other path is uniaxial, stays on
+/// the smooth cone, and leaves needs_apex_return() false for its whole run. So
+/// apex_modified_sig_eq, apex_effective_modulus, apex_plastic_strain and
+/// apex_tangent were executed by no test at all.
+///
+/// The apex is where the cone closes on the hydrostatic axis, so the signature
+/// is deviatoric stress driven to zero while plastic flow continues -- a state
+/// the smooth branch cannot produce, since there the deviatoric return is
+/// proportional to a nonzero s_trial.
+// ---------------------------------------------------------------------------
+// Consistent tangent across load paths
+// ---------------------------------------------------------------------------
+
+/// Max relative tangent error over a multiaxial path, using the repo's own
+/// tangent_checker. Returns -1 if the path never yielded.
+T max_tangent_error(std::vector<double> direction, T increment, int steps) {
+  ctx_type ctx;
+  param_type p;
+  p.insert<std::string>("name", "stepper");
+  p.insert<T>("increment", increment);
+  p.insert<std::vector<double>>("direction", std::move(direction));
+  ctx.create<multiaxial_stepper<policy>>(p);
+
+  p.clear();
+  p.insert<std::string>("name", "elastic");
+  p.insert<std::string>("strain_producer_name", "stepper");
+  p.insert<T>("K", T{166.67});
+  p.insert<T>("G", T{76.92});
+  ctx.create<numsim::materials::linear_elasticity<policy>>(p);
+
+  p.clear();
+  p.insert<std::string>("name", "solver");
+  ctx.create<numsim::materials::local_newton<policy>>(p);
+
+  p.clear();
+  p.insert<std::string>("name", "hardening");
+  p.insert<std::string>("source", "dp");
+  p.insert<T>("K", T{500.0});
+  ctx.create<numsim::materials::linear_isotropic_hardening<policy>>(p);
+
+  p.clear();
+  p.insert<std::string>("name", "dp");
+  p.insert<std::string>("hardening_source", "hardening");
+  p.insert<std::string>("strain_source", "stepper");
+  p.insert<std::string>("solver_source", "solver");
+  p.insert<T>("G", T{76.92});
+  p.insert<T>("sigma_0", T{20.0});
+  p.insert<T>("eta", T{0.1});
+  p.insert<T>("beta", T{0.05});
+  p.insert<T>("K_bulk", T{166.67});
+  ctx.create<dp_plasticity>(p);
+
+  p.clear();
+  p.insert<std::string>("name", "checker");
+  p.insert<ctx_type*>("context", &ctx);
+  p.insert<std::string>("output_source", "dp::stress");
+  p.insert<std::string>("input_source", "stepper::strain");
+  p.insert<std::string>("analytical_source", "dp::tangent");
+  p.insert<std::vector<std::string>>("history_sources",
+      {"dp::plastic_strain", "dp::equivalent_plastic_strain"});
+  p.insert<T>("epsilon", T{1e-7});
+  ctx.create<numsim::materials::tangent_checker<policy>>(p);
+  ctx.finalize();
+
+  T worst = -1;
+  for (int i = 0; i < steps; ++i) {
+    ctx.update();
+    // Only plastic steps are interesting: an elastic step returns C_e, which
+    // every path reproduces trivially.
+    if (ctx.get<T>("dp", "equivalent_plastic_strain") > T{1e-10})
+      worst = std::max(worst, ctx.get<T>("checker", "rel_error"));
+    ctx.commit();
+  }
+  return worst;
+}
+
+/// The consistent tangent, on paths a single-component stepper cannot reach.
+///
+/// DPTangentTest.ConsistentTangent covers uniaxial only. That is the same
+/// coverage shape that left the apex return unexecuted by any test: one path
+/// through a branchy return map proves that path and no other. Under
+/// non-associative flow (beta != eta) the tangent is major-asymmetric, and a
+/// uniaxial path exercises none of that asymmetry.
+TEST(DPTangentPaths, ConsistentAcrossLoadPaths) {
+  struct path { const char* name; std::vector<double> dir; T inc; int steps; };
+  const std::vector<path> paths = {
+      {"uniaxial",         {1.0, 0.0, 0.0, 0.0},   T{0.02}, 15},
+      {"pure shear",       {0.0, 0.0, 0.0, 1.0},   T{0.02}, 15},
+      {"biaxial",          {1.0, 0.5, 0.0, 0.0},   T{0.02}, 15},
+      {"triaxial tension", {1.0, 0.7, 0.4, 0.0},   T{0.02}, 15},
+      {"mixed dev+shear",  {1.0, -0.4, 0.0, 0.6},  T{0.02}, 15},
+  };
+
+  for (const auto& [name, dir, inc, steps] : paths) {
+    const T err = max_tangent_error(dir, inc, steps);
+    ASSERT_GT(err, T{-0.5}) << name << " never yielded, so it tests nothing";
+    EXPECT_LT(err, T{1e-6})
+        << name << ": consistent tangent disagrees with the numerical "
+                   "derivative (rel " << err << ")";
+  }
+}
+
+/// The apex branch tangent, which no numerical check covered at all. It is
+/// documented as a BRANCH tangent -- valid for perturbations that stay on the
+/// apex -- so this pins that it is at least consistent there.
+TEST(DPTangentPaths, ConsistentOnTheApexBranch) {
+  const T err = max_tangent_error({1.0, 1.0, 1.0, 0.0}, T{0.05}, 25);
+  ASSERT_GT(err, T{-0.5}) << "the hydrostatic path never yielded";
+  EXPECT_LT(err, T{1e-6})
+      << "apex tangent disagrees with the numerical derivative (rel " << err << ")";
+}
+
+TEST(DruckerPragerApex, HydrostaticTensionReachesTheApex) {
+  ctx_type ctx;
+  param_type p;
+  const T K{166.67}, G{76.92}, cohesion{20.0}, H_mod{500.0};
+  const T dp_eta{0.1}, dp_beta{0.05};
+
+  add_hydrostatic_stepper(ctx, T{0.05});
+
+  p.clear();
+  p.insert<std::string>("name", "elastic");
+  p.insert<std::string>("strain_producer_name", "stepper");
+  p.insert<T>("K", K);
+  p.insert<T>("G", G);
+  ctx.create<numsim::materials::linear_elasticity<policy>>(p);
+
+  p.clear();
+  p.insert<std::string>("name", "solver");
+  ctx.create<numsim::materials::local_newton<policy>>(p);
+
+  p.clear();
+  p.insert<std::string>("name", "hardening");
+  p.insert<std::string>("source", "dp");
+  p.insert<T>("K", H_mod);
+  ctx.create<numsim::materials::linear_isotropic_hardening<policy>>(p);
+
+  p.clear();
+  p.insert<std::string>("name", "dp");
+  p.insert<std::string>("hardening_source", "hardening");
+  p.insert<std::string>("strain_source", "stepper");
+  p.insert<std::string>("solver_source", "solver");
+  p.insert<T>("G", G);
+  p.insert<T>("sigma_0", cohesion);
+  p.insert<T>("eta", dp_eta);
+  p.insert<T>("beta", dp_beta);
+  p.insert<T>("K_bulk", K);
+  ctx.create<dp_plasticity>(p);
+  ctx.finalize();
+
+  bool yielded = false;
+  T min_q_after_yield = std::numeric_limits<T>::max();
+  for (int i = 0; i < 25; ++i) {
+    ctx.update();
+    const auto alpha = ctx.get<T>("dp", "equivalent_plastic_strain");
+    if (alpha > 1e-10) {
+      yielded = true;
+      const auto& sig = ctx.get<tensor2>("dp", "stress");
+      const auto s = tmech::dev(sig);
+      const T q = std::sqrt(tmech::dcontract(s, s));
+      min_q_after_yield = std::min(min_q_after_yield, q);
+    }
+    ctx.commit();
+  }
+
+  ASSERT_TRUE(yielded) << "hydrostatic tension must reach the yield surface";
+  // On the apex the deviatoric stress is returned to zero. On the smooth cone
+  // it cannot be: there the return is proportional to a nonzero s_trial.
+  EXPECT_LT(min_q_after_yield, 1e-8)
+      << "deviatoric stress never reached zero, so the apex branch was never "
+         "taken -- min |s| = " << min_q_after_yield;
+}
+
+/// The apex state has to be admissible, not merely reached: hydrostatic stress
+/// pinned at the cone tip k/eta, and dilatant plastic volume change.
+TEST(DruckerPragerApex, ApexStateIsAdmissible) {
+  ctx_type ctx;
+  param_type p;
+  const T K{166.67}, G{76.92}, cohesion{20.0}, H_mod{500.0};
+  const T dp_eta{0.1}, dp_beta{0.05};
+
+  add_hydrostatic_stepper(ctx, T{0.05});
+  p.clear();
+  p.insert<std::string>("name", "elastic");
+  p.insert<std::string>("strain_producer_name", "stepper");
+  p.insert<T>("K", K); p.insert<T>("G", G);
+  ctx.create<numsim::materials::linear_elasticity<policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "solver");
+  ctx.create<numsim::materials::local_newton<policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "hardening");
+  p.insert<std::string>("source", "dp");
+  p.insert<T>("K", H_mod);
+  ctx.create<numsim::materials::linear_isotropic_hardening<policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "dp");
+  p.insert<std::string>("hardening_source", "hardening");
+  p.insert<std::string>("strain_source", "stepper");
+  p.insert<std::string>("solver_source", "solver");
+  p.insert<T>("G", G); p.insert<T>("sigma_0", cohesion);
+  p.insert<T>("eta", dp_eta);
+  p.insert<T>("beta", dp_beta);
+  p.insert<T>("K_bulk", K);
+  ctx.create<dp_plasticity>(p);
+  ctx.finalize();
+
+  for (int i = 0; i < 25; ++i) { ctx.update(); ctx.commit(); }
+  ctx.update();
+
+  const auto& sig = ctx.get<tensor2>("dp", "stress");
+  const auto& eps_p = ctx.get<tensor2>("dp", "plastic_strain");
+  const T alpha = ctx.get<T>("dp", "equivalent_plastic_strain");
+  const T p_hyd = tmech::trace(sig) / 3.0;
+
+  ASSERT_GT(alpha, 1e-10) << "must be plastic by now";
+  // Beyond the apex the stress cannot keep climbing: pressure is capped by the
+  // cone tip, which with linear hardening moves with alpha.
+  const T tip = (cohesion + H_mod * alpha) / dp_eta;
+  EXPECT_LE(p_hyd, tip * (1.0 + 1e-6))
+      << "hydrostatic stress " << p_hyd << " exceeds the cone tip " << tip;
+  // beta > 0, so the flow is dilatant even at the apex.
+  EXPECT_GT(tmech::trace(eps_p), 0.0) << "apex flow must be dilatant";
+}
+
+
+// ---------------------------------------------------------------------------
+// Branch selection between the smooth cone and the apex
+// ---------------------------------------------------------------------------
+
+/// The apex branch must be taken only where it is actually the answer.
+///
+/// compute() pre-checks the apex with the ZERO-HARDENING bound
+/// dlambda_max = F_trial / G_eff, which is an UPPER bound on the true
+/// dlambda for H' >= 0. needs_apex_return is monotone increasing in dlambda,
+/// so "the bound triggers apex" does not imply "the true dlambda triggers
+/// apex" -- the implication runs the other way. The branch therefore fires on
+/// a strict superset of the apex region whenever H' > 0.
+///
+/// This state is nowhere near the apex: p = 300 with only eta*p - k = 10 of
+/// pressure overshoot, against q_trial = 40. The true G*dlambda is 6.7, an
+/// order of magnitude below q, so the deviatoric stress must be RETURNED, not
+/// zeroed.
+TEST(DPBranch, SmoothConeIsNotMistakenForTheApex) {
+  dp_graph g({0.6, 0.6, 0.6, 0.26}, T{1.0}, T{500.0});
+  g.ctx.update();
+
+  const auto q = g.deviatoric_norm();
+  EXPECT_GT(q, T{1.0})
+      << "deviatoric stress was zeroed: the apex branch was taken on a state "
+         "whose smooth return is well inside the cone";
+}
+
+/// The states that ARE at the apex must still get there, so the fix above
+/// cannot pass by never taking the branch.
+TEST(DPBranch, HydrostaticTensionStillReachesTheApex) {
+  dp_graph g({1.0, 1.0, 1.0, 0.0}, T{0.05}, T{500.0});
+  bool reached = false;
+  for (int i = 0; i < 40 && !reached; ++i) {
+    g.ctx.update();
+    if (g.deviatoric_norm() < T{1e-10} &&
+        g.ctx.get<T>("dp", "equivalent_plastic_strain") > T{1e-10})
+      reached = true;
+    g.ctx.commit();
+  }
+  EXPECT_TRUE(reached) << "hydrostatic tension never reached the apex branch";
+}
+
+/// The stress response must not jump across the branch boundary.
+///
+/// A finite jump in sigma at a fixed strain increment is not a tangent
+/// accuracy problem -- no tangent describes it, and a host Newton crossing the
+/// surface will cycle rather than converge slowly.
+TEST(DPBranch, StressIsContinuousAcrossTheBranchBoundary) {
+  T prev = -1, worst_jump = 0, typical = 0;
+  for (int i = 0; i <= 40; ++i) {
+    const double shear = 0.10 + 0.001 * i;
+    dp_graph g({0.404, 0.404, 0.404, shear}, T{1.0}, T{500.0});
+    g.ctx.update();
+    const T q = g.deviatoric_norm();
+    if (prev >= 0) {
+      const T jump = std::abs(q - prev);
+      worst_jump = std::max(worst_jump, jump);
+      typical += jump / 40;
+    }
+    prev = q;
+  }
+  EXPECT_LT(worst_jump, 10 * typical + T{1e-9})
+      << "deviatoric stress jumps by " << worst_jump
+      << " between adjacent shear levels, against a typical step of "
+      << typical;
 }
 
 } // namespace

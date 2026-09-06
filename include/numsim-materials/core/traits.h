@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_TRAITS_H
-#define NUMSIM_MATERIALS_TRAITS_H
+#ifndef CORE_TRAITS_H
+#define CORE_TRAITS_H
 
 #include <any>
 #include <functional>
@@ -38,4 +38,4 @@ struct material_policy_default {
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_TRAITS_H
+#endif // CORE_TRAITS_H

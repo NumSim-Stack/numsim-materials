@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_JSON_PARAMETER_CONVERTER_H
-#define NUMSIM_MATERIALS_JSON_PARAMETER_CONVERTER_H
+#ifndef JSON_PARAMETER_CONVERTER_H
+#define JSON_PARAMETER_CONVERTER_H
 
 #include <any>
 #include <functional>
@@ -93,6 +93,7 @@ json_reader_registry<JsonType> make_default_json_registry() {
   reg.template add<double>();
   reg.template add<float>();
   reg.template add<int>();
+  reg.template add<std::size_t>();
   reg.template add<bool>();
   reg.template add<std::string>();
 
@@ -254,4 +255,4 @@ void json_to_parameters(
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_JSON_PARAMETER_CONVERTER_H
+#endif // JSON_PARAMETER_CONVERTER_H

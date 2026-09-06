@@ -1,8 +1,10 @@
-#ifndef NUMSIM_MATERIALS_UMAT_MATERIAL_POINT_EVALUATOR_H
-#define NUMSIM_MATERIALS_UMAT_MATERIAL_POINT_EVALUATOR_H
+#ifndef MATERIAL_POINT_EVALUATOR_H
+#define MATERIAL_POINT_EVALUATOR_H
 
+#include <algorithm>
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -10,6 +12,7 @@
 
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_context.h"
+#include "numsim-materials/materials/props_scalar.h"
 #include "numsim-materials/umat/errors.h"
 #include "numsim-materials/umat/external_state_source.h"
 #include "numsim-materials/umat/statev_map.h"
@@ -43,7 +46,7 @@ public:
   struct config {
     /// Name of the external_strain_source material.
     std::string strain_source;
-    /// Material producing the stress and tangent the host wants back.
+    /// Material producing the stress the host wants back.
     std::string stress_source;
     std::string stress_property{"stress"};
     std::string tangent_property{"tangent"};
@@ -59,6 +62,11 @@ public:
     /// Additional host-owned history to keep out of STATEV, beyond the strain
     /// and time sources (which are excluded automatically).
     std::vector<statev_exclusion> extra_exclusions{};
+    /// Unset means "same as stress_source"; set it when the stiffness is its
+    /// own material. Optional rather than "" so the two stay distinct, and
+    /// APPENDED — a field inserted mid-struct would silently re-bind the
+    /// trailing arguments of an existing aggregate initialiser.
+    std::optional<std::string> tangent_source{};
   };
 
   /// One host call's arguments.
@@ -111,8 +119,9 @@ public:
 
     m_stress =
         resolve_property<tensor2>(m_cfg.stress_source, m_cfg.stress_property);
-    m_tangent =
-        resolve_property<tensor4>(m_cfg.stress_source, m_cfg.tangent_property);
+    const std::string& tangent_owner =
+        m_cfg.tangent_source ? *m_cfg.tangent_source : m_cfg.stress_source;
+    m_tangent = resolve_property<tensor4>(tangent_owner, m_cfg.tangent_property);
 
     if (!m_cfg.plastic_strain_property.empty()) {
       const auto src = connection_source::parse(m_cfg.plastic_strain_property);
@@ -120,6 +129,16 @@ public:
     }
 
     m_statev = std::make_unique<statev_map<Traits>>(m_ctx, exclusions);
+
+    // Collected rather than configured: a hand-listed set is a second thing to
+    // keep in step with the graph, and a missed entry is a stale modulus.
+    for (auto* material : m_ctx.materials())
+      if (auto* reader = dynamic_cast<props_scalar<Traits>*>(material)) {
+        m_props_readers.push_back(reader);
+        m_props_needed = std::max(m_props_needed, reader->index() + 1);
+      }
+    m_live_slots.assign(m_props_needed, false);
+    for (const auto* reader : m_props_readers) m_live_slots[reader->index()] = true;
   }
 
   /// Doubles this material needs in STATEV — what *DEPVAR must be at least.
@@ -180,6 +199,16 @@ public:
                           value_type dtime, value_type* stress6,
                           value_type* tangent36,
                           std::span<const value_type> drot = {}) {
+    // Every reader publishes zero until bind_props() runs: moduli of zero, an
+    // all-zero DDSDDE, and a host that fails to converge with nothing naming
+    // the cause. Catches never-bound, not stale — the plane-stress solve
+    // re-runs this per iterate without re-binding, so the two are
+    // indistinguishable from here. The registry binds on every call.
+    if (!m_props_readers.empty() && !m_props_bound)
+      throw fatal_error(
+          "material_point_evaluator: this model reads its material constants "
+          "per call — call bind_props() before evaluating");
+
     // STATEV is the only state store: reload it every call, so a repeated call
     // on an unconverged iterate starts from t_n, not from the previous trial.
     m_statev->unpack(statev);
@@ -198,6 +227,37 @@ public:
 
     stress_to_buffer<value_type>(*m_stress, stress6);
     tangent_to_buffer<value_type>(*m_tangent, tangent36);
+  }
+
+  /// Copy the host's material constants into the graph, once per host call and
+  /// before evaluating. Separate from `call` because the plane-stress solve
+  /// runs the graph repeatedly for one call and the constants do not change
+  /// between iterates. A no-op without props_scalar materials.
+  void bind_props(std::span<const value_type> props) {
+    if (m_props_readers.empty()) return;
+    if (props.size() < m_props_needed)
+      throw fatal_error(
+          "material_point_evaluator: the model reads " +
+          std::to_string(m_props_needed) +
+          " host constants but this call supplied " +
+          std::to_string(props.size()) + " — check *USER MATERIAL, CONSTANTS=");
+    for (auto* reader : m_props_readers) reader->bind(props);
+    m_props_bound = true;
+  }
+
+  /// True when any constant is read per call rather than baked into the graph.
+  [[nodiscard]] bool has_live_props() const noexcept {
+    return !m_props_readers.empty();
+  }
+
+  /// True when host constant @p slot is read per call, so a change there is
+  /// intended rather than a contradiction.
+  ///
+  /// Per slot, not per model: a document may mix the two binding times, and
+  /// answering for the whole model would wave the BAKED constants through as
+  /// well, leaving them silently at their first value.
+  [[nodiscard]] bool is_live_prop(std::size_t slot) const noexcept {
+    return slot < m_live_slots.size() && m_live_slots[slot];
   }
 
   /// Write the updated history back. No commit(): the host owns the timestep.
@@ -337,8 +397,12 @@ private:
   const numsim_core::history_property<tensor2, property_traits>*
       m_plastic_strain{nullptr};
   std::unique_ptr<statev_map<Traits>> m_statev;
+  std::vector<props_scalar<Traits>*> m_props_readers;
+  std::vector<bool> m_live_slots;
+  std::size_t m_props_needed{0};
+  bool m_props_bound{false};
 };
 
 }  // namespace numsim::materials::umat
 
-#endif  // NUMSIM_MATERIALS_UMAT_MATERIAL_POINT_EVALUATOR_H
+#endif  // MATERIAL_POINT_EVALUATOR_H

@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_UMAT_TENSOR_CONVERSION_H
-#define NUMSIM_MATERIALS_UMAT_TENSOR_CONVERSION_H
+#ifndef TENSOR_CONVERSION_H
+#define TENSOR_CONVERSION_H
 
 #include <array>
 #include <cassert>
@@ -330,4 +330,4 @@ inline tmech::tensor<T, 3, 4> tangent_from_buffer(
 
 }  // namespace numsim::materials::umat
 
-#endif  // NUMSIM_MATERIALS_UMAT_TENSOR_CONVERSION_H
+#endif  // TENSOR_CONVERSION_H

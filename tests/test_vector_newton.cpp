@@ -1,17 +1,24 @@
 #include <gtest/gtest.h>
 #include <cmath>
+#include <memory>
+#include <utility>
 #include <string>
 #include <vector>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/solvers/vector_newton.h"
 
+// default_materials.h has nothing to do with JSON -- it carries the material
+// policies, and material_policy_2d is used unconditionally below. Inside the
+// guard it vanished on any machine without nlohmann installed, taking the 2D
+// test's policy with it.
+#include "numsim-materials/default_materials.h"
+
 // nlohmann/json is an optional dependency (see README), so the JSON round-trip
 // below degrades to nothing rather than making the suite fail to build.
 #if __has_include(<nlohmann/json.hpp>)
 #define NUMSIM_HAVE_JSON 1
 #include <nlohmann/json.hpp>
-#include "numsim-materials/default_materials.h"
 #include "numsim-materials/io/json_material_factory.h"
 #endif
 
@@ -445,6 +452,73 @@ TEST(VectorNewton, MixedSystemIn2D) {
 
   EXPECT_NEAR(ctx.get<T>("solver", "g"), g_ref, 1e-10);
   EXPECT_TRUE(tmech::almost_equal(ctx.get<t2d>("solver", "B"), B_ref, 1e-10));
+}
+
+/// A block declared zero that is NOT zero. 'zero_blocks' is an assertion the
+/// solver takes on trust, and getting it wrong is invisible from outside: the
+/// residual still pins the root, so the solve converges to the right answer and
+/// only the consistent tangent is corrupted. verify_zero_blocks wires the block
+/// anyway so the claim can be checked.
+TEST(VectorNewton, VerifyZeroBlocksCatchesAFalseClaim) {
+  auto build = [](bool verify) {
+    auto ctx = std::make_unique<ctx_type>();
+    param_type p;
+    p.insert<std::string>("name", "solver");
+    p.insert<std::string>("function", "sys");
+    p.insert<std::vector<unknown_spec>>(
+        "unknowns", {{"x", unknown_kind::scalar}, {"y", unknown_kind::scalar}});
+    // The 'linear' system has dR_x/dy = 1 — emphatically not zero.
+    p.insert<std::vector<block_ref>>("zero_blocks", {{"x", "y"}});
+    p.insert<bool>("verify_zero_blocks", verify);
+    auto& solver = ctx->create<solver_type>(p);
+    p.clear();
+    p.insert<std::string>("name", "sys");
+    p.insert<std::string>("solver_name", "solver");
+    p.insert<int>("mode", static_cast<int>(system_mode::linear));
+    p.insert<T>("a", 5.0);
+    p.insert<T>("b", 10.0);
+    ctx->create<scalar_system_2>(p);
+    ctx->finalize();
+    return std::pair{std::move(ctx), &solver};
+  };
+
+  {
+    auto [ctx, solver] = build(true);
+    EXPECT_THROW(solver->solve(), std::runtime_error)
+        << "a nonzero block declared zero must be reported";
+  }
+  {
+    // Off by default, and the silent-corruption path is what makes the check
+    // worth having: it converges to the right root regardless.
+    auto [ctx, solver] = build(false);
+    EXPECT_NO_THROW(solver->solve());
+    EXPECT_TRUE(solver->converged());
+  }
+}
+
+/// The honest case must still pass, so the check cannot be satisfied by
+/// rejecting every zero_blocks entry.
+TEST(VectorNewton, VerifyZeroBlocksAcceptsATrueClaim) {
+  ctx_type ctx;
+  param_type p;
+  p.insert<std::string>("name", "solver");
+  p.insert<std::string>("function", "sys");
+  p.insert<std::vector<unknown_spec>>(
+      "unknowns", {{"x", unknown_kind::scalar}, {"y", unknown_kind::scalar}});
+  p.insert<std::vector<block_ref>>("zero_blocks", {{"x", "y"}});
+  p.insert<bool>("verify_zero_blocks", true);
+  auto& solver = ctx.create<solver_type>(p);
+  p.clear();
+  p.insert<std::string>("name", "sys");
+  p.insert<std::string>("solver_name", "solver");
+  p.insert<int>("mode", static_cast<int>(system_mode::decoupled));
+  p.insert<T>("a", 5.0);
+  p.insert<T>("b", 10.0);
+  ctx.create<scalar_system_2>(p);
+  ctx.finalize();
+
+  EXPECT_NO_THROW(solver.solve());
+  EXPECT_TRUE(solver.converged());
 }
 
 TEST(VectorNewton, StructurallyZeroBlockIsSkipped) {

@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_VECTOR_NEWTON_H
-#define NUMSIM_MATERIALS_VECTOR_NEWTON_H
+#ifndef VECTOR_NEWTON_H
+#define VECTOR_NEWTON_H
 
 #include <algorithm>
 #include <cmath>
@@ -57,7 +57,8 @@ public:
         m_lin_tol(base::template get_parameter<value_type>("linear_tolerance")),
         m_max_iter(base::template get_parameter<int>("max_iter")),
         m_strain_derivative(
-            base::template get_parameter<bool>("strain_derivative"))
+            base::template get_parameter<bool>("strain_derivative")),
+        m_verify_zeros(base::template get_parameter<bool>("verify_zero_blocks"))
   {
     const auto& specs =
         base::template get_parameter<std::vector<unknown_spec>>("unknowns");
@@ -98,7 +99,10 @@ public:
         const auto is_zero =
             std::find(zeros.begin(), zeros.end(),
                       block_ref{specs[i].name, specs[j].name}) != zeros.end();
-        if (!is_zero) add_block(specs[i], specs[j], i, j);
+        if (is_zero) m_zero_ij.emplace_back(i, j);
+        // Verify mode wires the block anyway, so the claim can be checked
+        // against its value. See gather_jacobian().
+        if (!is_zero || m_verify_zeros) add_block(specs[i], specs[j], i, j);
       }
 
     m_N = 0;
@@ -135,6 +139,14 @@ public:
     // Opt-in: wires d_residual_<name>_d_strain inputs and produces
     // d_<name>_d_strain outputs, solved from the converged factorization.
     para.template insert<bool>("strain_derivative")
+        .template add<set_default>(false);
+    // Optional, and read with contains(): a block set naming a block that is
+    // NOT identically zero converges anyway and only corrupts the consistent
+    // tangent, so it is worth being able to check.
+    para.template insert<std::vector<block_ref>>("zero_blocks");
+    // Opt-in, default off: wires the declared-zero blocks anyway and asserts
+    // they really are zero. Turn it on once while developing a model.
+    para.template insert<bool>("verify_zero_blocks")
         .template add<set_default>(false);
     return para;
   }
@@ -434,6 +446,34 @@ private:
       }
       r += m_state[i]->rows();
     }
+    if (m_verify_zeros) verify_zero_blocks();
+  }
+
+  /// Check that every block declared zero actually is, then clear it so the
+  /// solve proceeds exactly as it would in production.
+  ///
+  /// Only runs in verify mode, where the blocks were wired for this purpose.
+  /// The claim is otherwise taken on trust and is unfalsifiable from the
+  /// outside: a wrong one still converges -- the residual pins the root -- and
+  /// shows up only as a wrong consistent tangent and slow global Newton.
+  void verify_zero_blocks() {
+    std::vector<std::size_t> off(m_state.size() + 1, 0);
+    for (std::size_t k = 0; k < m_state.size(); ++k)
+      off[k + 1] = off[k] + m_state[k]->rows();
+
+    for (const auto& [i, j] : m_zero_ij) {
+      const auto rows = off[i + 1] - off[i], cols = off[j + 1] - off[j];
+      const auto blk = m_J.block(off[i], off[j], rows, cols);
+      const auto peak = blk.template lpNorm<Eigen::Infinity>();
+      if (peak > m_tol)
+        throw std::runtime_error(
+            "vector_newton '" + base::name() + "': 'zero_blocks' entry [" +
+            std::to_string(i) + ", " + std::to_string(j) + "] is NOT zero " +
+            "(largest entry " + std::to_string(peak) +
+            ") — the solve would still converge, but the consistent tangent "
+            "would be wrong");
+      m_J.block(off[i], off[j], rows, cols).setZero();
+    }
   }
 
 private:
@@ -454,6 +494,9 @@ private:
   std::size_t m_W{0};
   vector_t m_x, m_R, m_dx;
   matrix_t m_J;
+  const bool m_verify_zeros;
+  /// (row, col) of every block declared zero, for verify mode.
+  std::vector<std::pair<std::size_t, std::size_t>> m_zero_ij;
   matrix_t m_dR_de, m_dx_de;
   Eigen::PartialPivLU<matrix_t> m_lu;
   bool m_converged{false};
@@ -461,4 +504,4 @@ private:
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_VECTOR_NEWTON_H
+#endif // VECTOR_NEWTON_H
