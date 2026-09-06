@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_MATERIAL_PROPERTY_INFO_H
-#define NUMSIM_MATERIALS_MATERIAL_PROPERTY_INFO_H
+#ifndef MATERIAL_PROPERTY_INFO_H
+#define MATERIAL_PROPERTY_INFO_H
 
 #include <expected>
 #include <format>
@@ -52,4 +52,4 @@ private:
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_MATERIAL_PROPERTY_INFO_H
+#endif // MATERIAL_PROPERTY_INFO_H

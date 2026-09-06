@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_UMAT_STATEV_MAP_H
-#define NUMSIM_MATERIALS_UMAT_STATEV_MAP_H
+#ifndef STATEV_MAP_H
+#define STATEV_MAP_H
 
 #include <algorithm>
 #include <cmath>
@@ -294,4 +294,4 @@ private:
 
 }  // namespace numsim::materials::umat
 
-#endif  // NUMSIM_MATERIALS_UMAT_STATEV_MAP_H
+#endif  // STATEV_MAP_H

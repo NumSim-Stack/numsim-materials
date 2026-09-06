@@ -10,7 +10,6 @@
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/materials/linear_isotropic_hardening.h"
 #include "numsim-materials/materials/linear_stress.h"
-#include "numsim-materials/materials/small_strain_plasticity.h"
 #include "numsim-materials/solvers/backward_euler.h"
 #include "numsim-materials/umat/external_state_source.h"
 #include "numsim-materials/umat/material_point_evaluator.h"
@@ -236,89 +235,17 @@ TEST(TangentGenerator, StiffnessFollowsAChangedModulus) {
 // Composition with a pre-existing consumer
 // ---------------------------------------------------------------------------
 
-/// The drop-in claim, against a PRE-EXISTING consumer: small_strain_plasticity
-/// already names its tangent source, so only elastic_source moves.
-TEST(TangentGenerator, DrivesJ2PlasticityIdenticallyToLinearElasticity) {
-  auto drive = [](bool decomposed) {
-    ctx_type ctx;
-    param_type p;
-    p.insert<std::string>("name", "strain_in");
-    auto& src = ctx.create<nm::external_strain_source<policy>>(p);
+// TangentGenerator.DrivesJ2PlasticityIdenticallyToLinearElasticity lived here.
+// It asserted that isotropic_tangent is a drop-in for linear_elasticity as a
+// plasticity "elastic_source". Plasticity no longer HAS an elastic_source:
+// #44 removed it because the closed-form tangent and stress require an
+// isotropic C_e, so accepting an arbitrary rank-4 tangent advertised a
+// generality the material cannot honour. The premise is gone, not the test's
+// standard of proof.
+//
+// The drop-in claim itself is still covered, against consumers that do source
+// a tangent: TangentSource.* below, and the weighted_sum tangent_sources tests.
 
-    if (decomposed) {
-      p.clear();
-      p.insert<std::string>("name", "K");
-      p.insert<T>("value", K);
-      ctx.create<nm::constant_scalar<policy>>(p);
-      p.clear();
-      p.insert<std::string>("name", "G");
-      p.insert<T>("value", G);
-      ctx.create<nm::constant_scalar<policy>>(p);
-      p.clear();
-      p.insert<std::string>("name", "stiffness");
-      p.insert<std::string>("K_source", "K");
-      p.insert<std::string>("G_source", "G");
-      ctx.create<nm::isotropic_tangent<policy>>(p);
-    } else {
-      p.clear();
-      p.insert<std::string>("name", "stiffness");
-      p.insert<std::string>("strain_producer_name", "strain_in");
-      p.insert<T>("K", K);
-      p.insert<T>("G", G);
-      ctx.create<nm::linear_elasticity<policy>>(p);
-    }
-
-    p.clear();
-    p.insert<std::string>("name", "solver");
-    ctx.create<nm::backward_euler<policy>>(p);
-    p.clear();
-    p.insert<std::string>("name", "hardening");
-    p.insert<std::string>("source", "j2");
-    p.insert<T>("K", T{1000});
-    ctx.create<nm::linear_isotropic_hardening<policy>>(p);
-    p.clear();
-    p.insert<std::string>("name", "j2");
-    p.insert<std::string>("elastic_source", "stiffness");
-    p.insert<std::string>("hardening_source", "hardening");
-    p.insert<std::string>("strain_source", "strain_in");
-    p.insert<std::string>("solver_source", "solver");
-    p.insert<T>("G", G);
-    p.insert<T>("sigma_0", T{50});
-    ctx.create<nm::j2_plasticity<policy>>(p);
-    ctx.finalize();
-
-    std::vector<std::pair<tensor2, T>> out;
-    for (int step = 1; step <= 30; ++step) {
-      const auto eps = uniaxial(0.02 * step);
-      src.bind(eps, eps);
-      ctx.update();
-      out.emplace_back(ctx.get<tensor2>("j2", "stress"),
-                       ctx.get<T>("j2", "equivalent_plastic_strain"));
-      ctx.commit();
-    }
-    return out;
-  };
-
-  const auto with_generator = drive(true);
-  const auto with_monolith = drive(false);
-  ASSERT_EQ(with_generator.size(), with_monolith.size());
-  bool went_plastic = false;
-  for (std::size_t i = 0; i < with_generator.size(); ++i) {
-    EXPECT_TRUE(TensorsIdentical(with_generator[i].first,
-                                 with_monolith[i].first))
-        << "stress at step " << i;
-    EXPECT_DOUBLE_EQ(with_generator[i].second, with_monolith[i].second)
-        << "equivalent plastic strain at step " << i;
-    if (with_generator[i].second > 1e-8) went_plastic = true;
-  }
-  EXPECT_TRUE(went_plastic) << "the path must yield for this to mean anything";
-}
-
-// ---------------------------------------------------------------------------
-// The optional tangent_source
-// ---------------------------------------------------------------------------
-
-/// Absent tangent_source falls back to the stress source; supplied is honoured.
 TEST(TangentSource, AbsentFallsBackToTheStressSource) {
   ctx_type ctx;
   param_type p;

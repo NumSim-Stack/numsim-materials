@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_PROPERTY_TRAITS_H
-#define NUMSIM_MATERIALS_PROPERTY_TRAITS_H
+#ifndef PROPERTY_TRAITS_H
+#define PROPERTY_TRAITS_H
 #include <numsim-core/property_graph/property_traits.h>
 namespace numsim::materials {
   using numsim_core::EdgeKind;

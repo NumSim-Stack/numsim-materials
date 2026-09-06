@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_SCALAR_COMPLEMENT_WEIGHT_H
-#define NUMSIM_MATERIALS_SCALAR_COMPLEMENT_WEIGHT_H
+#ifndef SCALAR_COMPLEMENT_WEIGHT_H
+#define SCALAR_COMPLEMENT_WEIGHT_H
 
 #include "numsim-materials/core/material_base.h"
 
@@ -40,4 +40,4 @@ private:
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_SCALAR_COMPLEMENT_WEIGHT_H
+#endif // SCALAR_COMPLEMENT_WEIGHT_H

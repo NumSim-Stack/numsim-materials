@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_UNKNOWN_LAYOUT_H
-#define NUMSIM_MATERIALS_UNKNOWN_LAYOUT_H
+#ifndef UNKNOWN_LAYOUT_H
+#define UNKNOWN_LAYOUT_H
 
 #include <cstddef>
 #include <string>
@@ -383,4 +383,4 @@ private:
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_UNKNOWN_LAYOUT_H
+#endif // UNKNOWN_LAYOUT_H
