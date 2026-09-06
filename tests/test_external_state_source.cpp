@@ -5,10 +5,11 @@
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/materials/linear_isotropic_hardening.h"
 #include "numsim-materials/materials/scalar_stepper.h"
-#include "numsim-materials/materials/small_strain_plasticity.h"
 #include "numsim-materials/materials/tensor_component_stepper.h"
 #include "numsim-materials/solvers/backward_euler.h"
 #include "numsim-materials/umat/external_state_source.h"
+#include "numsim-materials/solvers/local_newton.h"
+#include "numsim-materials/materials/j2_plasticity.h"
 
 namespace {
 
@@ -41,7 +42,7 @@ void add_j2_chain(ctx_type& ctx) {
 
   p.clear();
   p.insert<std::string>("name", "solver");
-  ctx.create<nm::backward_euler<policy>>(p);
+  ctx.create<nm::local_newton<policy>>(p);
 
   p.clear();
   p.insert<std::string>("name", "hardening");
@@ -51,7 +52,7 @@ void add_j2_chain(ctx_type& ctx) {
 
   p.clear();
   p.insert<std::string>("name", "j2");
-  p.insert<std::string>("elastic_source", "elastic");
+  p.insert<T>("K", K);
   p.insert<std::string>("hardening_source", "hardening");
   p.insert<std::string>("strain_source", "stepper");
   p.insert<std::string>("solver_source", "solver");

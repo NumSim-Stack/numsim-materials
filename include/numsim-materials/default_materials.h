@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_DEFAULT_MATERIALS_H
-#define NUMSIM_MATERIALS_DEFAULT_MATERIALS_H
+#ifndef DEFAULT_MATERIALS_H
+#define DEFAULT_MATERIALS_H
 
 #include <numsim-core/object_registry.h>
 #include "numsim-materials/core/material_base.h"
@@ -96,4 +96,4 @@ void register_default_materials() {
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_DEFAULT_MATERIALS_H
+#endif // DEFAULT_MATERIALS_H

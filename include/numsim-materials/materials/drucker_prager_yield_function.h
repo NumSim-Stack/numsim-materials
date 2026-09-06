@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_DRUCKER_PRAGER_YIELD_FUNCTION_H
-#define NUMSIM_MATERIALS_DRUCKER_PRAGER_YIELD_FUNCTION_H
+#ifndef DRUCKER_PRAGER_YIELD_FUNCTION_H
+#define DRUCKER_PRAGER_YIELD_FUNCTION_H
 
 #include <cmath>
 #include <tmech/tmech.h>
@@ -127,9 +127,16 @@ struct drucker_prager_yield_function {
   /// Perturbations that leave the apex back to the smooth cone follow the
   /// smooth-branch tangent.
   ///
-  /// For perfectly plastic (H'=0) with K*η*β = 0, returns zero tangent —
-  /// the apex branch is rate-indifferent and has no stiffness. Callers
-  /// should be aware that a zero tangent makes the global stiffness singular.
+  /// It is rank 1 in every case, not only the degenerate one: the returned
+  /// tensor is a multiple of I⊗I, and apex_plastic_strain sets
+  /// dev(ε_p) = dev(ε) so the deviatoric stress is identically zero for ANY
+  /// perturbation. A Voigt SVD on a normal H' = 1000 apex state gives singular
+  /// values (499.6, 6.3e-15, 0, 0, 0, 0). An element with all its Gauss points
+  /// at the apex therefore has a singular stiffness whatever the hardening.
+  ///
+  /// H' = 0 gives a ZERO tangent whether or not K*η*β vanishes, since the
+  /// numerator is K*H'. The K*η*β = 0 case additionally makes the denominator
+  /// vanish, which the guard below catches.
   tensor4 apex_tangent(T dH_val) const {
     const auto I = tmech::eye<T, Dim, 2>();
     const auto Kab = K_bulk * eta * beta;
@@ -157,4 +164,4 @@ struct drucker_prager_yield_function {
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_DRUCKER_PRAGER_YIELD_FUNCTION_H
+#endif // DRUCKER_PRAGER_YIELD_FUNCTION_H

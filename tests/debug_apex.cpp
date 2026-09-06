@@ -5,7 +5,7 @@
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/materials/linear_isotropic_hardening.h"
 #include "numsim-materials/materials/drucker_prager_yield_function.h"
-#include "numsim-materials/materials/small_strain_plasticity.h"
+#include "numsim-materials/materials/drucker_prager_plasticity.h"
 #include "numsim-materials/solvers/backward_euler.h"
 
 using policy = numsim::materials::material_policy_default;
@@ -22,7 +22,6 @@ int main() {
   const T lambda = K - T{2}*G/T{3};  // 115385
   const T G_eff = G + K*eta*beta;   // 84423
 
-  dp_yield yf(eta, beta, K);
 
   std::println("Elastic constants: lambda={:.1f}, G={:.1f}, K={:.1f}", lambda, G, K);
   std::println("G_eff = {:.1f}", G_eff);

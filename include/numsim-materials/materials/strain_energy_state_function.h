@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_STRAIN_ENERGY_STATE_FUNCTION_H
-#define NUMSIM_MATERIALS_STRAIN_ENERGY_STATE_FUNCTION_H
+#ifndef STRAIN_ENERGY_STATE_FUNCTION_H
+#define STRAIN_ENERGY_STATE_FUNCTION_H
 
 #include <cmath>
 #include <tmech/tmech.h>
@@ -74,4 +74,4 @@ private:
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_STRAIN_ENERGY_STATE_FUNCTION_H
+#endif // STRAIN_ENERGY_STATE_FUNCTION_H
