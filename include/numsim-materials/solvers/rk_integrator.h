@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_RK_INTEGRATOR_H
-#define NUMSIM_MATERIALS_RK_INTEGRATOR_H
+#ifndef RK_INTEGRATOR_H
+#define RK_INTEGRATOR_H
 
 #include <cmath>
 #include <vector>
@@ -183,4 +183,4 @@ private:
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_RK_INTEGRATOR_H
+#endif // RK_INTEGRATOR_H

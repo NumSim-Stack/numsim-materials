@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_PLOT_BACKEND_H
-#define NUMSIM_MATERIALS_PLOT_BACKEND_H
+#ifndef PLOT_BACKEND_H
+#define PLOT_BACKEND_H
 
 #include <string>
 
@@ -26,4 +26,4 @@ public:
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_PLOT_BACKEND_H
+#endif // PLOT_BACKEND_H

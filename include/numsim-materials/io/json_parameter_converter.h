@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_JSON_PARAMETER_CONVERTER_H
-#define NUMSIM_MATERIALS_JSON_PARAMETER_CONVERTER_H
+#ifndef JSON_PARAMETER_CONVERTER_H
+#define JSON_PARAMETER_CONVERTER_H
 
 #include <any>
 #include <functional>
@@ -210,4 +210,4 @@ void json_to_parameters(
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_JSON_PARAMETER_CONVERTER_H
+#endif // JSON_PARAMETER_CONVERTER_H

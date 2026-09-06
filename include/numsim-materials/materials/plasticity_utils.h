@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_PLASTICITY_UTILS_H
-#define NUMSIM_MATERIALS_PLASTICITY_UTILS_H
+#ifndef PLASTICITY_UTILS_H
+#define PLASTICITY_UTILS_H
 
 #include <cassert>
 #include <limits>
@@ -160,4 +160,4 @@ tmech::tensor<T, Dim, 4> compute_tangent(
 
 } // namespace numsim::materials::plasticity_detail
 
-#endif // NUMSIM_MATERIALS_PLASTICITY_UTILS_H
+#endif // PLASTICITY_UTILS_H

@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_LINEAR_ISOTROPIC_HARDENING_H
-#define NUMSIM_MATERIALS_LINEAR_ISOTROPIC_HARDENING_H
+#ifndef LINEAR_ISOTROPIC_HARDENING_H
+#define LINEAR_ISOTROPIC_HARDENING_H
 
 #include "numsim-materials/core/material_base.h"
 
@@ -56,4 +56,4 @@ private:
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_LINEAR_ISOTROPIC_HARDENING_H
+#endif // LINEAR_ISOTROPIC_HARDENING_H

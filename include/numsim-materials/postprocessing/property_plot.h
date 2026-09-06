@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_PROPERTY_PLOT_H
-#define NUMSIM_MATERIALS_PROPERTY_PLOT_H
+#ifndef PROPERTY_PLOT_H
+#define PROPERTY_PLOT_H
 
 #include <memory>
 #include <string>
@@ -103,4 +103,4 @@ private:
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_PROPERTY_PLOT_H
+#endif // PROPERTY_PLOT_H

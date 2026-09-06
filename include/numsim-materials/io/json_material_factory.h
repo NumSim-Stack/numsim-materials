@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_JSON_MATERIAL_FACTORY_H
-#define NUMSIM_MATERIALS_JSON_MATERIAL_FACTORY_H
+#ifndef JSON_MATERIAL_FACTORY_H
+#define JSON_MATERIAL_FACTORY_H
 
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/core/object_store.h"
@@ -41,4 +41,4 @@ material_interface<Traits>& create_from_json(
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_JSON_MATERIAL_FACTORY_H
+#endif // JSON_MATERIAL_FACTORY_H

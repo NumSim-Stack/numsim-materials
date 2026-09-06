@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_BACKWARD_EULER_H
-#define NUMSIM_MATERIALS_BACKWARD_EULER_H
+#ifndef BACKWARD_EULER_H
+#define BACKWARD_EULER_H
 
 #include <cmath>
 #include <string>
@@ -95,4 +95,4 @@ private:
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_BACKWARD_EULER_H
+#endif // BACKWARD_EULER_H
