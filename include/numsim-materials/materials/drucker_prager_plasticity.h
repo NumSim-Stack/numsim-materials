@@ -58,10 +58,8 @@ public:
     m_yf = yield_fn(base::template get_parameter<value_type>("eta"),
                     base::template get_parameter<value_type>("beta"),
                     m_K_bulk);
-    const auto I = tmech::eye<value_type, Dim, 2>();
-    const tensor4 IIvol{tmech::otimes(I, I) / value_type{Dim}};
-    m_C_e = value_type{3} * m_K_bulk * IIvol +
-            value_type{2} * m_G * plasticity_detail::make_IIdev<value_type, Dim>();
+    m_C_e = plasticity_detail::make_isotropic_tangent<value_type, Dim>(
+        m_K_bulk, m_G);
   }
 
   static input_parameter_controller parameters() {
@@ -96,31 +94,48 @@ public:
       return;
     }
 
-    // For yield functions with an apex (DP cone), avoid the wasted smooth
-    // Newton when the trial state already guarantees apex overshoot.
-    // Conservative pre-check using the zero-hardening dlambda bound:
-    //   dlambda_max = F_trial / G_eff  ≥  true dlambda  (for H' ≥ 0)
-    // If even this upper bound triggers apex, smooth will also.
-    const auto G_eff_pre = m_yf.effective_modulus(m_G);
-    if (m_yf.needs_apex_return(m_G, ts.eval.F / G_eff_pre, ts.eval.sig_eq)) {
-      do_apex_return(ts.eval.sig, C_e, kappa_n);
-      return;
-    }
-
     const auto smooth = solve_smooth_newton(ts.eval.modified_sig_eq, kappa_n);
 
-    // If the smooth return fails, the apex is the remaining branch.
-    if (!smooth.converged) {
+    // A negative multiplier means G_eff + H' < 0 -- see the note in
+    // j2_plasticity. The smooth root is F_trial / (G_eff + H') and the return
+    // map is only entered with F_trial > 0, so the sign is a statement about
+    // the material, not about roundoff. Clamping it leaves the stress outside
+    // the cone with no plastic flow and no error.
+    if (smooth.converged && smooth.x < value_type{0})
+      throw std::runtime_error(
+          "drucker_prager_plasticity: the return map produced a negative "
+          "plastic multiplier, which means the hardening modulus is at or "
+          "below -(G + K*eta*beta). The softening branch is unstable and this "
+          "local return map cannot resolve it; use a smaller magnitude, or a "
+          "formulation with viscous or gradient regularisation.");
+    // dlambda >= 0 is a statement about the plastic multiplier, enforced here
+    // rather than inside a general scalar solver (see #13).
+    const auto dlambda = std::max(smooth.x, value_type{0});
+
+    // The apex is selected by the CONVERGED dlambda, never by a bound on it.
+    //
+    // needs_apex_return is G*dlambda >= q_trial, monotone increasing in
+    // dlambda. A previous pre-check fed it the zero-hardening bound
+    // dlambda_max = F_trial/G_eff, which is an UPPER bound on the true
+    // dlambda for H' >= 0, and concluded apex when the bound triggered. That
+    // implication runs the wrong way: an upper bound crossing the threshold
+    // says nothing about the true value. Only the contrapositive is usable --
+    // if the bound does NOT trigger, the true dlambda cannot either -- and
+    // that direction saves no work here, so there is no pre-check at all.
+    //
+    // The smooth Newton is one scalar solve; running it unconditionally costs
+    // far less than choosing the wrong branch, which zeroes the whole
+    // deviatoric stress and puts a finite jump in the stress response.
+    if (!smooth.converged ||
+        m_yf.needs_apex_return(m_G, dlambda, ts.eval.sig_eq)) {
+      // The apex is the remaining branch, and its own Newton can fail too.
       if (!do_apex_return(ts.eval.sig, C_e, kappa_n))
         throw std::runtime_error(
             "drucker_prager_plasticity: both smooth and apex Newton failed");
       return;
     }
 
-    // dlambda >= 0 is a statement about the plastic multiplier, enforced here
-    // rather than inside a general scalar solver (see #13).
-    do_smooth_return(ts.eval, C_e, kappa_n,
-                     std::max(smooth.x, value_type{0}));
+    do_smooth_return(ts.eval, C_e, kappa_n, dlambda);
   }
 
 private:

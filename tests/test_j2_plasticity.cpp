@@ -229,6 +229,88 @@ TEST_F(J2TangentTest, ConsistentTangentAllSteps) {
       << "the yield-crossing step is inexact but should stay bounded";
 }
 
+/// Softening, and the clamp that used to hide it.
+///
+/// Both return maps carry std::max(dlambda, 0) with a comment explaining that
+/// the sign is a statement about the plastic multiplier. Nothing exercised it:
+/// every path in these files loads monotonically from zero, and for H' >= 0 the
+/// root F/(G_eff + H') is positive whenever the state yields at all.
+///
+/// It becomes reachable under softening, and clamping is the wrong answer
+/// there. linear_isotropic_hardening takes its modulus as a plain parameter and
+/// does not reject a negative one, so a deck can ask for H' <= -3G, where the
+/// yield residual has positive slope and the local problem has no admissible
+/// solution. Clamping returned the elastic stress: measured on this path, the
+/// equivalent stress climbed past sigma_0 = 50 to 76.9 with alpha identically
+/// zero -- 54% outside the yield surface, no plastic flow, no error.
+///
+/// Moderate softening, -3G < H' < 0, still has a positive root and must keep
+/// working.
+namespace {
+ctx_type* build_softening(ctx_type& ctx, T hardening) {
+  constexpr T G{76.92};
+  param_type p;
+  p.insert<std::string>("name", "stepper");
+  p.insert<T>("increment", T{0.05});
+  p.insert<std::vector<std::size_t>>("indices", {0, 0});
+  ctx.create<numsim::materials::tensor_component_stepper<2, policy>>(p);
+
+  p.clear();
+  p.insert<std::string>("name", "solver");
+  ctx.create<numsim::materials::local_newton<policy>>(p);
+
+  p.clear();
+  p.insert<std::string>("name", "hardening");
+  p.insert<std::string>("source", "j2");
+  p.insert<T>("K", hardening);
+  ctx.create<numsim::materials::linear_isotropic_hardening<policy>>(p);
+
+  p.clear();
+  p.insert<std::string>("name", "j2");
+  p.insert<std::string>("hardening_source", "hardening");
+  p.insert<std::string>("strain_source", "stepper");
+  p.insert<std::string>("solver_source", "solver");
+  p.insert<T>("K", T{166.67});
+  p.insert<T>("G", G);
+  p.insert<T>("sigma_0", T{50.0});
+  ctx.create<numsim::materials::j2_plasticity<policy>>(p);
+  ctx.finalize();
+  return &ctx;
+}
+}  // namespace
+
+TEST(J2Softening, UnstableSofteningIsRejectedRatherThanClamped) {
+  ctx_type ctx;
+  build_softening(ctx, T{-300.0});      // |H'| > 3G = 230.8
+  EXPECT_THROW(
+      {
+        for (int i = 0; i < 10; ++i) {
+          ctx.update();
+          ctx.commit();
+        }
+      },
+      std::runtime_error);
+}
+
+TEST(J2Softening, ModerateSofteningStillYields) {
+  ctx_type ctx;
+  build_softening(ctx, T{-100.0});      // |H'| < 3G, root still positive
+  constexpr T sigma_0{50.0};
+  T peak = 0, final_eq = 0, alpha = 0;
+  for (int i = 0; i < 12; ++i) {
+    ctx.update();
+    const auto s = tmech::dev(ctx.get<tensor2>("j2", "stress"));
+    final_eq = std::sqrt(T{1.5} * tmech::dcontract(s, s));
+    peak = std::max(peak, final_eq);
+    alpha = ctx.get<T>("j2", "equivalent_plastic_strain");
+    ctx.commit();
+  }
+  EXPECT_GT(alpha, T{1e-6}) << "moderate softening must still flow plastically";
+  EXPECT_LT(final_eq, sigma_0)
+      << "a softening material must end BELOW its initial yield stress";
+  EXPECT_LT(final_eq, peak) << "the stress must come down after the peak";
+}
+
 // --- RK plasticity: multi-stage return mapping via tableau parameter ---
 
 class RKPlasticityTest : public ::testing::Test {
@@ -286,32 +368,149 @@ protected:
 
 TEST_F(RKPlasticityTest, ImplicitEulerMatchesMonolithic) {
   setup_with_tableau("implicit_euler");
-  T max_rel_error = 0;
+
+  // Split by regime, for the reason recorded on
+  // J2TangentTest.ConsistentTangentAllSteps: the yield-crossing step is
+  // genuinely inexact because a central difference straddles the tangent's
+  // discontinuity, and bounding the whole run by that step makes the check
+  // blind to everything else.
+  //
+  // The bound this test used to carry was 0.1 against a measured worst of
+  // 3.0e-4 -- 336x of headroom. Dropping the ENTIRE plastic-softening
+  // correction from the tangent lands at about 1.2e-2 and still passed.
+  //
+  // Unlike the monolithic J2 tangent, which is exact to ~1e-10, this one is a
+  // genuine approximation: the stage-wise return map's tangent is assembled
+  // from the b-weighted multiplier rather than differentiated through the
+  // stages. 1e-3 is a little over 3x the measured worst and an order of
+  // magnitude below a dropped softening term.
+  T worst_plastic = 0, worst_transition = 0, alpha_before = 0;
+  int plastic_steps = 0;
   for (int i = 0; i < 20; ++i) {
     ctx.update();
-    auto rel = ctx.get<T>("checker", "rel_error");
-    auto alpha = ctx.get<T>("j2", "equivalent_plastic_strain");
-    std::println("  IE step {:2d}: rel={:.2e} alpha={:.4e}", i, rel, alpha);
-    if (rel > max_rel_error) max_rel_error = rel;
+    const auto rel = ctx.get<T>("checker", "rel_error");
+    const auto alpha = ctx.get<T>("j2", "equivalent_plastic_strain");
+    const bool was_plastic = alpha_before > T{1e-10};
+    const bool is_plastic = alpha > T{1e-10};
+    if (was_plastic && is_plastic) {
+      worst_plastic = std::max(worst_plastic, rel);
+      ++plastic_steps;
+    } else if (is_plastic) {
+      worst_transition = std::max(worst_transition, rel);
+    }
+    alpha_before = alpha;
     ctx.commit();
   }
-  EXPECT_LT(max_rel_error, 0.1)
-      << "Implicit Euler RK should match monolithic J2";
+
+  ASSERT_GT(plastic_steps, 5) << "the path must spend real time yielding";
+  EXPECT_LT(worst_plastic, 1e-3)
+      << "implicit Euler RK tangent disagrees with the numerical derivative on fully "
+         "plastic steps (worst " << worst_plastic << ")";
+  EXPECT_LT(worst_transition, 0.1)
+      << "the yield-crossing step is inexact but should stay bounded";
 }
 
 TEST_F(RKPlasticityTest, SDIRK3TangentCheck) {
   setup_with_tableau("sdirk3");
-  T max_rel_error = 0;
+
+  // Split by regime, for the reason recorded on
+  // J2TangentTest.ConsistentTangentAllSteps: the yield-crossing step is
+  // genuinely inexact because a central difference straddles the tangent's
+  // discontinuity, and bounding the whole run by that step makes the check
+  // blind to everything else.
+  //
+  // The bound this test used to carry was 0.1 against a measured worst of
+  // 3.0e-4 -- 336x of headroom. Dropping the ENTIRE plastic-softening
+  // correction from the tangent lands at about 1.2e-2 and still passed.
+  //
+  // Unlike the monolithic J2 tangent, which is exact to ~1e-10, this one is a
+  // genuine approximation: the stage-wise return map's tangent is assembled
+  // from the b-weighted multiplier rather than differentiated through the
+  // stages. 1e-3 is a little over 3x the measured worst and an order of
+  // magnitude below a dropped softening term.
+  T worst_plastic = 0, worst_transition = 0, alpha_before = 0;
+  int plastic_steps = 0;
   for (int i = 0; i < 20; ++i) {
     ctx.update();
-    auto rel = ctx.get<T>("checker", "rel_error");
-    auto alpha = ctx.get<T>("j2", "equivalent_plastic_strain");
-    std::println("  SDIRK3 step {:2d}: rel={:.2e} alpha={:.4e}", i, rel, alpha);
-    if (rel > max_rel_error) max_rel_error = rel;
+    const auto rel = ctx.get<T>("checker", "rel_error");
+    const auto alpha = ctx.get<T>("j2", "equivalent_plastic_strain");
+    const bool was_plastic = alpha_before > T{1e-10};
+    const bool is_plastic = alpha > T{1e-10};
+    if (was_plastic && is_plastic) {
+      worst_plastic = std::max(worst_plastic, rel);
+      ++plastic_steps;
+    } else if (is_plastic) {
+      worst_transition = std::max(worst_transition, rel);
+    }
+    alpha_before = alpha;
     ctx.commit();
   }
-  EXPECT_LT(max_rel_error, 0.1)
-      << "SDIRK3 tangent should be consistent";
+
+  ASSERT_GT(plastic_steps, 5) << "the path must spend real time yielding";
+  EXPECT_LT(worst_plastic, 1e-3)
+      << "SDIRK3 tangent disagrees with the numerical derivative on fully "
+         "plastic steps (worst " << worst_plastic << ")";
+  EXPECT_LT(worst_transition, 0.1)
+      << "the yield-crossing step is inexact but should stay bounded";
+}
+
+/// Equivalent plastic strain after a uniaxial path, for one tableau and one
+/// hardening modulus. No tangent checker -- only the return map is of
+/// interest here.
+T rk_alpha(const std::string& tableau, T hardening) {
+  ctx_type ctx;
+  param_type p;
+  p.insert<std::string>("name", "stepper");
+  p.insert<T>("increment", T{0.05});
+  p.insert<std::vector<std::size_t>>("indices", {0, 0});
+  ctx.create<numsim::materials::tensor_component_stepper<2, policy>>(p);
+
+  p.clear();
+  p.insert<std::string>("name", "hardening");
+  p.insert<std::string>("source", "j2");
+  p.insert<T>("K", hardening);
+  ctx.create<numsim::materials::linear_isotropic_hardening<policy>>(p);
+
+  p.clear();
+  p.insert<std::string>("name", "j2");
+  p.insert<std::string>("hardening_source", "hardening");
+  p.insert<std::string>("strain_source", "stepper");
+  p.insert<T>("K", T{166.67});
+  p.insert<T>("G", T{76.92});
+  p.insert<T>("sigma_0", T{50.0});
+  p.insert<std::string>("tableau", tableau);
+  ctx.create<numsim::materials::j2_rk_plasticity<policy>>(p);
+  ctx.finalize();
+
+  for (int i = 0; i < 20; ++i) {
+    ctx.update();
+    ctx.commit();
+  }
+  return ctx.get<T>("j2", "equivalent_plastic_strain");
+}
+
+/// An explicit stage must solve the same scalar equation as an implicit one.
+///
+/// For linear hardening the yield residual is linear in dlambda,
+/// r = F_trial - (3G + H')*dlambda, so the exact root is F_trial/(3G + H') and
+/// forward Euler, implicit Euler and the monolithic return map must all land on
+/// it -- IDENTICALLY, not merely close. That makes this an exact test rather
+/// than a tolerance test.
+///
+/// The explicit stage used to pass the raw G into jacobian(), which takes
+/// G_eff = 3G, and so solved F/(G + H'). Hardening masks it: at H' = 1000
+/// against 3G = 231 the two denominators differ by 14% and the incremental
+/// process recovers most of that, which is why the error looked like 0.5%. The
+/// low-hardening case is where it shows.
+TEST(J2RKStage, ExplicitAndImplicitStagesSolveTheSameEquation) {
+  for (const T hardening : {T{1000.0}, T{100.0}, T{10.0}}) {
+    const T explicit_alpha = rk_alpha("forward_euler", hardening);
+    const T implicit_alpha = rk_alpha("implicit_euler", hardening);
+    ASSERT_GT(implicit_alpha, T{1e-6}) << "the path must yield";
+    EXPECT_NEAR(explicit_alpha, implicit_alpha, T{1e-12} * implicit_alpha)
+        << "forward vs implicit Euler disagree at H' = " << hardening << ": "
+        << explicit_alpha << " vs " << implicit_alpha;
+  }
 }
 
 TEST_F(RKPlasticityTest, PlasticStrainAccumulates) {
@@ -392,4 +591,52 @@ TEST(J2RKScheme, AcceptsEveryDirkAndExplicitScheme) {
         << scheme;
   }
 }
+
+/// The elastic tangent must agree with the closed forms the same materials use
+/// as shortcuts, at every dimension -- not only at Dim = 3.
+///
+/// do_smooth_return computes C:N as 2G*dev(N) + K*tr(N)*I instead of a rank-4
+/// contraction, and drucker_prager_yield_function::apex_tangent returns
+/// K*H'/(K*eta*beta + H')*I⊗I. Both assume C = K*I⊗I + 2G*IIdev. All three
+/// plasticity materials built 3K*IIvol instead, which is the same thing ONLY
+/// at Dim = 3, since IIvol = I⊗I/Dim. At Dim = 2 the old form was off by 30%
+/// against the shortcut in the same class.
+///
+/// material_policy_2d is not registered in the factory and no graph
+/// instantiates it, so this was latent -- but it sat in exactly the code the
+/// isotropy argument in docs/plasticity.md rests on.
+template <std::size_t Dim>
+void expect_tangent_matches_shortcut(const char* label) {
+  using tensor2 = tmech::tensor<T, Dim, 2>;
+  constexpr T K{166.67}, G{76.92};
+  const auto C = numsim::materials::plasticity_detail::
+      make_isotropic_tangent<T, Dim>(K, G);
+  const auto I = tmech::eye<T, Dim, 2>();
+
+  tensor2 x;
+  x.fill(T{0});
+  x(0, 0) = T{0.03};
+  x(1, 1) = T{-0.01};
+  x(0, 1) = T{0.02};
+  x(1, 0) = T{0.02};
+  if constexpr (Dim == 3) x(2, 2) = T{0.005};
+
+  const tensor2 shortcut{T{2} * G * tmech::dev(x) + K * tmech::trace(x) * I};
+  const tensor2 contracted{tmech::dcontract(C, x)};
+  const tensor2 diff{contracted - shortcut};
+  const T err = std::sqrt(tmech::dcontract(diff, diff));
+  const T scale = std::sqrt(tmech::dcontract(shortcut, shortcut));
+  EXPECT_LT(err, T{1e-12} * scale)
+      << label << ": C:x disagrees with 2G dev(x) + K tr(x) I by " << err
+      << " against a scale of " << scale;
+}
+
+TEST(ElasticTangent, MatchesTheShortcutIn3D) {
+  expect_tangent_matches_shortcut<3>("Dim=3");
+}
+
+TEST(ElasticTangent, MatchesTheShortcutIn2D) {
+  expect_tangent_matches_shortcut<2>("Dim=2");
+}
+
 }  // namespace

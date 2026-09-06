@@ -235,26 +235,110 @@ T run_curing(int N, const std::string& tableau, T step_size = T{10}) {
   return ctx.get<T>("integrator", "state");
 }
 
-TEST(CuringRK, ExplicitRK4ConvergesToFullCure) {
-  const std::string tab = "rk4";
-  auto z = run_curing<RK>(50, tab);
-  std::println("  RK4 curing (500s): z = {:.6f}", z);
-  EXPECT_GT(z, 0.90) << "RK4 should approach full cure";
+/// A converged reference from RK4 at a hundredth of the coarsest step under
+/// test, sampled at t = 200 s.
+///
+/// The sampling time is the point of these tests. They used to run to t = 500 s
+/// and assert only z > 0.90, which the autocatalytic ODE makes very nearly
+/// free: the reaction is self-accelerating past its ignition threshold and then
+/// self-terminating at z = 1, so by 500 s every trajectory has been pulled to
+/// the same attractor. Halving the whole reaction rate still finished at 0.97
+/// and passed all three. Tightening the bound does not help either -- a
+/// reference measured at 500 s is just as insensitive, and every scheme lands
+/// within 4e-5 of it whatever it does on the way.
+///
+/// At t = 200 s the cure is mid-ignition and still transient, where the
+/// trajectories actually differ: full rate reaches z = 0.90, half rate only
+/// 0.28. That is the observable worth bounding.
+constexpr int reference_time = 200;
+
+T converged_cure() {
+  static const T reference =
+      run_curing<RK>(reference_time * 10, "rk4", T{0.1});
+  return reference;
 }
 
-TEST(CuringRK, DIRKImplicitMidpointConverges) {
-  const std::string tab = "implicit_midpoint";
+TEST(CuringRK, ExplicitRK4MatchesTheRefinedSolution) {
+  const auto z = run_curing<RK>(reference_time / 10, "rk4", T{10});
+  std::println("  RK4 (t=200, h=10): z = {:.8f}  ref = {:.8f}",
+               z, converged_cure());
+  EXPECT_NEAR(z, converged_cure(), 1.5e-2);   // measured 6.7e-3
+}
+
+TEST(CuringRK, DIRKImplicitMidpointMatchesTheRefinedSolution) {
   // Smaller step for implicit — stiff initial phase needs h < 1/df_dy
-  auto z = run_curing<RK>(500, tab, T{1});  // h=1, 500 steps
-  std::println("  Implicit midpoint curing (500s, h=1): z = {:.6f}", z);
-  EXPECT_GT(z, 0.90) << "Implicit midpoint should approach full cure";
+  const auto z = run_curing<RK>(reference_time, "implicit_midpoint", T{1});
+  std::println("  Implicit midpoint (t=200, h=1): z = {:.8f}  ref = {:.8f}",
+               z, converged_cure());
+  EXPECT_NEAR(z, converged_cure(), 2e-3);     // measured 8.5e-4
 }
 
-TEST(CuringRK, FullyImplicitGaussLegendreConverges) {
-  const std::string tab = "gauss_legendre_4";
-  auto z = run_curing<RK>(500, tab, T{1});  // h=1, 500 steps
-  std::println("  Gauss-Legendre curing (500s, h=1): z = {:.6f}", z);
-  EXPECT_GT(z, 0.90) << "Gauss-Legendre should approach full cure";
+TEST(CuringRK, FullyImplicitGaussLegendreMatchesTheRefinedSolution) {
+  const auto z = run_curing<RK>(reference_time, "gauss_legendre_4", T{1});
+  std::println("  Gauss-Legendre (t=200, h=1): z = {:.8f}  ref = {:.8f}",
+               z, converged_cure());
+  EXPECT_NEAR(z, converged_cure(), 5e-5);     // measured 9.1e-6
+}
+
+/// Reaching full cure is a separate property from integrating accurately, and
+/// it is the one the old thresholds were actually testing. Kept, under a name
+/// that says so.
+TEST(CuringRK, ReachesFullCureByFiveHundredSeconds) {
+  EXPECT_GT(run_curing<RK>(50, "rk4", T{10}), 0.99);
+}
+
+
+/// The rate law itself, which no integrator test can pin.
+///
+/// CuringRK.* compare a scheme against a refined solution of the SAME ODE, so
+/// they are correctly blind to the ODE being wrong: halve the reaction rate and
+/// the reference halves with it. That separation is right -- those tests own
+/// integrator accuracy -- but it left k(T) z^m (1-z)^n itself unchecked by
+/// anything, and the old z > 0.90 bound could not see a 2x rate error either.
+///
+/// The state source here is a scalar_stepper rather than an integrator, so z is
+/// prescribed instead of being solved for.
+TEST(CuringRate, MatchesTheArrheniusAutocatalyticLaw) {
+  constexpr T A{1e6}, E{50000}, n{1.2}, m{0.8}, R{8.31446261815324}, celsius{80};
+  constexpr T dz{0.05};
+
+  ctx_type ctx;
+  param_type p;
+  p.insert<std::string>("name", "temperature");
+  p.insert<T>("increment", T{0});
+  ctx.create<numsim::materials::scalar_stepper<policy>>(p);
+
+  p.clear();
+  p.insert<std::string>("name", "state_source");
+  p.insert<T>("increment", dz);
+  ctx.create<numsim::materials::scalar_stepper<policy>>(p);
+
+  p.clear();
+  p.insert<std::string>("name", "curing_rate");
+  p.insert<std::string>("integrator_source", "state_source");
+  p.insert<T>("A", A);
+  p.insert<T>("E", E);
+  p.insert<T>("n", n);
+  p.insert<T>("m", m);
+  ctx.create<numsim::materials::curing_rate<policy>>(p);
+  ctx.finalize();
+
+  auto* temp = dynamic_cast<numsim_core::history_property<T,
+      numsim::materials::property_traits>*>(
+          ctx.find_property("temperature", "state"));
+  ASSERT_NE(temp, nullptr);
+  temp->old_value() = celsius;
+  temp->new_value() = celsius;
+
+  const T k = A * std::exp(-E / (R * (T{273.15} + celsius)));
+  for (int i = 1; i <= 15; ++i) {
+    ctx.update();
+    const T z = dz * i;
+    const T expected = k * std::pow(z, m) * std::pow(T{1} - z, n);
+    EXPECT_NEAR(ctx.get<T>("curing_rate", "rate"), expected, 1e-12 * expected)
+        << "rate law disagrees at z = " << z;
+    ctx.commit();
+  }
 }
 
 } // namespace

@@ -17,6 +17,26 @@ tmech::tensor<T, Dim, 4> make_IIdev() {
   return tmech::tensor<T, Dim, 4>{IIsym - IIvol};
 }
 
+/// Isotropic elastic tangent C = K*I⊗I + 2G*IIdev.
+///
+/// The bulk term is K*I⊗I, NOT 3K*IIvol. Those are equal only at Dim = 3,
+/// because IIvol = I⊗I/Dim. All three plasticity materials wrote the 3K*IIvol
+/// form while their fast paths -- do_smooth_return's 2G*dev(N) + K*tr(N)*I and
+/// drucker_prager_yield_function::apex_tangent's K*H'/(...)*I⊗I -- assumed the
+/// K*I⊗I one, so at Dim = 2 a material disagreed with itself by 30% on
+/// C:x against its own shortcut. Building it here keeps the two consistent by
+/// construction, at every dimension.
+///
+/// linear_elasticity keeps its own 3K*IIvol spelling: it is a separate working
+/// material with no such shortcut, and plasticity no longer sources a tangent
+/// from it.
+template<typename T, std::size_t Dim>
+tmech::tensor<T, Dim, 4> make_isotropic_tangent(T K, T G) {
+  const auto I = tmech::eye<T, Dim, 2>();
+  return tmech::tensor<T, Dim, 4>{K * tmech::otimes(I, I) +
+                                  T{2} * G * make_IIdev<T, Dim>()};
+}
+
 /// Stress state evaluation at a given (ε_p, κ) state.
 template<typename T, std::size_t Dim>
 struct state_eval {
@@ -144,14 +164,30 @@ tmech::tensor<T, Dim, 4> compute_tangent(
 
   // C_e : (dN/dsig) : C_e  ==  4G^2 (dN/dsig).
   //
-  // Every flow normal here is deviatoric plus a constant volumetric part, so
-  // dN/dsig is deviatoric in BOTH index pairs. For isotropic C_e that makes
-  // C_e : X = 2G X and X : C_e = 2G X, and the two rank-4 x rank-4
-  // contractions collapse to a scalar multiply. Verified to 2.5e-16 against
-  // the explicit form for both the J2 and Drucker-Prager derivatives.
+  // C_e : X = 2G X needs X TRACELESS and MINOR-SYMMETRIC in the first index
+  // pair, and the mirror conditions for X : C_e -- four conditions, not two.
+  // With C_e = 3K IIvol + 2G IIdev, the volumetric part drops only if X is
+  // traceless, and IIdev : X returns X only if IIsym : X does, which is
+  // symmetry. A traceless X that is SKEW in the first pair gives 100% error.
   //
-  // Isotropy is not newly assumed: effective_modulus() above already requires
-  // it (3G for J2, G + K*eta*beta for DP).
+  // Both derivatives here are IIdev minus v (x) v with v deviatoric and
+  // symmetric, so all four hold structurally rather than incidentally.
+  // Verified to 2.5e-16 against the explicit form for J2 and Drucker-Prager.
+  //
+  // The operative restriction on a FUTURE yield function is narrower than
+  // "deviatoric": the volumetric part of N must be CONSTANT with respect to
+  // sigma. A pressure-dependent dilatancy beta(p) = beta0 + c*p adds
+  // (c/9) I (x) I to dN/dsig, which is traceless in neither pair. The error
+  // scales with K/G, not with c relative to beta -- c = 1e-3 measures 35%. A
+  // cap model, a Matsuoka-Nakai or Lade surface, or any smoothed cone tip has
+  // the same property. Nothing here guards it.
+  //
+  // Isotropy is not NEWLY assumed by this collapse in the sense that
+  // effective_modulus() already required it (3G for J2, G + K*eta*beta for DP),
+  // so an anisotropic caller was already getting a wrong residual. But the A
+  // term below did contract the actual C_e before the collapse, so this is a
+  // fourth site adopting the restriction the other three already had, not a
+  // free simplification.
   const tensor4 C_dN_C{T{4} * G * G * dN_dsig};
   const tensor4 A{C_e - total_dlambda * C_dN_C};
 

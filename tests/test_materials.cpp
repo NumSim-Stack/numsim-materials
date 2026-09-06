@@ -1,10 +1,12 @@
 #include <gtest/gtest.h>
+#include <print>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/materials/tensor_component_stepper.h"
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/materials/scalar_stepper.h"
 #include "numsim-materials/solvers/local_newton.h"
+#include "numsim-materials/solvers/newton_scalar.h"
 #include "numsim-materials/materials/j2_plasticity.h"
 #include "numsim-materials/materials/linear_isotropic_hardening.h"
 #include "numsim-materials/materials/tensor_component_stepper.h"
@@ -126,7 +128,7 @@ TEST(CuringSimulation, ConvergesToFullCure) {
   // Time stepper
   p.clear();
   p.insert<std::string>("name", "time");
-  p.insert<T>("increment", T{10});
+  p.insert<T>("increment", T{0.5});
   ctx.create<numsim::materials::scalar_stepper<policy>>(p);
 
   // Backward Euler solver
@@ -149,17 +151,46 @@ TEST(CuringSimulation, ConvergesToFullCure) {
 
   ctx.finalize();
 
-  // Initialize temperature to 80°C (353 K)
-  ctx.get_mutable<T>("temperature", "state") = T{353};
+  // autocatalytic_reaction adds 273.15 to this input, so it is degrees
+  // CELSIUS. This used to be set to 353 under a comment reading "80°C (353 K)",
+  // which ran the reaction at 626 K instead of 353 K: k jumps from 0.040 to 67
+  // per second, the first Newton step diverges, and the cure is complete on
+  // step 0. "reaches 0.99 after 20 steps" was then true no matter what the
+  // integration did.
+  ctx.get_mutable<T>("temperature", "state") = T{80};
 
-  T curing = 0;
-  for (int i = 0; i < 20; ++i) {
+  // z = 0 is a fixed point of z^m (1-z)^n, and the jacobian carries
+  // pow(z, m-1) = pow(0, -0.2) = inf there. test_rk_integrator's run_curing
+  // starts from 1e-8 for exactly this reason; this test started from 0.
+  auto* state = dynamic_cast<numsim_core::history_property<T,
+      numsim::materials::property_traits>*>(
+          ctx.find_property("curing", "current_state"));
+  ASSERT_NE(state, nullptr);
+  state->old_value() = T{1e-8};
+  state->new_value() = T{1e-8};
+
+  auto* solver = dynamic_cast<numsim::materials::backward_euler<policy>*>(
+      ctx.find("solver"));
+  ASSERT_NE(solver, nullptr);
+
+  T curing = 0, at_200s = 0;
+  for (int i = 1; i <= 1000; ++i) {         // h = 0.5 s, so 500 s in total
     ctx.update();
+    EXPECT_TRUE(solver->converged())
+        << "backward_euler did not converge on step " << i
+        << "; the accessor exists to expose exactly this and nothing asked";
     curing = ctx.get<T>("curing", "current_state");
+    if (i == 400) at_200s = curing;
     ctx.commit();
   }
 
-  EXPECT_GT(curing, 0.99) << "Curing should approach 1.0 after 20 steps at 80°C";
+  // 0.9211 is CuringRK's refined RK4 reference for the same reaction at
+  // t = 200 s, computed in test_rk_integrator from a different integrator and
+  // a different material. Backward Euler at h = 0.5 lands at 0.9262.
+  EXPECT_NEAR(at_200s, 0.9211, 0.01)
+      << "the 200 s state does not match the reaction it is meant to be "
+         "integrating (got " << at_200s << ")";
+  EXPECT_GT(curing, 0.99) << "curing should approach 1.0 after 500 s at 80 C";
 }
 
 } // namespace
@@ -206,6 +237,62 @@ TEST(BackwardEulerSetup, RejectsAFunctionWithoutResidualOrJacobian) {
 /// local_newton is the material-driven one: no function, no graph inputs, and
 /// its result carries convergence so a caller cannot read the number without
 /// the flag being at hand.
+/// newton_scalar had no direct test at all -- it was reached only through
+/// local_newton, whose cases all converge inside the budget or stall on a zero
+/// jacobian first. Its budget-exhaustion path, and the deliberate re-check on
+/// that path, ran in no test.
+TEST(NewtonScalar, ConvergesAndReportsTheIterationCount) {
+  const numsim::materials::newton_scalar<T> solver{T{1e-12}, 50};
+  // x^2 - 4 = 0 from x0 = 3
+  const auto r = solver.solve(
+      [](T x) { return std::pair<T, T>{x * x - T{4}, T{2} * x}; }, T{3});
+  EXPECT_TRUE(r.converged);
+  EXPECT_NEAR(r.x, T{2}, 1e-10);
+  EXPECT_GT(r.iterations, 1);
+  EXPECT_LE(r.iterations, 50);
+}
+
+/// The comment on the post-loop re-check says "the last step may still have
+/// landed on the root". This is that case: one iteration is budgeted, the
+/// linear problem is solved exactly by it, and the loop exits before it can
+/// observe the zero residual. Without the re-check this reports failure on a
+/// correct answer.
+TEST(NewtonScalar, ABudgetExhaustedOnTheRootStillReportsConvergence) {
+  const numsim::materials::newton_scalar<T> solver{T{1e-12}, 1};
+  const auto r = solver.solve(
+      [](T x) { return std::pair<T, T>{x - T{1}, T{1}}; }, T{0});
+  EXPECT_TRUE(r.converged) << "the single budgeted step lands exactly on the "
+                              "root; the re-check exists to notice";
+  EXPECT_NEAR(r.x, T{1}, 1e-15);
+  EXPECT_EQ(r.iterations, 1);
+}
+
+/// And the other side of the same branch: the budget runs out short of the
+/// root, so the re-check must report failure rather than rubber-stamping the
+/// last iterate.
+TEST(NewtonScalar, ABudgetExhaustedShortOfTheRootReportsFailure) {
+  const numsim::materials::newton_scalar<T> solver{T{1e-12}, 2};
+  const auto r = solver.solve(
+      [](T x) {
+        return std::pair<T, T>{x * x * x - T{2}, T{3} * x * x};
+      },
+      T{100});
+  EXPECT_FALSE(r.converged);
+  EXPECT_EQ(r.iterations, 2);
+  EXPECT_GT(r.x, T{1});   // still far above the root at 2^(1/3)
+}
+
+/// A vanishing jacobian is a stall and must not be reported as convergence,
+/// nor divided by.
+TEST(NewtonScalar, AVanishingJacobianStopsWithoutConverging) {
+  const numsim::materials::newton_scalar<T> solver{T{1e-12}, 50};
+  const auto r = solver.solve(
+      [](T x) { return std::pair<T, T>{x * x + T{1}, T{0}}; }, T{1});
+  EXPECT_FALSE(r.converged);
+  EXPECT_EQ(r.iterations, 1);
+  EXPECT_TRUE(std::isfinite(r.x));
+}
+
 TEST(LocalNewtonSolver, SolvesAndReportsConvergence) {
   using policy = nm_be::material_policy_default;
   using T2 = policy::value_type;
@@ -275,7 +362,12 @@ TEST(WireMaterials, WrongTypeIsNotReportedAsMissing) {
     FAIL() << "wiring a wrongly-typed solver must fail";
   } catch (const std::runtime_error& e) {
     const std::string msg = e.what();
-    EXPECT_NE(msg.find("wrong type"), std::string::npos) << msg;
+    // The contract is that a wrong type is DISTINGUISHABLE from a missing
+    // material and that the offending name is reported -- not the exact
+    // phrasing, which is copy and may be reworded. "type" survives
+    // "wrong type", "incompatible type" and "not the required type"; the
+    // earlier exact match on "wrong type" broke on all but the first.
+    EXPECT_NE(msg.find("type"), std::string::npos) << msg;
     EXPECT_NE(msg.find("'solver'"), std::string::npos) << msg;
     EXPECT_EQ(msg.find("do not exist"), std::string::npos)
         << "the material exists; saying otherwise sends the user hunting for "
@@ -284,6 +376,63 @@ TEST(WireMaterials, WrongTypeIsNotReportedAsMissing) {
 }
 
 /// The genuinely-absent case still reports absence.
+/// A material whose construction throws must leave nothing behind.
+///
+/// material_base used to register itself in the material handler BEFORE
+/// validating its parameters, and derived constructors can throw after that in
+/// any case -- a missing required parameter, an unknown tableau name, any deck
+/// typo. The handler stores std::ref and query_map has no erase, so the failed
+/// object stayed reachable under a live name: wire_materials would find it and
+/// dynamic_cast storage that had already been freed. Registration now happens
+/// in object_store::create, after the constructor has returned.
+///
+/// Here "solver" fails to construct (backward_euler requires "function") and
+/// is then referenced. The wiring must report it as absent. Before the fix it
+/// resolved to the destroyed object and was reported as merely the wrong type.
+TEST(WireMaterials, AFailedConstructionLeavesNoMaterialBehind) {
+  using policy = nm_w::material_policy_default;
+  using T2 = policy::value_type;
+  nm_w::material_context<policy> ctx;
+  policy::ParameterHandler p;
+
+  p.insert<std::string>("name", "stepper");
+  p.insert<T2>("increment", T2{0.01});
+  p.insert<std::vector<std::size_t>>("indices", {0, 0});
+  ctx.create<nm_w::tensor_component_stepper<2, policy>>(p);
+
+  p.clear();
+  p.insert<std::string>("name", "hardening");
+  p.insert<std::string>("source", "j2");
+  p.insert<T2>("K", T2{1000.0});
+  ctx.create<nm_w::linear_isotropic_hardening<policy>>(p);
+
+  p.clear();
+  p.insert<std::string>("name", "solver");
+  EXPECT_ANY_THROW(ctx.create<nm_w::backward_euler<policy>>(p))
+      << "backward_euler must reject a missing \"function\"";
+
+  p.clear();
+  p.insert<std::string>("name", "j2");
+  p.insert<std::string>("hardening_source", "hardening");
+  p.insert<std::string>("strain_source", "stepper");
+  p.insert<std::string>("solver_source", "solver");
+  p.insert<T2>("K", T2{166.67});
+  p.insert<T2>("G", T2{76.92});
+  p.insert<T2>("sigma_0", T2{50.0});
+  ctx.create<nm_w::j2_plasticity<policy>>(p);
+
+  try {
+    ctx.finalize();
+    FAIL() << "a reference to a material that failed to construct must fail "
+              "the wiring";
+  } catch (const std::runtime_error& e) {
+    const std::string msg = e.what();
+    EXPECT_NE(msg.find("do not exist"), std::string::npos) << msg;
+    EXPECT_EQ(msg.find("wrong type"), std::string::npos)
+        << "the failed material is still registered: " << msg;
+  }
+}
+
 TEST(WireMaterials, MissingIsStillReportedAsMissing) {
   using policy = nm_w::material_policy_default;
   using T2 = policy::value_type;

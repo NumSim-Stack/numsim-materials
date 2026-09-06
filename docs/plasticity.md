@@ -103,8 +103,24 @@ Every closed form below rests on `C_e` being isotropic:
 ```
 C_e : N        = 2G dev(N) + K tr(N) I
 N : C_e : N    = 3G                        (J2, N deviatoric)
-C_e : X : C_e  = 4G² X                     (X deviatoric in both index pairs)
+C_e : X : C_e  = 4G² X                     (X traceless AND minor-symmetric
+                                            in both index pairs)
 ```
+
+The third line's precondition is four conditions, not two. `C_e : X = 2G X`
+needs `X` traceless in the first index pair (so the `3K IIvol` term drops) *and*
+minor-symmetric in it (so `IIdev : X` returns `X`), and the mirror pair for
+`X : C_e`. A traceless `X` that is skew in the first pair gives **100 % error**.
+Both `dN/dσ` here are `IIdev` minus `v ⊗ v` with `v` deviatoric and symmetric,
+so all four hold structurally.
+
+Stated as a restriction on a *future* yield function it is narrower than
+"deviatoric": **the volumetric part of `N` must be constant with respect to `σ`.**
+A pressure-dependent dilatancy `β(p) = β₀ + c·p` adds `(c/9) I ⊗ I` to `dN/dσ`,
+which is traceless in neither pair; `c = 1e-3` measures a **35 %** tangent error,
+and the error scales with `K/G` rather than with `c` relative to `β`. Cap
+models, Matsuoka–Nakai and Lade surfaces, and any smoothed cone tip share the
+property. Nothing in the code guards it.
 
 This is why the plasticity materials **build their own** `C_e` from `K` and `G`
 rather than reading a rank-4 tangent from an elastic material. Accepting an
@@ -209,6 +225,21 @@ pressure pinned at `(k + H)/η`, volumetric plastic flow from `β`. Its tangent 
 a **branch** tangent — valid only for perturbations staying on the apex — because
 the return map is non-smooth there.
 
+The criterion is applied to the **converged** `Δλ`, after the smooth Newton has
+run. It used to be applied to the zero-hardening bound `Δλ_max = F/G_eff`, which
+is an *upper* bound on `Δλ`: "the bound triggers apex" does not imply "the true
+`Δλ` triggers apex", and the branch fired on a strict superset. The two regions
+coincide only at `H' = 0`; with `H' = 500` the pre-check fired for `q_trial` up
+to 923 where the true threshold was 1.5, and with `β = 0` for every
+pressure-overshooting state. There is no correct cheap pre-check — a sound one
+needs a *lower* bound on `Δλ`, which needs an upper bound on `H'` — so the
+smooth Newton now always runs.
+
+The apex tangent is rank 1 in every case, not only for `H' = 0`: it is a
+multiple of `I ⊗ I`, and the apex update sets `dev(ε_p) = dev(ε)` so every
+deviatoric mode has zero stiffness. An element with all Gauss points at the apex
+has a singular stiffness whatever the hardening.
+
 ---
 
 ## 5. Verification
@@ -220,7 +251,7 @@ through the graph. Coverage:
 |---|---|
 | uniaxial | the historical case |
 | pure shear, biaxial, triaxial, mixed dev+shear | exercise genuine non-associativity |
-| hydrostatic | the **only** path that reaches the apex branch |
+| hydrostatic | the only path in this suite that reaches the apex branch |
 
 All agree to ~1e-10, the apex to 8e-9.
 
@@ -231,6 +262,13 @@ Two coverage lessons worth keeping:
   `APEX_HITS=0` across every binary — because every path was uniaxial and the
   apex sits on the hydrostatic axis. It was unreachable by construction, not by
   oversight.
+- **A tangent check cannot see a wrong branch.** On a state misclassified into
+  the apex branch, the analytical tangent and the central difference both stay
+  inside that branch, so they agree perfectly while the stress is wrong — and
+  the wrong stress still satisfies `F = 0` to 4e-14, because it is *on* the
+  yield surface, just the wrong projection onto it. `tangent_checker` validates
+  the derivative of whatever the code does. The branch choice needs its own
+  test, which is now `DPBranch.*`.
 - **A tolerance set by the worst step licenses errors in all the others.**
   `J2TangentTest` bounded a whole run at `0.1` because the elastic→plastic
   transition step is genuinely inexact. A 0.5 % error injected into the tangent
@@ -335,11 +373,13 @@ It was rejected on what it would cost to express:
   `yielding`/`residual`/`jacobian`, solver runs, read `delta`, update. Two or
   three properties where there is one, and graph dispatch measures ~30 ns even
   for a trivial graph.
-- **A flag cannot carry Drucker-Prager's branch.** The apex fallback fires when
-  the *smooth solve fails*, which is not known until after it runs. Expressible
-  only as trial → smooth solver → `smooth_converged` → apex solver gated on
-  that flag → update: two solver instances, three flags, four phases, replacing
-  `if (!smooth.converged) do_apex_return(...)`.
+- **A flag cannot carry Drucker-Prager's branch.** The apex branch is chosen on
+  the *converged* multiplier — either the smooth solve failed, or it succeeded
+  and its `Δλ` overshoots the tip — neither of which is known until it has run.
+  Expressible only as trial → smooth solver → `needs_apex` → apex solver gated
+  on that flag → update: two solver instances, three flags, four phases,
+  replacing one `if`. This got stronger, not weaker, when the branch stopped
+  being decided by a pre-check (§4).
 - **The elastic saving is partial** anyway — the solver's callback still fires
   and returns early on the flag.
 
@@ -356,4 +396,19 @@ mutable state and the ordering becomes real and unenforced.
 
 - **The apex tangent is a branch tangent.** Verified consistent *on* the branch;
   a perturbation that leaves the apex back onto the smooth cone is not covered,
-  and cannot be by a central difference.
+  and cannot be by a central difference. It is also rank 1 by construction, so
+  an element fully at the apex is singular regardless of hardening.
+- **Unstable softening is rejected, not resolved.** `Δλ = F/(G_eff + H')` turns
+  negative once `H' ≤ −G_eff`, where the yield residual has positive slope and
+  the local problem has no admissible solution. Both return maps now throw
+  there; they used to clamp `Δλ` to zero, which returned the elastic stress —
+  measured on a uniaxial path with `H' = −300` against `3G = 230.8`, the
+  equivalent stress climbed past `σ₀ = 50` to 76.9 with `α` identically zero.
+  Resolving that branch needs viscous or gradient regularisation, which is out
+  of scope for a local return map. Moderate softening, `−G_eff < H' < 0`, works.
+  The apex criterion also inverts under softening, giving a *missed* apex with
+  `q_new < 0`; that is still unguarded.
+- **The yield-function template is unconstrained.** `compute_tangent`'s 4G²
+  collapse holds for the two yield functions in the tree and would be wrong for
+  a stress-dependent volumetric flow (§3). A `static_assert` cannot express it;
+  nothing checks it.
