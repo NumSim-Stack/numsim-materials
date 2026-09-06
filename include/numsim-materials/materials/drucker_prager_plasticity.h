@@ -3,6 +3,7 @@
 
 #include <cmath>
 #include <concepts>
+#include <algorithm>
 #include <stdexcept>
 #include <utility>
 #include <tmech/tmech.h>
@@ -10,7 +11,7 @@
 #include "numsim-materials/core/material_ref.h"
 #include "numsim-materials/materials/drucker_prager_yield_function.h"
 #include "numsim-materials/materials/plasticity_utils.h"
-#include "numsim-materials/solvers/backward_euler.h"
+#include "numsim-materials/solvers/local_newton.h"
 
 namespace numsim::materials {
 
@@ -29,7 +30,7 @@ public:
   using tensor2 = tmech::tensor<value_type, Dim, 2>;
   using tensor4 = tmech::tensor<value_type, Dim, 4>;
   using yield_fn = drucker_prager_yield_function<value_type, base::Dim>;
-  using solver_type = backward_euler<Traits>;
+  using solver_type = local_newton<Traits>;
 
   template <typename... Args>
   explicit drucker_prager_plasticity(Args&&... args)
@@ -106,18 +107,20 @@ public:
       return;
     }
 
-    const auto dlambda = solve_smooth_newton(ts.eval.modified_sig_eq, kappa_n);
+    const auto smooth = solve_smooth_newton(ts.eval.modified_sig_eq, kappa_n);
 
-    // If smooth Newton fails and apex is available, try apex as fallback.
-    if (!m_solver.get().converged()) {
-      do_apex_return(ts.eval.sig, C_e, kappa_n);
-      if (!m_solver.get().converged())
+    // If the smooth return fails, the apex is the remaining branch.
+    if (!smooth.converged) {
+      if (!do_apex_return(ts.eval.sig, C_e, kappa_n))
         throw std::runtime_error(
             "drucker_prager_plasticity: both smooth and apex Newton failed");
       return;
     }
 
-    do_smooth_return(ts.eval, C_e, kappa_n, dlambda);
+    // dlambda >= 0 is a statement about the plastic multiplier, enforced here
+    // rather than inside a general scalar solver (see #13).
+    do_smooth_return(ts.eval, C_e, kappa_n,
+                     std::max(smooth.x, value_type{0}));
   }
 
 private:
@@ -131,8 +134,12 @@ private:
 
   /// Scalar Newton solve: r(Δλ) = phi - G_eff·Δλ - Y0 - H(κ_n + Δλ) = 0.
   /// Used for both the smooth and apex returns with different (phi, G_eff).
-  value_type solve_scalar_return(value_type phi_trial, value_type G_eff,
-                                  value_type kappa_n) {
+  /// Returns the solver's result, not a bare number: convergence travels WITH
+  /// the value instead of being queried from the solver afterwards, where it
+  /// went stale between the smooth and apex solves.
+  typename solver_type::result solve_scalar_return(value_type phi_trial,
+                                                   value_type G_eff,
+                                                   value_type kappa_n) {
     auto eval = [&](value_type dl) -> std::pair<value_type, value_type> {
       m_kappa.new_value() = kappa_n + dl;
       m_H.update_source();
@@ -143,7 +150,8 @@ private:
   }
 
   /// Smooth-cone return Newton: phi = modified_sig_eq, G_eff from yield function.
-  value_type solve_smooth_newton(value_type phi_trial, value_type kappa_n) {
+  typename solver_type::result solve_smooth_newton(value_type phi_trial,
+                                                   value_type kappa_n) {
     return solve_scalar_return(phi_trial, m_yf.effective_modulus(m_G), kappa_n);
   }
 
@@ -172,11 +180,14 @@ private:
 
   /// Apex return: deviatoric stress vanishes, only volumetric Newton.
   /// dev(ε_p) = dev(ε), tr(ε_p) += β·Δκ. Tangent is rank-1 volumetric.
-  void do_apex_return(const tensor2& sig_trial, const tensor4& C_e,
+  /// @return whether the apex Newton converged.
+  bool do_apex_return(const tensor2& sig_trial, const tensor4& C_e,
                       value_type kappa_n) {
     const auto phi_apex = m_yf.apex_modified_sig_eq(sig_trial);
     const auto G_eff_apex = m_yf.apex_effective_modulus();
-    const auto dkappa = solve_scalar_return(phi_apex, G_eff_apex, kappa_n);
+    const auto sol = solve_scalar_return(phi_apex, G_eff_apex, kappa_n);
+    if (!sol.converged) return false;
+    const auto dkappa = std::max(sol.x, value_type{0});
 
     m_eps_p.new_value() = m_yf.apex_plastic_strain(
         m_strain.get(), m_eps_p.old_value(), dkappa);
@@ -187,6 +198,7 @@ private:
     // remain on the active apex branch (q stays at 0).
     m_H.update_source();
     m_tangent = m_yf.apex_tangent(m_dH.get());
+    return true;
   }
 
 private:

@@ -1,0 +1,359 @@
+# Plasticity materials
+
+How the plasticity models are put together after the split of
+`small_strain_plasticity`, what each one requires, and which assumptions are
+load-bearing.
+
+Current as of `refactor/scalar-newton-split` (PRs #39 and #40).
+
+---
+
+## 1. The layout
+
+```
+                    ┌──────────────────────┐
+                    │   newton_scalar<T>   │   plain algorithm
+                    │  no graph, no props  │   returns {x, converged, iterations}
+                    └──────────┬───────────┘
+                     used by   │
+              ┌────────────────┴────────────────┐
+              │                                 │
+   ┌──────────▼──────────┐          ┌───────────▼───────────┐
+   │   backward_euler    │          │     local_newton      │
+   │  MATERIAL, graph-   │          │  MATERIAL, driven by  │
+   │  driven             │          │  another material     │
+   │  "function" REQUIRED│          │  exposes solve(eval)  │
+   └──────────┬──────────┘          └───────────┬───────────┘
+              │                                 │  material_ref
+   ┌──────────▼──────────┐          ┌───────────▼───────────┐
+   │ autocatalytic_      │          │  j2_plasticity        │
+   │ reaction, curing    │          │  drucker_prager_      │
+   │                     │          │  plasticity           │
+   └─────────────────────┘          └───────────────────────┘
+
+   j2_rk_plasticity iterates its own Butcher tableau and uses neither.
+```
+
+Three plasticity materials, none of them templated on a yield function any
+more:
+
+| material | integrator | yield surface | flow |
+|---|---|---|---|
+| `j2_plasticity` | backward Euler (radial return) | von Mises cylinder | associative |
+| `drucker_prager_plasticity` | backward Euler + apex branch | DP cone | **non**-associative (β ≠ η) |
+| `j2_rk_plasticity` | Runge–Kutta, any Butcher tableau | von Mises cylinder | associative |
+
+---
+
+## 2. Interfaces
+
+### `j2_plasticity`
+
+| parameter | meaning |
+|---|---|
+| `hardening_source` | material publishing `hardening_stress` and `hardening_modulus` |
+| `strain_source` | material publishing `strain` |
+| `solver_source` | a `local_newton` |
+| `K`, `G` | bulk and shear moduli — the elastic stiffness is built from these |
+| `sigma_0` | initial yield stress |
+
+Outputs: `stress`, `tangent`, and the history pair `plastic_strain`,
+`equivalent_plastic_strain`.
+
+### `drucker_prager_plasticity`
+
+Same, minus `K`, plus the cone:
+
+| parameter | meaning |
+|---|---|
+| `eta` | friction (pressure coefficient) |
+| `beta` | dilatancy — `beta != eta` is what makes the flow non-associative |
+| `K_bulk` | bulk modulus, used both for the cone apex and for the elastic stiffness |
+
+These used to arrive inside a `yield_function` **C++ object**, which the JSON
+reader cannot convert — so the material could not be configured from a document
+at all. As plain scalars it can (issue #33).
+
+### `j2_rk_plasticity`
+
+Takes `K`, `G`, `sigma_0`, the two sources, plus `tolerance`, `max_iter` and a
+`tableau` pointer. Available tableaus: `forward_euler`, `explicit_midpoint`,
+`rk4`, `implicit_euler`, `implicit_midpoint`, `crank_nicolson`, `sdirk3`,
+`gauss_legendre_4`.
+
+### Hardening
+
+Both publish `hardening_stress` (H) and `hardening_modulus` (dH/dκ), and read
+`equivalent_plastic_strain` from the plasticity material — a `Local` edge,
+because H depends on κ, which is the unknown being solved for.
+
+| material | law | parameters |
+|---|---|---|
+| `linear_isotropic_hardening` | `H = K κ` | `source`, `K` |
+| `exponential_isotropic_hardening` | `H = K_inf (1 − e^{−δκ})` | `source`, `K_inf`, `delta` |
+
+---
+
+## 3. What is assumed, and where it bites
+
+### Isotropic elasticity is required, not preferred
+
+Every closed form below rests on `C_e` being isotropic:
+
+```
+C_e : N        = 2G dev(N) + K tr(N) I
+N : C_e : N    = 3G                        (J2, N deviatoric)
+C_e : X : C_e  = 4G² X                     (X deviatoric in both index pairs)
+```
+
+This is why the plasticity materials **build their own** `C_e` from `K` and `G`
+rather than reading a rank-4 tangent from an elastic material. Accepting an
+arbitrary `C_e` advertised a generality none of them can honour — a caller
+wiring an anisotropic tangent would have got silently wrong answers.
+
+It also keeps `linear_elasticity` out of plasticity graphs, which matters for a
+second reason: its `stress` output is `C : ε` with `ε_p` ignored, so inside a
+plasticity graph it is not the stress of anything and diverges as plastic strain
+accumulates.
+
+| step | κ | `stress` (real) | `elastic::stress` | error |
+|---|---|---|---|---|
+| 40 | 0.0094 | 106.25 | 107.69 | +1.4% |
+| 120 | 0.1094 | 306.25 | 323.08 | +5.5% |
+| 200 | 0.2094 | 506.25 | 538.46 | **+6.4%** |
+
+`linear_elasticity` remains a valid material — for a genuinely elastic model
+`C : ε` *is* the answer, and `isotropic_damage` consumes both its stress and its
+tangent legitimately. It is simply the wrong dependency for plasticity.
+
+### Clamps belong to the caller
+
+`newton_scalar` does not clamp its result. `max(x, 0)` is a statement about a
+plastic multiplier and `abs(x)` about a curing degree; neither is about Newton's
+method. Each lives in the material that owns the assumption (issue #13).
+
+### The return map solves conditionally; a graph property is evaluated unconditionally
+
+This is why `local_newton` exists rather than everything using
+`backward_euler`.
+
+A property's update callback runs whenever the graph updates. **Plasticity only
+solves when the trial state exceeds yield** — and in a real analysis most
+integration points are elastic most of the time. Both return maps short-circuit
+before touching the solver:
+
+```cpp
+if (sig_eq - sigma_0 - H <= 0) { /* elastic: stress = trial, tangent = C_e */ return; }
+```
+
+Making the solve a property callback would run a Newton at every elastic point:
+
+| | measured |
+|---|---|
+| elastic step | ~92 ns |
+| plastic step | ~168 ns |
+
+Roughly 80 % more work, paid exactly where a real analysis spends most of its
+time.
+
+It is worse than a cost. At `Δλ = 0` on an elastic step the residual is
+negative, so Newton drives `Δλ` negative; holding it at zero needs a clamp —
+which is precisely the `max(x, 0)` that issue #13 objects to. **The clamp and
+the graph-driving are the same problem**: the graph mode has no way to express
+*do not solve*.
+
+Drucker-Prager cannot be graph-driven for a second, independent reason: it
+solves up to **twice** per update — an apex pre-check, a smooth-cone solve, then
+an apex fallback if that fails to converge — and chooses the branch on the first
+solve's convergence. A property edge carries one number, not "and it failed, so
+take the other branch".
+
+J2 solves once and has no such branch, so *only* the conditional argument
+applies to it. It could be graph-driven; it would simply cost more than it
+saves, and would leave two patterns where there is now one.
+
+Convergence therefore travels *with* the result (`{x, converged, iterations}`)
+rather than being queried from the solver afterwards, where it went stale
+between Drucker-Prager's two solves.
+
+---
+
+## 4. The consistent tangent
+
+For the smooth return, with `M` the yield normal and `N` the flow normal
+(`M == N` when associative):
+
+```
+A            = C_e − Δλ (C_e : dN/dσ : C_e)
+dλ/dε        = (M : C_e) / (M : C_e : N + H′)
+C_consistent = A − (C_e : N) ⊗ dλ/dε
+```
+
+`M ≠ N` under non-associative flow makes the tangent **major-asymmetric**,
+measured at 0.6–0.8 % of peak magnitude on multiaxial DP paths.
+
+J2 collapses this to the standard closed form:
+
+```
+C = C_e − (6G²Δλ/σ_eq) IIdev + (4G²Δλ/σ_eq − 4G²/(3G+H′)) N ⊗ N
+```
+
+which is algebraically identical, not an approximation — confirmed by
+bit-identical stress against the general path.
+
+### Apex return (Drucker-Prager only)
+
+When the deviatoric correction would overshoot the cone tip
+(`G Δλ ≥ √J₂`), the return goes to the apex instead: deviatoric stress to zero,
+pressure pinned at `(k + H)/η`, volumetric plastic flow from `β`. Its tangent is
+a **branch** tangent — valid only for perturbations staying on the apex — because
+the return map is non-smooth there.
+
+---
+
+## 5. Verification
+
+`tangent_checker` compares the analytical tangent against a central difference
+through the graph. Coverage:
+
+| path | purpose |
+|---|---|
+| uniaxial | the historical case |
+| pure shear, biaxial, triaxial, mixed dev+shear | exercise genuine non-associativity |
+| hydrostatic | the **only** path that reaches the apex branch |
+
+All agree to ~1e-10, the apex to 8e-9.
+
+Two coverage lessons worth keeping:
+
+- **A single load path proves one path.** The apex return was executed by *no*
+  test for its entire existence — instrumenting the predicate gave
+  `APEX_HITS=0` across every binary — because every path was uniaxial and the
+  apex sits on the hydrostatic axis. It was unreachable by construction, not by
+  oversight.
+- **A tolerance set by the worst step licenses errors in all the others.**
+  `J2TangentTest` bounded a whole run at `0.1` because the elastic→plastic
+  transition step is genuinely inexact. A 0.5 % error injected into the tangent
+  landed at 2.4e-4 and passed, while real plastic steps sit at 4.4e-10. The two
+  regimes are now bounded separately.
+
+---
+
+## 6. Performance
+
+Two binaries built from the actual commits, run interleaved so each pair sees
+the same machine state; 15 pairs; speedup computed per pair.
+
+| | old (median) | new (median) | paired speedup | range |
+|---|---|---|---|---|
+| J2 | 1466.2 ns/step | **211.5** | **7.00×** | 5.54–8.84× |
+| Drucker-Prager | 1176.3 ns/step | **652.4** | **1.79×** | 1.58–1.90× |
+
+The range is the honest figure: the *same* binary measured 1171–2253 ns across
+runs on this machine, so any single-run comparison is worth about one
+significant digit.
+
+J2 gains more because it also sheds machinery it never used. DP keeps the
+non-associative structure and the apex branch and gains only the arithmetic —
+which is the correct outcome. **The generality DP pays for is generality DP
+uses.**
+
+---
+
+## 7. Building a model
+
+```cpp
+// solver — one instance can serve several materials
+p.insert<std::string>("name", "solver");
+ctx.create<local_newton<policy>>(p);
+
+// hardening — reads back from the plasticity material
+p.clear();
+p.insert<std::string>("name", "hardening");
+p.insert<std::string>("source", "j2");
+p.insert<T>("K", 1000.0);
+ctx.create<linear_isotropic_hardening<policy>>(p);
+
+// plasticity — no elastic material anywhere
+p.clear();
+p.insert<std::string>("name", "j2");
+p.insert<std::string>("hardening_source", "hardening");
+p.insert<std::string>("strain_source", "stepper");
+p.insert<std::string>("solver_source", "solver");
+p.insert<T>("K", 166.67);
+p.insert<T>("G", 76.92);
+p.insert<T>("sigma_0", 50.0);
+ctx.create<j2_plasticity<policy>>(p);
+```
+
+Note `hardening.source = "j2"` while `j2.hardening_source = "hardening"`. The
+cycle is deliberate and is why those edges are `Local`: H depends on κ, which is
+what the return map solves for, so the hardening material is re-evaluated inside
+the Newton loop through `update_source()`.
+
+The same model in JSON, which is possible for Drucker-Prager only since its cone
+parameters became plain scalars:
+
+```json
+{"type": "drucker_prager_plasticity", "name": "dp",
+ "hardening_source": "hardening", "strain_source": "stepper",
+ "solver_source": "solver",
+ "G": 76.92, "sigma_0": 20.0,
+ "eta": 0.1, "beta": 0.05, "K_bulk": 166.67}
+```
+
+---
+
+## 8. What is still generic, and why
+
+`plasticity_utils`' free functions — `compute_trial`, `evaluate_at_state`,
+`compute_tangent` — remain templated on a yield function, and that generality is
+real: `drucker_prager_plasticity` instantiates them with the DP cone and
+`j2_rk_plasticity` with the von Mises cylinder. Two callers, two yield
+functions, shared return-mapping algebra.
+
+That is the distinction worth holding onto. A template parameter with **one**
+argument is indirection — it was removed from `small_strain_plasticity` and from
+`rk_plasticity`. A template parameter with two genuinely different arguments is
+what templates are for.
+
+## 9. Settled: the solver is reached by `material_ref`, not by the graph
+
+The return maps hold a `material_ref<local_newton>` and call `solve()`. The
+alternative — publishing a `yielding` flag so a graph-driven `backward_euler`
+knows when to iterate — was considered and **rejected**.
+
+The pattern would work: `strain_threshold_yield` already publishes
+`is_yielding` and `isotropic_damage` consumes it, so a gating flag is native to
+this codebase. It would retire `local_newton` and, with it, `material_ref` —
+about 99 lines of core machinery whose only two call sites are these.
+
+It was rejected on what it would cost to express:
+
+- **The material splits into phases.** `compute()` currently does trial →
+  solve → update in one callback. Graph-driven it becomes publish
+  `yielding`/`residual`/`jacobian`, solver runs, read `delta`, update. Two or
+  three properties where there is one, and graph dispatch measures ~30 ns even
+  for a trivial graph.
+- **A flag cannot carry Drucker-Prager's branch.** The apex fallback fires when
+  the *smooth solve fails*, which is not known until after it runs. Expressible
+  only as trial → smooth solver → `smooth_converged` → apex solver gated on
+  that flag → update: two solver instances, three flags, four phases, replacing
+  `if (!smooth.converged) do_apex_return(...)`.
+- **The elastic saving is partial** anyway — the solver's callback still fires
+  and returns early on the flag.
+
+The cost of the machinery is real but bounded; the cost of removing it is a
+graph harder to read than the code it replaces.
+
+**One constraint this decision carries.** `material_ref` bypasses the
+topological sort, so the plasticity↔solver ordering is not an edge the engine
+knows about. That is safe only because `local_newton` holds **no per-solve
+state** — its `solve()` is `const` and returns everything it computes. Give it
+mutable state and the ordering becomes real and unenforced.
+
+## 10. Known gaps
+
+- **The apex tangent is a branch tangent.** Verified consistent *on* the branch;
+  a perturbation that leaves the apex back onto the smooth cone is not covered,
+  and cannot be by a central difference.

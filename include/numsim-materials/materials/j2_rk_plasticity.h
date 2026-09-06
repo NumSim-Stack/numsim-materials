@@ -1,5 +1,5 @@
-#ifndef RK_PLASTICITY_H
-#define RK_PLASTICITY_H
+#ifndef J2_RK_PLASTICITY_H
+#define J2_RK_PLASTICITY_H
 
 #include <cmath>
 #include <vector>
@@ -17,23 +17,23 @@ namespace numsim::materials {
 /// Each implicit stage solves F = 0 for Δλ_i. Explicit stages use
 /// the consistency condition. Shares trial/tangent code with
 /// small_strain_plasticity via plasticity_utils.h.
-template<typename Traits, typename YieldFunction>
-class rk_plasticity final
-    : public material_base<rk_plasticity<Traits, YieldFunction>, Traits> {
+template<typename Traits>
+class j2_rk_plasticity final
+    : public material_base<j2_rk_plasticity<Traits>, Traits> {
 public:
-  using base = material_base<rk_plasticity<Traits, YieldFunction>, Traits>;
+  using base = material_base<j2_rk_plasticity<Traits>, Traits>;
   using value_type = typename base::value_type;
   using input_parameter_controller = typename base::input_parameter_controller;
   static constexpr auto Dim = base::Dim;
   using tensor2 = tmech::tensor<value_type, Dim, 2>;
   using tensor4 = tmech::tensor<value_type, Dim, 4>;
-  using yield_fn = YieldFunction;
+  using yield_fn = j2_yield_function<value_type, base::Dim>;
 
   template <typename... Args>
-  explicit rk_plasticity(Args&&... args)
+  explicit j2_rk_plasticity(Args&&... args)
       : base(std::forward<Args>(args)...),
         m_stress(base::template add_output<tensor2>(
-            "stress", &rk_plasticity::compute)),
+            "stress", &j2_rk_plasticity::compute)),
         m_tangent(base::template add_output<tensor4>("tangent")),
         m_eps_p(base::template add_history_output<tensor2>("plastic_strain")),
         m_kappa(base::template add_history_output<value_type>("equivalent_plastic_strain")),
@@ -211,10 +211,7 @@ private:
   std::vector<double> m_diag;
 };
 
-template<typename Traits>
-using j2_rk_plasticity = rk_plasticity<Traits,
-    j2_yield_function<typename Traits::value_type, Traits::Dim>>;
 
 } // namespace numsim::materials
 
-#endif // RK_PLASTICITY_H
+#endif // J2_RK_PLASTICITY_H

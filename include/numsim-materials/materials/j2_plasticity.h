@@ -2,13 +2,14 @@
 #define J2_PLASTICITY_H
 
 #include <cmath>
+#include <algorithm>
 #include <stdexcept>
 #include <string>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_base.h"
 #include "numsim-materials/core/material_ref.h"
 #include "numsim-materials/materials/plasticity_utils.h"
-#include "numsim-materials/solvers/backward_euler.h"
+#include "numsim-materials/solvers/local_newton.h"
 
 namespace numsim::materials {
 
@@ -59,7 +60,7 @@ public:
   using base::Dim;
   using tensor2 = tmech::tensor<value_type, Dim, 2>;
   using tensor4 = tmech::tensor<value_type, Dim, 4>;
-  using solver_type = backward_euler<Traits>;
+  using solver_type = local_newton<Traits>;
 
   template <typename... Args>
   explicit j2_plasticity(Args&&... args)
@@ -150,10 +151,13 @@ public:
       return {sig_eq - G_eff * dl - m_sigma_0 - m_H.get(),
               -G_eff - m_dH.get()};
     };
-    const auto dlambda = m_solver.get().solve(eval);
-    if (!m_solver.get().converged())
+    const auto sol = m_solver.get().solve(eval);
+    if (!sol.converged)
       throw std::runtime_error(
           "j2_plasticity: return-mapping Newton failed to converge");
+    // dlambda >= 0 is a statement about the plastic multiplier, so it is
+    // enforced here rather than inside a general scalar solver (see #13).
+    const auto dlambda = std::max(sol.x, value_type{0});
 
     m_eps_p.new_value() = m_eps_p.old_value() + dlambda * N;
     m_kappa.new_value() = kappa_n + dlambda;
