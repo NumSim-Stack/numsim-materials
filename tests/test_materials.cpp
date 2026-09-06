@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <print>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/materials/tensor_component_stepper.h"
@@ -126,7 +127,7 @@ TEST(CuringSimulation, ConvergesToFullCure) {
   // Time stepper
   p.clear();
   p.insert<std::string>("name", "time");
-  p.insert<T>("increment", T{10});
+  p.insert<T>("increment", T{0.5});
   ctx.create<numsim::materials::scalar_stepper<policy>>(p);
 
   // Backward Euler solver
@@ -149,17 +150,46 @@ TEST(CuringSimulation, ConvergesToFullCure) {
 
   ctx.finalize();
 
-  // Initialize temperature to 80°C (353 K)
-  ctx.get_mutable<T>("temperature", "state") = T{353};
+  // autocatalytic_reaction adds 273.15 to this input, so it is degrees
+  // CELSIUS. This used to be set to 353 under a comment reading "80°C (353 K)",
+  // which ran the reaction at 626 K instead of 353 K: k jumps from 0.040 to 67
+  // per second, the first Newton step diverges, and the cure is complete on
+  // step 0. "reaches 0.99 after 20 steps" was then true no matter what the
+  // integration did.
+  ctx.get_mutable<T>("temperature", "state") = T{80};
 
-  T curing = 0;
-  for (int i = 0; i < 20; ++i) {
+  // z = 0 is a fixed point of z^m (1-z)^n, and the jacobian carries
+  // pow(z, m-1) = pow(0, -0.2) = inf there. test_rk_integrator's run_curing
+  // starts from 1e-8 for exactly this reason; this test started from 0.
+  auto* state = dynamic_cast<numsim_core::history_property<T,
+      numsim::materials::property_traits>*>(
+          ctx.find_property("curing", "current_state"));
+  ASSERT_NE(state, nullptr);
+  state->old_value() = T{1e-8};
+  state->new_value() = T{1e-8};
+
+  auto* solver = dynamic_cast<numsim::materials::backward_euler<policy>*>(
+      ctx.find("solver"));
+  ASSERT_NE(solver, nullptr);
+
+  T curing = 0, at_200s = 0;
+  for (int i = 1; i <= 1000; ++i) {         // h = 0.5 s, so 500 s in total
     ctx.update();
+    EXPECT_TRUE(solver->converged())
+        << "backward_euler did not converge on step " << i
+        << "; the accessor exists to expose exactly this and nothing asked";
     curing = ctx.get<T>("curing", "current_state");
+    if (i == 400) at_200s = curing;
     ctx.commit();
   }
 
-  EXPECT_GT(curing, 0.99) << "Curing should approach 1.0 after 20 steps at 80°C";
+  // 0.9211 is CuringRK's refined RK4 reference for the same reaction at
+  // t = 200 s, computed in test_rk_integrator from a different integrator and
+  // a different material. Backward Euler at h = 0.5 lands at 0.9262.
+  EXPECT_NEAR(at_200s, 0.9211, 0.01)
+      << "the 200 s state does not match the reaction it is meant to be "
+         "integrating (got " << at_200s << ")";
+  EXPECT_GT(curing, 0.99) << "curing should approach 1.0 after 500 s at 80 C";
 }
 
 } // namespace
