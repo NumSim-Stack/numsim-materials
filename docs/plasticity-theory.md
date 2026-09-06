@@ -1,4 +1,4 @@
-# Small-strain J2 and Drucker-Prager plasticity: from kinematics to the linearized stress
+# Small-strain J2 and Drucker–Prager plasticity: from kinematics to the linearized stress
 
 This is the theory behind `j2_plasticity`, `drucker_prager_plasticity` and
 `j2_rk_plasticity`: the continuum statement, the discrete return map, and the
@@ -11,17 +11,21 @@ materials build their own elastic tangent, why the solver is reached by
 `material_ref`, what is verified and what is not. This document is the
 mathematics.
 
-**Conventions.** Small strain throughout. Tensors are `Dim`-dimensional; `D`
-below is `Traits::Dim`, which is 3 for every registered material. `⊗` is the
-dyadic product (`tmech::otimes`), `:` the double contraction
-(`tmech::dcontract`). `I` is the second-order identity, `IIsym` the symmetric
-fourth-order identity, and
+> Equations are LaTeX and render on GitHub. In a plain-text viewer they are
+> readable as source.
 
-```
-IIdev = IIsym - I⊗I/D                             plasticity_utils.h: make_IIdev
-```
+**Conventions.** Small strain throughout. Tensors are $D$-dimensional, where
+$D$ is `Traits::Dim`, which is $3$ for every registered material. Second-order
+tensors are bold lower case, fourth-order blackboard bold. $\otimes$ is the
+dyadic product (`tmech::otimes`), $:$ the double contraction
+(`tmech::dcontract`), $\boldsymbol{I}$ the second-order identity and
+$\mathbb{I}^{\mathrm{sym}}$ the symmetric fourth-order identity. The deviatoric
+projector is
 
-the deviatoric projector, so `dev(a) = IIdev : a = a - tr(a)/D · I`.
+$$\mathbb{I}^{\mathrm{dev}} = \mathbb{I}^{\mathrm{sym}} - \tfrac{1}{D}\,\boldsymbol{I}\otimes\boldsymbol{I}$$
+
+*(`plasticity_utils.h: make_IIdev`)*, so
+$\operatorname{dev}(\boldsymbol{a}) = \mathbb{I}^{\mathrm{dev}} : \boldsymbol{a} = \boldsymbol{a} - \tfrac{1}{D}\operatorname{tr}(\boldsymbol{a})\,\boldsymbol{I}$.
 
 ---
 
@@ -35,7 +39,7 @@ the deviatoric projector, so `dev(a) = IIdev : a = a - tr(a)/D · I`.
 6. [Loading, unloading, consistency](#6-loading-unloading-consistency)
 7. [The return map](#7-the-return-map)
 8. [J2 in closed form](#8-j2-in-closed-form)
-9. [Drucker-Prager in closed form](#9-drucker-prager-in-closed-form)
+9. [Drucker–Prager in closed form](#9-druckerprager-in-closed-form)
 10. [The apex branch](#10-the-apex-branch)
 11. [The linearized stress](#11-the-linearized-stress)
 12. [The multi-stage variant](#12-the-multi-stage-variant)
@@ -48,31 +52,29 @@ the deviatoric projector, so `dev(a) = IIdev : a = a - tr(a)/D · I`.
 
 The strain is small and the decomposition additive:
 
-```
-ε = ε_e + ε_p                                                             (1.1)
-```
+$$\boldsymbol{\varepsilon} = \boldsymbol{\varepsilon}^e + \boldsymbol{\varepsilon}^p \tag{1.1}$$
 
-with `ε` the symmetric small-strain tensor supplied by the host (a `strain_source`
-in the graph), `ε_e` elastic and `ε_p` plastic. Both `ε_p` and the hardening
-variable `κ` of §5 are **history variables**: they carry an old and a new value
-across the step, and the driver — never the material — advances them by calling
-`commit()`.
+with $\boldsymbol{\varepsilon}$ the symmetric small-strain tensor supplied by the
+host (a `strain_source` in the graph), $\boldsymbol{\varepsilon}^e$ elastic and
+$\boldsymbol{\varepsilon}^p$ plastic. Both $\boldsymbol{\varepsilon}^p$ and the
+hardening variable $\kappa$ of §5 are **history variables**: they carry an old
+and a new value across the step, and the driver — never the material — advances
+them by calling `commit()`.
 
 There is no multiplicative split, no rotation of the plastic frame, no objective
-rate. `ε_p` is a plain tensor added to `ε_e`, which is what makes every
-expression below algebraic rather than a differential equation in a rotating
-frame. It is valid while strains and rotations are small; beyond that the model
-is out of scope and nothing in the code detects it.
+rate. $\boldsymbol{\varepsilon}^p$ is a plain tensor added to
+$\boldsymbol{\varepsilon}^e$, which is what makes every expression below
+algebraic rather than a differential equation in a rotating frame. It is valid
+while strains and rotations are small; beyond that the model is out of scope and
+nothing in the code detects it.
 
-In rate form, with `λ̇ ≥ 0` the plastic multiplier and `N` the flow direction
-of §4:
+In rate form, with $\dot\lambda \ge 0$ the plastic multiplier and
+$\boldsymbol{N}$ the flow direction of §4:
 
-```
-ε̇_p = λ̇ N                                                                (1.2)
-```
+$$\dot{\boldsymbol{\varepsilon}}^p = \dot\lambda\,\boldsymbol{N} \tag{1.2}$$
 
-`ε̇_p` is the only source of dissipation in the model; the elastic response is
-reversible by construction.
+$\dot{\boldsymbol{\varepsilon}}^p$ is the only source of dissipation in the
+model; the elastic response is reversible by construction.
 
 ---
 
@@ -80,34 +82,35 @@ reversible by construction.
 
 The elastic response is linear and **isotropic**:
 
-```
-σ = C_e : ε_e = C_e : (ε - ε_p)                                           (2.1)
+$$\boldsymbol{\sigma} = \mathbb{C}_e : \boldsymbol{\varepsilon}^e = \mathbb{C}_e : (\boldsymbol{\varepsilon} - \boldsymbol{\varepsilon}^p) \tag{2.1}$$
 
-C_e = K I⊗I + 2G IIdev                    plasticity_utils.h: make_isotropic_tangent
-```
+$$\mathbb{C}_e = K\,\boldsymbol{I}\otimes\boldsymbol{I} + 2G\,\mathbb{I}^{\mathrm{dev}}$$
 
-with `K` the bulk and `G` the shear modulus. Contracting once gives the identity
-every fast path in the code relies on:
+*(`plasticity_utils.h: make_isotropic_tangent`)*, with $K$ the bulk and $G$ the
+shear modulus. Contracting once gives the identity every fast path in the code
+relies on:
 
-```
-C_e : a = K tr(a) I + 2G dev(a)                                           (2.2)
-```
+$$\mathbb{C}_e : \boldsymbol{a} = K\operatorname{tr}(\boldsymbol{a})\,\boldsymbol{I} + 2G\operatorname{dev}(\boldsymbol{a}) \tag{2.2}$$
 
-For `a` deviatoric this is `2G a`; for `a = I` it is `D·K·I`. Splitting (2.1),
+For $\boldsymbol{a}$ deviatoric this is $2G\boldsymbol{a}$; for
+$\boldsymbol{a} = \boldsymbol{I}$ it is $D K \boldsymbol{I}$. Splitting (2.1),
 
-```
-p = tr(σ)/3 = K tr(ε_e)          (D = 3)
-s = dev(σ)  = 2G dev(ε_e)                                                 (2.3)
-```
+$$p = \tfrac{1}{3}\operatorname{tr}(\boldsymbol{\sigma}) = K\operatorname{tr}(\boldsymbol{\varepsilon}^e), \qquad
+\boldsymbol{s} = \operatorname{dev}(\boldsymbol{\sigma}) = 2G\operatorname{dev}(\boldsymbol{\varepsilon}^e) \tag{2.3}$$
 
-The bulk term is written `K I⊗I`, not `3K IIvol`. Those coincide only at `D = 3`,
-because `IIvol = I⊗I/D`, and the shortcut (2.2) assumes the first. Writing the
-second made a material disagree with itself by 30 % at `D = 2` — see §14.
+for $D = 3$.
 
-Every plasticity material builds `C_e` itself from its own `K` and `G` rather
-than reading a rank-four tangent from an elastic material. That is not a
+The bulk term is written $K\,\boldsymbol{I}\otimes\boldsymbol{I}$, not
+$3K\,\mathbb{I}^{\mathrm{vol}}$. Those coincide only at $D = 3$, because
+$\mathbb{I}^{\mathrm{vol}} = \boldsymbol{I}\otimes\boldsymbol{I}/D$, and the
+shortcut (2.2) assumes the first. Writing the second made a material disagree
+with itself by 30 % at $D = 2$ — see §14.
+
+Every plasticity material builds $\mathbb{C}_e$ itself from its own $K$ and $G$
+rather than reading a rank-four tangent from an elastic material. That is not a
 convenience: §11 and §14 show the closed forms are *false* for an anisotropic
-`C_e`, so accepting one would advertise a generality the model cannot honour.
+$\mathbb{C}_e$, so accepting one would advertise a generality the model cannot
+honour.
 
 ---
 
@@ -120,219 +123,210 @@ two files, not a presentational one.
 
 ### 3.1 J2 (von Mises)
 
-```
-J₂    = ½ s:s
-σ_eq  = √(3J₂) = √(3/2 · s:s)             yield_functions.h: equivalent_stress
-F     = σ_eq - σ₀ - H(κ)                  yield_functions.h: trial_yield         (3.1)
-```
+$$J_2 = \tfrac{1}{2}\,\boldsymbol{s}:\boldsymbol{s}, \qquad
+\sigma_{\mathrm{eq}} = \sqrt{3J_2} = \sqrt{\tfrac{3}{2}\,\boldsymbol{s}:\boldsymbol{s}}$$
 
-`σ_eq` is the uniaxial-equivalent stress: in uniaxial tension `σ_eq = |σ₁₁|`, so
-`σ₀` is the uniaxial yield stress and can be read off a tensile test. The yield
-surface is a cylinder about the hydrostatic axis — pressure-insensitive, no
-apex, `needs_apex_return` returns `false` unconditionally.
+$$F = \sigma_{\mathrm{eq}} - \sigma_0 - H(\kappa) \tag{3.1}$$
 
-### 3.2 Drucker-Prager
+*(`yield_functions.h: equivalent_stress`, `trial_yield`)*
 
-```
-q  = √J₂ = √(½ s:s)              drucker_prager_yield_function.h: equivalent_stress
-p  = tr(σ)/3
-F  = q + η p - k - H(κ)          drucker_prager_yield_function.h: trial_yield     (3.2)
-```
+$\sigma_{\mathrm{eq}}$ is the uniaxial-equivalent stress: in uniaxial tension
+$\sigma_{\mathrm{eq}} = |\sigma_{11}|$, so $\sigma_0$ is the uniaxial yield
+stress and can be read off a tensile test. The yield surface is a cylinder about
+the hydrostatic axis — pressure-insensitive, no apex, `needs_apex_return`
+returns `false` unconditionally.
 
-Note `q = √J₂`, **without** the `√3`. The surface is a cone about the hydrostatic
-axis, opening towards compression or tension according to the sign convention of
-`η`:
+### 3.2 Drucker–Prager
 
-- `η` — the friction (pressure) coefficient. `η > 0` makes tensile pressure
-  destabilising, so the material yields earlier in tension than in compression.
-- `k` — the cohesion, the `sigma_0` parameter. At `p = 0` it is the yield value
-  of `q`.
-- `η = 0` reduces the cone to a cylinder, which is von Mises up to the
-  normalization difference above: `σ_eq = √3 q`, so a DP material with `η = 0`
-  and cohesion `k` behaves as J2 with `σ₀ = √3 k`.
+$$q = \sqrt{J_2} = \sqrt{\tfrac{1}{2}\,\boldsymbol{s}:\boldsymbol{s}}, \qquad
+p = \tfrac{1}{3}\operatorname{tr}(\boldsymbol{\sigma})$$
 
-The cone closes at the **apex** on the hydrostatic axis, where `q = 0` and
-`η p = k + H`. That point is not smooth, and §10 is about it.
+$$F = q + \eta\,p - k - H(\kappa) \tag{3.2}$$
 
-Because `η > 0` penalises tensile pressure, uniaxial *strain* yields at
-different magnitudes in the two directions. With `q = 2G|e|/√3` and `p = K e`
-for a uniaxial strain `e`,
+*(`drucker_prager_yield_function.h: equivalent_stress`, `trial_yield`)*
 
-```
-e_tension        = k / (2G/√3 + ηK)
-|e_compression|  = k / (2G/√3 - ηK)                                       (3.3)
-```
+Note $q = \sqrt{J_2}$, **without** the $\sqrt{3}$. The surface is a cone about
+the hydrostatic axis:
 
-which coincide only at `η = 0`. `DruckerPragerPressure.YieldsEarlierInTensionThanInCompression`
-pins exactly this ratio, which makes it a test of the friction term rather than
-of yielding in general.
+- $\eta$ — the friction (pressure) coefficient. $\eta > 0$ makes tensile
+  pressure destabilising, so the material yields earlier in tension than in
+  compression.
+- $k$ — the cohesion, the `sigma_0` parameter. At $p = 0$ it is the yield value
+  of $q$.
+- $\eta = 0$ reduces the cone to a cylinder, which is von Mises up to the
+  normalization difference above: $\sigma_{\mathrm{eq}} = \sqrt{3}\,q$, so a DP
+  material with $\eta = 0$ and cohesion $k$ behaves as J2 with
+  $\sigma_0 = \sqrt{3}\,k$.
+
+The cone closes at the **apex** on the hydrostatic axis, where $q = 0$ and
+$\eta p = k + H$. That point is not smooth, and §10 is about it.
+
+Because $\eta > 0$ penalises tensile pressure, uniaxial *strain* yields at
+different magnitudes in the two directions. With $q = 2G|e|/\sqrt{3}$ and
+$p = Ke$ for a uniaxial strain $e$,
+
+$$e_{\mathrm{tension}} = \frac{k}{2G/\sqrt{3} + \eta K}, \qquad
+|e_{\mathrm{compression}}| = \frac{k}{2G/\sqrt{3} - \eta K} \tag{3.3}$$
+
+which coincide only at $\eta = 0$.
+`DruckerPragerPressure.YieldsEarlierInTensionThanInCompression` pins exactly this
+ratio, which makes it a test of the friction term rather than of yielding in
+general.
 
 ---
 
 ## 4. Flow rule and plastic potential
 
-The flow direction comes from a plastic potential `Q`:
+The flow direction comes from a plastic potential $Q$, and the *yield* normal,
+which appears in the consistency condition and hence in the tangent, from $F$:
 
-```
-N = ∂Q/∂σ                                                                 (4.1)
-```
+$$\boldsymbol{N} = \frac{\partial Q}{\partial\boldsymbol{\sigma}}, \qquad
+\boldsymbol{M} = \frac{\partial F}{\partial\boldsymbol{\sigma}} \tag{4.1}$$
 
-and the *yield* normal, which appears in the consistency condition and hence in
-the tangent, from `F`:
-
-```
-M = ∂F/∂σ                                                                 (4.2)
-```
-
-`M = N` when the flow is **associative**, `M ≠ N` when it is not. Keeping the two
-apart is what lets one implementation carry both models.
+$\boldsymbol{M} = \boldsymbol{N}$ when the flow is **associative**,
+$\boldsymbol{M} \neq \boldsymbol{N}$ when it is not. Keeping the two apart is
+what lets one implementation carry both models.
 
 ### 4.1 J2 — associative
 
-```
-∂σ_eq/∂σ:   σ_eq² = 3/2 s:s  ⟹  2σ_eq ∂σ_eq/∂σ = 3 s : IIdev = 3 s
+From $\sigma_{\mathrm{eq}}^2 = \tfrac{3}{2}\boldsymbol{s}:\boldsymbol{s}$,
 
-N = M = 3/2 · s/σ_eq                      yield_functions.h: flow_normal          (4.3)
-```
+$$2\sigma_{\mathrm{eq}}\frac{\partial\sigma_{\mathrm{eq}}}{\partial\boldsymbol{\sigma}}
+= 3\,\boldsymbol{s} : \mathbb{I}^{\mathrm{dev}} = 3\,\boldsymbol{s}
+\qquad\Longrightarrow\qquad
+\boldsymbol{N} = \boldsymbol{M} = \frac{3}{2}\frac{\boldsymbol{s}}{\sigma_{\mathrm{eq}}} \tag{4.2}$$
 
-Two properties are used repeatedly:
+*(`yield_functions.h: flow_normal`)*. Two properties are used repeatedly:
 
-```
-tr(N) = 0                    plastic flow is isochoric
-N:N   = 9/4 · (s:s)/σ_eq² = 3/2                                           (4.4)
-```
+$$\operatorname{tr}(\boldsymbol{N}) = 0, \qquad
+\boldsymbol{N}:\boldsymbol{N} = \frac{9}{4}\frac{\boldsymbol{s}:\boldsymbol{s}}{\sigma_{\mathrm{eq}}^2} = \frac{3}{2} \tag{4.3}$$
 
-`tr(N) = 0` is why the volumetric term of (2.2) drops out of every J2 expression
-and why `C_e : N = 2G N` exactly.
+$\operatorname{tr}(\boldsymbol{N}) = 0$ is why the volumetric term of (2.2) drops
+out of every J2 expression and why
+$\mathbb{C}_e : \boldsymbol{N} = 2G\boldsymbol{N}$ exactly.
 
-### 4.2 Drucker-Prager — non-associative
+### 4.2 Drucker–Prager — non-associative
 
-The potential replaces the friction coefficient `η` by a **dilatancy**
-coefficient `β`:
+The potential replaces the friction coefficient $\eta$ by a **dilatancy**
+coefficient $\beta$, so $Q = q + \beta p$ and, using
+$\partial q/\partial\boldsymbol{\sigma} = \boldsymbol{s}/(2q)$ and
+$\partial p/\partial\boldsymbol{\sigma} = \boldsymbol{I}/3$,
 
-```
-Q = q + β p
+$$\boldsymbol{N} = \frac{\boldsymbol{s}}{2q} + \frac{\beta}{3}\boldsymbol{I}, \qquad
+\boldsymbol{M} = \frac{\boldsymbol{s}}{2q} + \frac{\eta}{3}\boldsymbol{I} \tag{4.4}$$
 
-N = s/(2q) + β/3 · I           drucker_prager_yield_function.h: flow_normal
-M = s/(2q) + η/3 · I           drucker_prager_yield_function.h: yield_normal     (4.5)
-```
+*(`drucker_prager_yield_function.h: flow_normal`, `yield_normal`)*. Now
 
-using `∂q/∂σ = s/(2q)` and `∂p/∂σ = I/3`. Now
+$$\operatorname{tr}(\boldsymbol{N}) = \beta \tag{4.5}$$
 
-```
-tr(N) = β                                                                 (4.6)
-```
+so plastic flow is **dilatant**: $\beta > 0$ produces plastic volume increase.
+This is the physical reason the model is non-associative — taking
+$\beta = \eta$ would tie dilatancy to friction and, for realistic friction
+angles, over-predict volume change badly. The price is that $\mathbb{C}_{ep}$
+loses its major symmetry (§11.7).
 
-so plastic flow is **dilatant**: `β > 0` produces plastic volume increase. This
-is the physical reason the model is non-associative — taking `β = η` would tie
-dilatancy to friction and, for realistic friction angles, over-predict volume
-change badly. The price is that `C_ep` loses its major symmetry (§11.6).
-
-The `/3` in (4.5) is a hard 3, while `dev` uses `/D`. At `D = 3` they agree; see
-§14.
+The $1/3$ in (4.4) is a hard $3$, while $\operatorname{dev}$ uses $1/D$. At
+$D = 3$ they agree; see §14.
 
 ---
 
 ## 5. Hardening and the internal variable
 
-One scalar internal variable `κ` with
+One scalar internal variable $\kappa$ with
 
-```
-κ̇ = λ̇                                                                    (5.1)
-```
+$$\dot\kappa = \dot\lambda \tag{5.1}$$
 
-so `κ` is the accumulated plastic multiplier. For J2 that is exactly the
+so $\kappa$ is the accumulated plastic multiplier. For J2 that is exactly the
 conventional equivalent plastic strain, and the check is worth doing because it
-fixes what `σ₀` and `H` mean:
+fixes what $\sigma_0$ and $H$ mean:
 
-```
-‖ε̇_p‖ = λ̇ √(N:N) = λ̇ √(3/2)
-ε̇_p^eq ≡ √(2/3) ‖ε̇_p‖ = λ̇                                                (5.2)
-```
+$$\lVert\dot{\boldsymbol{\varepsilon}}^p\rVert = \dot\lambda\sqrt{\boldsymbol{N}:\boldsymbol{N}} = \dot\lambda\sqrt{\tfrac{3}{2}}
+\qquad\Longrightarrow\qquad
+\dot\varepsilon^p_{\mathrm{eq}} \equiv \sqrt{\tfrac{2}{3}}\,\lVert\dot{\boldsymbol{\varepsilon}}^p\rVert = \dot\lambda \tag{5.2}$$
 
 and the plastic work is
 
-```
-σ : ε̇_p = λ̇ σ:N = λ̇ · 3/2 · (s:s)/σ_eq = λ̇ σ_eq                        (5.3)
-```
+$$\boldsymbol{\sigma} : \dot{\boldsymbol{\varepsilon}}^p
+= \dot\lambda\,\boldsymbol{\sigma}:\boldsymbol{N}
+= \dot\lambda\,\frac{3}{2}\frac{\boldsymbol{s}:\boldsymbol{s}}{\sigma_{\mathrm{eq}}}
+= \dot\lambda\,\sigma_{\mathrm{eq}} \tag{5.3}$$
 
-so `(σ_eq, κ)` are work-conjugate. `H(κ)` is therefore the uniaxial hardening
-curve, directly comparable to a tensile test.
+so $(\sigma_{\mathrm{eq}}, \kappa)$ are work-conjugate. $H(\kappa)$ is therefore
+the uniaxial hardening curve, directly comparable to a tensile test.
 
-For Drucker-Prager `κ` is the multiplier itself and is *not* a strain measure of
-the same kind — the normalization `q = √J₂` and the volumetric part of `N` both
-enter — so `k` and `H` there are cone parameters, not uniaxial ones.
+For Drucker–Prager $\kappa$ is the multiplier itself and is *not* a strain
+measure of the same kind — the normalization $q = \sqrt{J_2}$ and the volumetric
+part of $\boldsymbol{N}$ both enter — so $k$ and $H$ there are cone parameters,
+not uniaxial ones.
 
-The material never evaluates `H` itself. It reads two properties from a
-hardening material through Local edges:
+The material never evaluates $H$ itself. It reads two properties from a
+hardening material through Local edges: $H$ as `"hardening_stress"` and
+$H' = \mathrm{d}H/\mathrm{d}\kappa$ as `"hardening_modulus"`.
+`linear_isotropic_hardening` supplies $H = K\kappa$, $H' = K$. Any other law
+that publishes the same two properties works unchanged.
 
-```
-H  = "hardening_stress"       H'  = "hardening_modulus"
-```
-
-`linear_isotropic_hardening` supplies `H = K κ`, `H' = K`. Any other law that
-publishes the same two properties works unchanged; the return maps only ever use
-`H(κ)` and `H' = dH/dκ`.
-
-`H' < 0` is softening. It is admissible while `H' > -G_eff`; at or below that the
-local problem has no admissible solution and both materials throw — §14.
+$H' < 0$ is softening. It is admissible while $H' > -G_{\mathrm{eff}}$; at or
+below that the local problem has no admissible solution and both materials throw
+— §14.
 
 ---
 
 ## 6. Loading, unloading, consistency
 
-The Karush-Kuhn-Tucker conditions:
+The Karush–Kuhn–Tucker conditions:
 
-```
-F ≤ 0        λ̇ ≥ 0        λ̇ F = 0                                        (6.1)
-```
+$$F \le 0, \qquad \dot\lambda \ge 0, \qquad \dot\lambda F = 0 \tag{6.1}$$
 
-and, during plastic flow, the consistency condition `Ḟ = 0`:
+and, during plastic flow, the consistency condition $\dot F = 0$:
 
-```
-M : σ̇ - H' κ̇ = 0                                                         (6.2)
-```
+$$\boldsymbol{M} : \dot{\boldsymbol{\sigma}} - H'\dot\kappa = 0 \tag{6.2}$$
 
-Substituting `σ̇ = C_e : (ε̇ - λ̇ N)` gives the multiplier in rate form,
+Substituting
+$\dot{\boldsymbol{\sigma}} = \mathbb{C}_e : (\dot{\boldsymbol{\varepsilon}} - \dot\lambda\boldsymbol{N})$
+gives the multiplier in rate form,
 
-```
-λ̇ = (M : C_e : ε̇) / (M : C_e : N + H')                                   (6.3)
-```
+$$\dot\lambda = \frac{\boldsymbol{M} : \mathbb{C}_e : \dot{\boldsymbol{\varepsilon}}}
+{\boldsymbol{M} : \mathbb{C}_e : \boldsymbol{N} + H'} \tag{6.3}$$
 
-The denominator is the quantity the code calls the **effective modulus** plus the
-hardening modulus. It is worth naming, because it is the same scalar in the rate
-form, in the discrete residual, and in the tangent:
+The denominator is the quantity the code calls the **effective modulus** plus
+the hardening modulus. It is worth naming, because it is the same scalar in the
+rate form, in the discrete residual, and in the tangent:
 
-```
-G_eff ≡ M : C_e : N                       *_yield_function.h: effective_modulus  (6.4)
-```
+$$G_{\mathrm{eff}} \equiv \boldsymbol{M} : \mathbb{C}_e : \boldsymbol{N} \tag{6.4}$$
 
-### 6.1 `G_eff` for the two models
+*(`*_yield_function.h: effective_modulus`)*
 
-**J2.** `C_e : N = 2G N` since `tr(N) = 0`, so
+### 6.1 $G_{\mathrm{eff}}$ for the two models
 
-```
-G_eff = N : C_e : N = 2G (N:N) = 2G · 3/2 = 3G                            (6.5)
-```
+**J2.** $\mathbb{C}_e : \boldsymbol{N} = 2G\boldsymbol{N}$ since
+$\operatorname{tr}(\boldsymbol{N}) = 0$, so
 
-**Drucker-Prager.** From (2.2) and (4.5),
+$$G_{\mathrm{eff}} = \boldsymbol{N} : \mathbb{C}_e : \boldsymbol{N}
+= 2G\,(\boldsymbol{N}:\boldsymbol{N}) = 2G\cdot\tfrac{3}{2} = 3G \tag{6.5}$$
 
-```
-C_e : N = 2G · s/(2q) + K β I = G s/q + K β I                             (6.6)
+**Drucker–Prager.** From (2.2) and (4.4),
 
-G_eff = M : C_e : N
-      = [s/(2q) + η/3 I] : [G s/q + Kβ I]
-      = G (s:s)/(2q²) + (η/3) Kβ tr(I)
-      = G + K η β                                                          (6.7)
-```
+$$\mathbb{C}_e : \boldsymbol{N} = 2G\frac{\boldsymbol{s}}{2q} + K\beta\boldsymbol{I}
+= G\frac{\boldsymbol{s}}{q} + K\beta\boldsymbol{I} \tag{6.6}$$
 
-using `s:s = 2q²`, `tr(s) = 0`, `s:I = 0` and `tr(I) = 3`. The cross terms
-vanish; only the shear term and the friction-dilatancy product survive. Both
-match the two `effective_modulus` implementations exactly.
+$$\begin{aligned}
+G_{\mathrm{eff}} &= \boldsymbol{M} : \mathbb{C}_e : \boldsymbol{N}
+= \left[\frac{\boldsymbol{s}}{2q} + \frac{\eta}{3}\boldsymbol{I}\right] :
+  \left[G\frac{\boldsymbol{s}}{q} + K\beta\boldsymbol{I}\right] \\[2pt]
+&= G\frac{\boldsymbol{s}:\boldsymbol{s}}{2q^2} + \frac{\eta}{3}K\beta\operatorname{tr}(\boldsymbol{I})
+= G + K\eta\beta
+\end{aligned} \tag{6.7}$$
 
-`G_eff` is the first place isotropy is load-bearing: for an anisotropic `C_e`,
-`M : C_e : N` is state-dependent and no longer a material constant, so the
-*residual itself* would be wrong — not merely the tangent.
+using $\boldsymbol{s}:\boldsymbol{s} = 2q^2$,
+$\operatorname{tr}(\boldsymbol{s}) = 0$, $\boldsymbol{s}:\boldsymbol{I} = 0$ and
+$\operatorname{tr}(\boldsymbol{I}) = 3$. The cross terms vanish; only the shear
+term and the friction–dilatancy product survive. Both match the two
+`effective_modulus` implementations exactly.
+
+$G_{\mathrm{eff}}$ is the first place isotropy is load-bearing: for an
+anisotropic $\mathbb{C}_e$, $\boldsymbol{M}:\mathbb{C}_e:\boldsymbol{N}$ is
+state-dependent and no longer a material constant, so the *residual itself*
+would be wrong — not merely the tangent.
 
 ---
 
@@ -343,63 +337,63 @@ match the two `effective_modulus` implementations exactly.
 Backward Euler on (1.2) over a step, with the flow direction evaluated at the
 **trial** state:
 
-```
-ε_p^{n+1} = ε_p^n + Δλ N_tr
-κ^{n+1}   = κ^n + Δλ                                                      (7.1)
-```
+$$\boldsymbol{\varepsilon}^p_{n+1} = \boldsymbol{\varepsilon}^p_n + \Delta\lambda\,\boldsymbol{N}^{\mathrm{tr}},
+\qquad \kappa_{n+1} = \kappa_n + \Delta\lambda \tag{7.1}$$
 
-`Δλ ≥ 0` is the one unknown of the step.
+$\Delta\lambda \ge 0$ is the one unknown of the step.
 
 ### 7.2 Trial state
 
 Freeze the plastic strain and load elastically:
 
-```
-σ_tr  = C_e : (ε^{n+1} - ε_p^n)           plasticity_utils.h: compute_trial
-F_tr  = F(σ_tr, κ^n)                                                      (7.2)
-```
+$$\boldsymbol{\sigma}^{\mathrm{tr}} = \mathbb{C}_e : (\boldsymbol{\varepsilon}_{n+1} - \boldsymbol{\varepsilon}^p_n),
+\qquad F^{\mathrm{tr}} = F(\boldsymbol{\sigma}^{\mathrm{tr}}, \kappa_n) \tag{7.2}$$
 
-`F_tr ≤ 0` ⟹ the step is elastic: `σ = σ_tr`, `C_ep = C_e`, history unchanged.
-That branch is not an optimisation, it is the KKT case `λ̇ = 0`.
+*(`plasticity_utils.h: compute_trial`)*
 
-`F_tr > 0` ⟹ the return map runs. **This is the only case in which a solve
-happens at all**, which is why the scalar solver is reached by `material_ref`
-rather than by a graph edge — see `plasticity.md` §9.
+$F^{\mathrm{tr}} \le 0$ ⟹ the step is elastic:
+$\boldsymbol{\sigma} = \boldsymbol{\sigma}^{\mathrm{tr}}$,
+$\mathbb{C}_{ep} = \mathbb{C}_e$, history unchanged. That branch is not an
+optimisation, it is the KKT case $\dot\lambda = 0$.
+
+$F^{\mathrm{tr}} > 0$ ⟹ the return map runs. **This is the only case in which a
+solve happens at all**, which is why the scalar solver is reached by
+`material_ref` rather than by a graph edge — see `plasticity.md` §9.
 
 ### 7.3 Reduction to one scalar
 
 Substituting (7.1) into (2.1),
 
-```
-σ = C_e : (ε - ε_p^n - Δλ N_tr) = σ_tr - Δλ (C_e : N_tr)                  (7.3)
-```
+$$\boldsymbol{\sigma} = \mathbb{C}_e : (\boldsymbol{\varepsilon} - \boldsymbol{\varepsilon}^p_n - \Delta\lambda\boldsymbol{N}^{\mathrm{tr}})
+= \boldsymbol{\sigma}^{\mathrm{tr}} - \Delta\lambda\,(\mathbb{C}_e : \boldsymbol{N}^{\mathrm{tr}}) \tag{7.3}$$
 
-The whole tensor update is therefore known once the single scalar `Δλ` is. What
-makes the reduction exact rather than an approximation is that `N` does **not**
-rotate during the return: §8.1 and §9.1 show, for each model separately, that the
-returned deviator stays parallel to the trial deviator. That is the property that
-turns a tensor-valued nonlinear system into a scalar one.
+The whole tensor update is therefore known once the single scalar
+$\Delta\lambda$ is. What makes the reduction exact rather than an approximation
+is that $\boldsymbol{N}$ does **not** rotate during the return: §8.1 and §9.1
+show, for each model separately, that the returned deviator stays parallel to the
+trial deviator. That is the property that turns a tensor-valued nonlinear system
+into a scalar one.
 
-Contracting (7.3) with `M` and using (6.4) gives the residual:
+Contracting (7.3) with $\boldsymbol{M}$ and using (6.4) gives the residual:
 
-```
-r(Δλ) = φ_tr - G_eff Δλ - Y₀ - H(κ^n + Δλ) = 0            *_yield_function.h: residual
-r'(Δλ) = -(G_eff + H')                                    *_yield_function.h: jacobian
-```
+$$r(\Delta\lambda) = \varphi^{\mathrm{tr}} - G_{\mathrm{eff}}\Delta\lambda - Y_0 - H(\kappa_n + \Delta\lambda) = 0$$
 
-where `φ_tr` is the **modified equivalent stress** at the trial state —
-`σ_eq_tr` for J2, `q_tr + η p_tr` for DP — and `Y₀` is `σ₀` or `k`. This is one
-scalar equation in one unknown, solved by `newton_scalar`. For linear hardening
-it is linear, so
+$$r'(\Delta\lambda) = -(G_{\mathrm{eff}} + H') \tag{7.4}$$
 
-```
-Δλ = F_tr / (G_eff + H')                                                  (7.4)
-```
+*(`*_yield_function.h: residual`, `jacobian`)*
+
+where $\varphi^{\mathrm{tr}}$ is the **modified equivalent stress** at the trial
+state — $\sigma_{\mathrm{eq}}^{\mathrm{tr}}$ for J2,
+$q^{\mathrm{tr}} + \eta p^{\mathrm{tr}}$ for DP — and $Y_0$ is $\sigma_0$ or $k$.
+This is one scalar equation in one unknown, solved by `newton_scalar`. For linear
+hardening it is linear, so
+
+$$\Delta\lambda = \frac{F^{\mathrm{tr}}}{G_{\mathrm{eff}} + H'} \tag{7.5}$$
 
 and Newton lands on the root in a single step. That is also the reason forward
 Euler, backward Euler and the monolithic map must give **identical** answers for
 linear hardening, which `J2RKStage.ExplicitAndImplicitStagesSolveTheSameEquation`
-asserts to 1e-12 relative rather than to a tolerance.
+asserts to $10^{-12}$ relative rather than to a tolerance.
 
 ---
 
@@ -407,103 +401,93 @@ asserts to 1e-12 relative rather than to a tolerance.
 
 ### 8.1 Radial return
 
-From (7.3) with `C_e : N = 2G N` and `N_tr = (3/2) s_tr/σ_eq_tr`:
+From (7.3) with $\mathbb{C}_e : \boldsymbol{N} = 2G\boldsymbol{N}$ and
+$\boldsymbol{N}^{\mathrm{tr}} = \tfrac{3}{2}\boldsymbol{s}^{\mathrm{tr}}/\sigma_{\mathrm{eq}}^{\mathrm{tr}}$:
 
-```
-s = s_tr - 2G Δλ N_tr = s_tr (1 - 3GΔλ/σ_eq_tr)                           (8.1)
-```
+$$\boldsymbol{s} = \boldsymbol{s}^{\mathrm{tr}} - 2G\Delta\lambda\boldsymbol{N}^{\mathrm{tr}}
+= \boldsymbol{s}^{\mathrm{tr}}\left(1 - \frac{3G\Delta\lambda}{\sigma_{\mathrm{eq}}^{\mathrm{tr}}}\right) \tag{8.1}$$
 
 The returned deviator is a **scalar multiple** of the trial deviator: the return
-is radial in deviatoric space and `N = N_tr` exactly, not approximately. Taking
-the norm,
+is radial in deviatoric space and $\boldsymbol{N} = \boldsymbol{N}^{\mathrm{tr}}$
+exactly, not approximately. Taking the norm,
 
-```
-σ_eq = σ_eq_tr - 3G Δλ                                                    (8.2)
-```
+$$\sigma_{\mathrm{eq}} = \sigma_{\mathrm{eq}}^{\mathrm{tr}} - 3G\Delta\lambda \tag{8.2}$$
 
-which is (7.3) contracted, and recovers `G_eff = 3G`. The volumetric stress is
-untouched, since `tr(N) = 0`.
+which is (7.3) contracted, and recovers $G_{\mathrm{eff}} = 3G$. The volumetric
+stress is untouched, since $\operatorname{tr}(\boldsymbol{N}) = 0$.
 
 ### 8.2 The update
 
-```
-σ = σ_tr - 2G Δλ N                        j2_plasticity.h: m_stress
-ε_p^{n+1} = ε_p^n + Δλ N
-κ^{n+1}   = κ^n + Δλ                                                      (8.3)
-```
+$$\boldsymbol{\sigma} = \boldsymbol{\sigma}^{\mathrm{tr}} - 2G\Delta\lambda\,\boldsymbol{N},
+\qquad \boldsymbol{\varepsilon}^p_{n+1} = \boldsymbol{\varepsilon}^p_n + \Delta\lambda\boldsymbol{N},
+\qquad \kappa_{n+1} = \kappa_n + \Delta\lambda \tag{8.3}$$
 
-The stress line uses `C_e : N = 2G N` rather than a rank-four contraction —
-algebraically identical, and it measures 33 ns against ~245 ns for the whole
-step.
+*(`j2_plasticity.h: compute`)*. The stress line uses
+$\mathbb{C}_e : \boldsymbol{N} = 2G\boldsymbol{N}$ rather than a rank-four
+contraction — algebraically identical, and it measures 33 ns against ~245 ns for
+the whole step.
 
 ### 8.3 Residual
 
-```
-r(Δλ)  = σ_eq_tr - 3G Δλ - σ₀ - H(κ^n + Δλ)
-r'(Δλ) = -3G - H'                                                         (8.4)
-```
+$$r(\Delta\lambda) = \sigma_{\mathrm{eq}}^{\mathrm{tr}} - 3G\Delta\lambda - \sigma_0 - H(\kappa_n + \Delta\lambda),
+\qquad r'(\Delta\lambda) = -3G - H' \tag{8.4}$$
 
 ---
 
-## 9. Drucker-Prager in closed form
+## 9. Drucker–Prager in closed form
 
 ### 9.1 Smooth cone return
 
 From (6.6),
 
-```
-s   = s_tr - Δλ G s_tr/q_tr = s_tr (1 - GΔλ/q_tr)                         (9.1)
-p   = p_tr - K β Δλ
-q   = q_tr - G Δλ
-```
+$$\boldsymbol{s} = \boldsymbol{s}^{\mathrm{tr}}\left(1 - \frac{G\Delta\lambda}{q^{\mathrm{tr}}}\right),
+\qquad p = p^{\mathrm{tr}} - K\beta\Delta\lambda,
+\qquad q = q^{\mathrm{tr}} - G\Delta\lambda \tag{9.1}$$
 
-Deviatorically the return is again radial, so `N` does not rotate. The
-volumetric part *is* affected, because `tr(N) = β ≠ 0` — this is the essential
+Deviatorically the return is again radial, so $\boldsymbol{N}$ does not rotate.
+The volumetric part *is* affected, because
+$\operatorname{tr}(\boldsymbol{N}) = \beta \neq 0$ — this is the essential
 difference from J2 and the reason the volumetric term of (2.2) may not be
 dropped.
 
 Substituting into (3.2):
 
-```
-F = (q_tr - GΔλ) + η(p_tr - KβΔλ) - k - H
-  = (q_tr + η p_tr) - (G + Kηβ) Δλ - k - H                                (9.2)
-```
+$$\begin{aligned}
+F &= (q^{\mathrm{tr}} - G\Delta\lambda) + \eta(p^{\mathrm{tr}} - K\beta\Delta\lambda) - k - H \\[2pt]
+  &= (q^{\mathrm{tr}} + \eta p^{\mathrm{tr}}) - (G + K\eta\beta)\Delta\lambda - k - H
+\end{aligned} \tag{9.2}$$
 
-recovering `φ_tr = q_tr + η p_tr` and `G_eff = G + Kηβ` — (6.7) again, now from
-the discrete side.
+recovering $\varphi^{\mathrm{tr}} = q^{\mathrm{tr}} + \eta p^{\mathrm{tr}}$ and
+$G_{\mathrm{eff}} = G + K\eta\beta$ — (6.7) again, now from the discrete side.
 
 ### 9.2 The update
 
-```
-C_e:N = 2G dev(N) + K tr(N) I                drucker_prager_plasticity.h: Ce_N
-σ     = σ_tr - Δλ (C_e:N)
-ε_p^{n+1} = ε_p^n + Δλ N
-κ^{n+1}   = κ^n + Δλ                                                      (9.3)
-```
+$$\boldsymbol{\sigma} = \boldsymbol{\sigma}^{\mathrm{tr}} - \Delta\lambda\left[2G\operatorname{dev}(\boldsymbol{N}) + K\operatorname{tr}(\boldsymbol{N})\boldsymbol{I}\right],
+\qquad \boldsymbol{\varepsilon}^p_{n+1} = \boldsymbol{\varepsilon}^p_n + \Delta\lambda\boldsymbol{N} \tag{9.3}$$
 
-The volumetric term does not drop out as it does for J2, so both terms of (2.2)
-are kept.
+*(`drucker_prager_plasticity.h: do_smooth_return`)*. The volumetric term does not
+drop out as it does for J2, so both terms of (2.2) are kept.
 
 ### 9.3 Branch condition
 
 (9.1) is only meaningful while the deviatoric correction does not overshoot the
 tip. It stops being so at
 
-```
-G Δλ ≥ q_tr                    drucker_prager_yield_function.h: needs_apex_return  (9.4)
-```
+$$G\Delta\lambda \ge q^{\mathrm{tr}} \tag{9.4}$$
 
-exactly where (9.1) would drive `q` to zero and then negative — the returned
-deviator would flip sign. Beyond it the smooth branch is not the answer and §10
-takes over.
+*(`drucker_prager_yield_function.h: needs_apex_return`)* — exactly where (9.1)
+would drive $q$ to zero and then negative, so the returned deviator would flip
+sign. Beyond it the smooth branch is not the answer and §10 takes over.
 
-**The criterion is applied to the converged `Δλ`, after the Newton has run.** It
-is monotone increasing in `Δλ`, so feeding it an *upper* bound on `Δλ` — for
-instance the zero-hardening `F_tr/G_eff` — and concluding "apex" is invalid: an
-upper bound crossing a threshold says nothing about the true value. Only the
-contrapositive holds. A sound cheap pre-check would need a *lower* bound on `Δλ`,
-which needs an upper bound on `H'`, which is not available; so the smooth Newton
-always runs. `plasticity.md` §4 records what the invalid version cost.
+**The criterion is applied to the converged $\Delta\lambda$, after the Newton has
+run.** It is monotone increasing in $\Delta\lambda$, so feeding it an *upper*
+bound on $\Delta\lambda$ — for instance the zero-hardening
+$F^{\mathrm{tr}}/G_{\mathrm{eff}}$ — and concluding "apex" is invalid: an upper
+bound crossing a threshold says nothing about the true value. Only the
+contrapositive holds. A sound cheap pre-check would need a *lower* bound on
+$\Delta\lambda$, which needs an upper bound on $H'$, which is not available; so
+the smooth Newton always runs. `plasticity.md` §4 records what the invalid
+version cost.
 
 ---
 
@@ -512,57 +496,56 @@ always runs. `plasticity.md` §4 records what the invalid version cost.
 At the apex the deviatoric stress vanishes and the cone condition degenerates to
 a purely volumetric statement:
 
-```
-s = 0            η p = k + H(κ^n + Δκ)                                   (10.1)
-```
+$$\boldsymbol{s} = \boldsymbol{0}, \qquad \eta p = k + H(\kappa_n + \Delta\kappa) \tag{10.1}$$
 
 The algorithm is a **projection**, not a single-multiplier flow update: the
-deviatoric plastic strain is set directly to enforce `q = 0`,
+deviatoric plastic strain is set directly to enforce $q = 0$,
 
-```
-dev(ε_p) = dev(ε)                    drucker_prager_yield_function.h:
-tr(ε_p) += β Δκ                          apex_plastic_strain                     (10.2)
-```
+$$\operatorname{dev}(\boldsymbol{\varepsilon}^p_{n+1}) = \operatorname{dev}(\boldsymbol{\varepsilon}),
+\qquad \operatorname{tr}(\boldsymbol{\varepsilon}^p_{n+1}) = \operatorname{tr}(\boldsymbol{\varepsilon}^p_n) + \beta\Delta\kappa \tag{10.2}$$
 
-while `Δκ` follows from (10.1). With `p = p_tr - KβΔκ`,
+*(`drucker_prager_yield_function.h: apex_plastic_strain`)*, while $\Delta\kappa$
+follows from (10.1). With $p = p^{\mathrm{tr}} - K\beta\Delta\kappa$,
 
-```
-η(p_tr - K β Δκ) - k - H(κ^n + Δκ) = 0
-⟹  φ_apex - G_eff^apex Δκ - k - H = 0                                    (10.3)
+$$\eta(p^{\mathrm{tr}} - K\beta\Delta\kappa) - k - H(\kappa_n + \Delta\kappa) = 0
+\;\Longleftrightarrow\;
+\varphi^{\mathrm{apex}} - G_{\mathrm{eff}}^{\mathrm{apex}}\Delta\kappa - k - H = 0 \tag{10.3}$$
 
-φ_apex       = η p_tr                    apex_modified_sig_eq
-G_eff^apex   = K η β                     apex_effective_modulus
-```
+$$\varphi^{\mathrm{apex}} = \eta p^{\mathrm{tr}}, \qquad
+G_{\mathrm{eff}}^{\mathrm{apex}} = K\eta\beta$$
 
-the same scalar residual as (7.3) with two substituted arguments, which is why
+the same scalar residual as (7.4) with two substituted arguments, which is why
 one `solve_scalar_return` serves both branches.
 
 ### 10.1 Apex tangent
 
-Differentiate (10.1) and `p = p_tr - KβΔκ`:
+Differentiate (10.1) and $p = p^{\mathrm{tr}} - K\beta\Delta\kappa$:
 
-```
-η dp = H' dΔκ
-dp   = dp_tr - K β dΔκ
-⟹  η dp_tr = (H' + Kηβ) dΔκ
-⟹  dp       = dp_tr · H'/(H' + Kηβ)                                      (10.4)
-```
+$$\eta\,\mathrm{d}p = H'\mathrm{d}\Delta\kappa, \qquad
+\mathrm{d}p = \mathrm{d}p^{\mathrm{tr}} - K\beta\,\mathrm{d}\Delta\kappa$$
 
-With `dp_tr = K I:dε` and `σ = p I` on the branch,
+$$\Longrightarrow\quad
+\eta\,\mathrm{d}p^{\mathrm{tr}} = (H' + K\eta\beta)\,\mathrm{d}\Delta\kappa
+\quad\Longrightarrow\quad
+\mathrm{d}p = \mathrm{d}p^{\mathrm{tr}}\,\frac{H'}{H' + K\eta\beta} \tag{10.4}$$
 
-```
-C_ep^apex = K H' / (Kηβ + H') · I⊗I       drucker_prager_yield_function.h:
-                                              apex_tangent                       (10.5)
-```
+With $\mathrm{d}p^{\mathrm{tr}} = K\,\boldsymbol{I}:\mathrm{d}\boldsymbol{\varepsilon}$
+and $\boldsymbol{\sigma} = p\boldsymbol{I}$ on the branch,
+
+$$\mathbb{C}_{ep}^{\mathrm{apex}} = \frac{K H'}{K\eta\beta + H'}\;\boldsymbol{I}\otimes\boldsymbol{I} \tag{10.5}$$
+
+*(`drucker_prager_yield_function.h: apex_tangent`)*
 
 Two properties of (10.5) matter to the host:
 
 - It is **rank one in every case**, not only the degenerate one. It is a multiple
-  of `I⊗I`, and (10.2) pins `dev(ε_p) = dev(ε)` so `dev(σ) ≡ 0` for *any*
+  of $\boldsymbol{I}\otimes\boldsymbol{I}$, and (10.2) pins
+  $\operatorname{dev}(\boldsymbol{\varepsilon}^p) = \operatorname{dev}(\boldsymbol{\varepsilon})$
+  so $\operatorname{dev}(\boldsymbol{\sigma}) \equiv \boldsymbol{0}$ for *any*
   perturbation — every deviatoric mode has zero stiffness. An element with all
   its Gauss points at the apex is singular whatever the hardening.
-- `H' = 0` gives a **zero** tangent regardless of `Kηβ`, since the numerator is
-  `K H'`.
+- $H' = 0$ gives a **zero** tangent regardless of $K\eta\beta$, since the
+  numerator is $KH'$.
 
 It is a **branch** tangent: valid for perturbations that stay on the apex. The
 return map is genuinely non-smooth there, so no single tangent describes both
@@ -574,209 +557,226 @@ sides, and a central difference across the boundary measures neither.
 
 This is the object the host Newton actually consumes:
 
-```
-dσ = C_ep : dε         C_ep = ∂σ^{n+1}/∂ε^{n+1}                          (11.1)
-```
+$$\mathrm{d}\boldsymbol{\sigma} = \mathbb{C}_{ep} : \mathrm{d}\boldsymbol{\varepsilon},
+\qquad \mathbb{C}_{ep} = \frac{\partial\boldsymbol{\sigma}_{n+1}}{\partial\boldsymbol{\varepsilon}_{n+1}} \tag{11.1}$$
 
 the derivative of the **algorithm** — the consistent or algorithmic tangent —
 not of the continuum rate law. The distinction is not academic: §11.5 shows the
-two differ by a term proportional to `Δλ`, and using the continuum one degrades
-the host Newton from quadratic to linear convergence.
+two differ by a term proportional to $\Delta\lambda$, and using the continuum one
+degrades the host Newton from quadratic to linear convergence.
 
 ### 11.1 The two dependencies
 
-From (7.3), `σ` depends on `ε` twice: explicitly, and through `Δλ(ε)`.
+From (7.3), $\boldsymbol{\sigma}$ depends on $\boldsymbol{\varepsilon}$ twice:
+explicitly, and through $\Delta\lambda(\boldsymbol{\varepsilon})$.
 
-```
-σ(ε) = C_e : (ε - ε_p^n - Δλ(ε) N_tr(ε))                                 (11.2)
-```
+$$\boldsymbol{\sigma}(\boldsymbol{\varepsilon}) = \mathbb{C}_e : \left(\boldsymbol{\varepsilon} - \boldsymbol{\varepsilon}^p_n - \Delta\lambda(\boldsymbol{\varepsilon})\,\boldsymbol{N}^{\mathrm{tr}}(\boldsymbol{\varepsilon})\right) \tag{11.2}$$
 
 so by the chain rule
 
-```
-C_ep = A + (∂σ/∂Δλ) ⊗ (dΔλ/dε)                                           (11.3)
-```
+$$\mathbb{C}_{ep} = \mathbb{A} + \frac{\partial\boldsymbol{\sigma}}{\partial\Delta\lambda} \otimes \frac{\mathrm{d}\Delta\lambda}{\mathrm{d}\boldsymbol{\varepsilon}} \tag{11.3}$$
 
-with `A` the derivative at frozen `Δλ`.
+with $\mathbb{A}$ the derivative at frozen $\Delta\lambda$.
 
-### 11.2 The frozen-multiplier part `A`
+### 11.2 The frozen-multiplier part
 
-`N_tr` depends on `ε` through `σ_tr = C_e : (ε - ε_p^n)`, so
+$\boldsymbol{N}^{\mathrm{tr}}$ depends on $\boldsymbol{\varepsilon}$ through
+$\boldsymbol{\sigma}^{\mathrm{tr}} = \mathbb{C}_e : (\boldsymbol{\varepsilon} - \boldsymbol{\varepsilon}^p_n)$, so
 
-```
-dN_tr/dε = (dN/dσ) : C_e
+$$\frac{\mathrm{d}\boldsymbol{N}^{\mathrm{tr}}}{\mathrm{d}\boldsymbol{\varepsilon}}
+= \frac{\partial\boldsymbol{N}}{\partial\boldsymbol{\sigma}} : \mathbb{C}_e$$
 
-A = C_e : (IIsym - Δλ dN_tr/dε)
-  = C_e - Δλ · C_e : (dN/dσ) : C_e                                       (11.4)
-```
+$$\mathbb{A} = \mathbb{C}_e : \left(\mathbb{I}^{\mathrm{sym}} - \Delta\lambda\frac{\mathrm{d}\boldsymbol{N}^{\mathrm{tr}}}{\mathrm{d}\boldsymbol{\varepsilon}}\right)
+= \mathbb{C}_e - \Delta\lambda\,\mathbb{C}_e : \frac{\partial\boldsymbol{N}}{\partial\boldsymbol{\sigma}} : \mathbb{C}_e \tag{11.4}$$
 
 The two flow-normal derivatives:
 
-```
-J2:  dN/dσ = (3/2 · IIdev - N⊗N) / σ_eq        yield_functions.h
-DP:  dN/dσ = (IIdev - s⊗s/(2J₂)) / (2q)        drucker_prager_yield_function.h
-                                               flow_normal_stress_derivative     (11.5)
-```
+$$\text{J2:}\quad \frac{\partial\boldsymbol{N}}{\partial\boldsymbol{\sigma}}
+= \frac{\tfrac{3}{2}\mathbb{I}^{\mathrm{dev}} - \boldsymbol{N}\otimes\boldsymbol{N}}{\sigma_{\mathrm{eq}}}$$
 
-Both are `IIdev` minus a dyad of a deviatoric symmetric tensor. Neither depends
-on the volumetric part of `N` — for DP the `β/3 I` term is constant in `σ` and
+$$\text{DP:}\quad \frac{\partial\boldsymbol{N}}{\partial\boldsymbol{\sigma}}
+= \frac{\mathbb{I}^{\mathrm{dev}} - \boldsymbol{s}\otimes\boldsymbol{s}/(2J_2)}{2q} \tag{11.5}$$
+
+*(`*_yield_function.h: flow_normal_stress_derivative`)*
+
+Both are $\mathbb{I}^{\mathrm{dev}}$ minus a dyad of a deviatoric symmetric
+tensor. Neither depends on the volumetric part of $\boldsymbol{N}$ — for DP the
+$\tfrac{\beta}{3}\boldsymbol{I}$ term is constant in $\boldsymbol{\sigma}$ and
 differentiates away, which is exactly the property §14 warns a future yield
 function not to break.
 
-### 11.3 The `4G²` collapse
+### 11.3 The $4G^2$ collapse
 
-`A` as written needs two rank-four × rank-four contractions. For isotropic `C_e`
-they collapse:
+$\mathbb{A}$ as written needs two rank-four × rank-four contractions. For
+isotropic $\mathbb{C}_e$ they collapse:
 
-```
-C_e : X : C_e = 4G² X                                                    (11.6)
-```
+$$\mathbb{C}_e : \mathbb{X} : \mathbb{C}_e = 4G^2\,\mathbb{X} \tag{11.6}$$
 
-**with four preconditions**, not two: `X` must be *traceless* **and**
+**with four preconditions**, not two: $\mathbb{X}$ must be *traceless* **and**
 *minor-symmetric* in the first index pair, and likewise in the second. From
-`C_e = 3K IIvol + 2G IIdev`, the volumetric term drops only if `X` is traceless,
-and `IIdev : X` returns `X` only if `IIsym : X` does, which is symmetry. A
-traceless `X` that is skew in the first pair gives **100 % error**.
+$\mathbb{C}_e = 3K\,\mathbb{I}^{\mathrm{vol}} + 2G\,\mathbb{I}^{\mathrm{dev}}$,
+the volumetric term drops only if $\mathbb{X}$ is traceless, and
+$\mathbb{I}^{\mathrm{dev}} : \mathbb{X}$ returns $\mathbb{X}$ only if
+$\mathbb{I}^{\mathrm{sym}} : \mathbb{X}$ does, which is symmetry. A traceless
+$\mathbb{X}$ that is skew in the first pair gives **100 % error**.
 
 Both derivatives in (11.5) satisfy all four structurally, so
 
-```
-A = C_e - 4G² Δλ (dN/dσ)                     plasticity_utils.h: compute_tangent (11.7)
-```
+$$\mathbb{A} = \mathbb{C}_e - 4G^2\Delta\lambda\,\frac{\partial\boldsymbol{N}}{\partial\boldsymbol{\sigma}} \tag{11.7}$$
 
-Verified to 2.5e-16 against the explicit double contraction for both models.
+*(`plasticity_utils.h: compute_tangent`)*. Verified to $2.5\times10^{-16}$
+against the explicit double contraction for both models.
 
 ### 11.4 The rank-one part
 
-The multiplier is defined implicitly by `r(Δλ, ε) = 0`, so by the implicit
-function theorem
+The multiplier is defined implicitly by
+$r(\Delta\lambda, \boldsymbol{\varepsilon}) = 0$, so by the implicit function
+theorem
 
-```
-dΔλ/dε = -(∂r/∂Δλ)⁻¹ (∂r/∂ε)                                            (11.8)
-```
+$$\frac{\mathrm{d}\Delta\lambda}{\mathrm{d}\boldsymbol{\varepsilon}}
+= -\left(\frac{\partial r}{\partial\Delta\lambda}\right)^{-1}\frac{\partial r}{\partial\boldsymbol{\varepsilon}} \tag{11.8}$$
 
-From §7.3, `r = φ_tr(ε) - G_eff Δλ - Y₀ - H(κ^n + Δλ)`, and `φ_tr` depends on `ε`
-only through `σ_tr`:
+From §7.3,
+$r = \varphi^{\mathrm{tr}}(\boldsymbol{\varepsilon}) - G_{\mathrm{eff}}\Delta\lambda - Y_0 - H(\kappa_n + \Delta\lambda)$,
+and $\varphi^{\mathrm{tr}}$ depends on $\boldsymbol{\varepsilon}$ only through
+$\boldsymbol{\sigma}^{\mathrm{tr}}$:
 
-```
-∂r/∂ε   = (∂φ/∂σ) : C_e = M : C_e
-∂r/∂Δλ  = -(G_eff + H') = -(M : C_e : N + H')                           (11.9)
-```
+$$\frac{\partial r}{\partial\boldsymbol{\varepsilon}} = \frac{\partial\varphi}{\partial\boldsymbol{\sigma}} : \mathbb{C}_e = \boldsymbol{M} : \mathbb{C}_e,
+\qquad
+\frac{\partial r}{\partial\Delta\lambda} = -(G_{\mathrm{eff}} + H') = -(\boldsymbol{M} : \mathbb{C}_e : \boldsymbol{N} + H') \tag{11.9}$$
 
-and from (7.3), `∂σ/∂Δλ = -C_e : N`. Assembling (11.3):
+and from (7.3),
+$\partial\boldsymbol{\sigma}/\partial\Delta\lambda = -\mathbb{C}_e : \boldsymbol{N}$.
+Assembling (11.3):
 
-```
-             ┌                     ┐   ┌            ┐
-C_ep = C_e - │ 4G² Δλ (dN/dσ)      │ - │ (C_e:N) ⊗ (M:C_e) │
-             └                     ┘   └ ───────────────── ┘
-                                          M:C_e:N + H'                  (11.10)
-```
+$$\boxed{\;
+\mathbb{C}_{ep} = \mathbb{C}_e - 4G^2\Delta\lambda\,\frac{\partial\boldsymbol{N}}{\partial\boldsymbol{\sigma}}
+- \frac{(\mathbb{C}_e : \boldsymbol{N}) \otimes (\boldsymbol{M} : \mathbb{C}_e)}
+{\boldsymbol{M} : \mathbb{C}_e : \boldsymbol{N} + H'}
+\;} \tag{11.10}$$
 
 which is `compute_tangent` line for line.
 
 ### 11.5 The continuum tangent, and why it is not enough
 
-Setting `Δλ = 0` in (11.10) leaves
+Setting $\Delta\lambda = 0$ in (11.10) leaves
 
-```
-C_ep^cont = C_e - (C_e:N) ⊗ (M:C_e) / (G_eff + H')                      (11.11)
-```
+$$\mathbb{C}_{ep}^{\mathrm{cont}} = \mathbb{C}_e - \frac{(\mathbb{C}_e : \boldsymbol{N}) \otimes (\boldsymbol{M} : \mathbb{C}_e)}{G_{\mathrm{eff}} + H'} \tag{11.11}$$
 
 which is the classical elastoplastic tangent obtained from the rate form (6.3)
-alone. The difference is the `4G² Δλ (dN/dσ)` term, which accounts for the
-*rotation of the flow direction over the finite step*. It vanishes only in the
-limit of an infinitesimal step. Keeping it is what makes the tangent consistent
-with the discrete update and the host Newton quadratic.
+alone. The difference is the
+$4G^2\Delta\lambda\,\partial\boldsymbol{N}/\partial\boldsymbol{\sigma}$ term,
+which accounts for the *rotation of the flow direction over the finite step*. It
+vanishes only in the limit of an infinitesimal step. Keeping it is what makes
+the tangent consistent with the discrete update and the host Newton quadratic.
 
 ### 11.6 J2 in closed form
 
-For J2, `M = N`, `C_e : N = 2G N`, `M : C_e : N = 3G`, and `dN/dσ` is (11.5).
-Substituting into (11.10):
+For J2, $\boldsymbol{M} = \boldsymbol{N}$,
+$\mathbb{C}_e : \boldsymbol{N} = 2G\boldsymbol{N}$,
+$\boldsymbol{M} : \mathbb{C}_e : \boldsymbol{N} = 3G$, and
+$\partial\boldsymbol{N}/\partial\boldsymbol{\sigma}$ is (11.5). Substituting into
+(11.10):
 
-```
-A = C_e - 4G²Δλ (3/2 · IIdev - N⊗N)/σ_eq
-  = C_e - (6G²Δλ/σ_eq) IIdev + (4G²Δλ/σ_eq) N⊗N
+$$\begin{aligned}
+\mathbb{A} &= \mathbb{C}_e - 4G^2\Delta\lambda\,\frac{\tfrac{3}{2}\mathbb{I}^{\mathrm{dev}} - \boldsymbol{N}\otimes\boldsymbol{N}}{\sigma_{\mathrm{eq}}} \\[2pt]
+&= \mathbb{C}_e - \frac{6G^2\Delta\lambda}{\sigma_{\mathrm{eq}}}\mathbb{I}^{\mathrm{dev}}
++ \frac{4G^2\Delta\lambda}{\sigma_{\mathrm{eq}}}\boldsymbol{N}\otimes\boldsymbol{N}
+\end{aligned}$$
 
-rank-one term = -(2G N) ⊗ (2G N)/(3G + H') = -(4G²/(3G+H')) N⊗N
-```
+$$\text{rank-one term} = -\frac{(2G\boldsymbol{N})\otimes(2G\boldsymbol{N})}{3G + H'}
+= -\frac{4G^2}{3G + H'}\boldsymbol{N}\otimes\boldsymbol{N}$$
 
-Collecting the two `N⊗N` contributions:
+Collecting the two $\boldsymbol{N}\otimes\boldsymbol{N}$ contributions:
 
-```
-C_ep = C_e - a IIdev + b N⊗N
+$$\mathbb{C}_{ep} = \mathbb{C}_e - a\,\mathbb{I}^{\mathrm{dev}} + b\,\boldsymbol{N}\otimes\boldsymbol{N}$$
 
-a = 6G² Δλ / σ_eq_tr
-b = 4G² Δλ / σ_eq_tr - 4G²/(3G + H')       j2_plasticity.h: m_tangent           (11.12)
-```
+$$a = \frac{6G^2\Delta\lambda}{\sigma_{\mathrm{eq}}^{\mathrm{tr}}},
+\qquad
+b = \frac{4G^2\Delta\lambda}{\sigma_{\mathrm{eq}}^{\mathrm{tr}}} - \frac{4G^2}{3G + H'} \tag{11.12}$$
 
-term for term what the code computes. This is the Simo-Hughes radial-return
-tangent under the `σ_eq = √(3J₂)`, `Δλ = Δε_p^eq` normalization; converting with
-`Δγ = √(3/2) Δλ` reproduces their `2Gθ` / `-2Gθ̄` coefficients identically.
+*(`j2_plasticity.h: m_tangent`)* — term for term what the code computes. This is
+the Simo–Hughes radial-return tangent under the
+$\sigma_{\mathrm{eq}} = \sqrt{3J_2}$,
+$\Delta\lambda = \Delta\varepsilon^p_{\mathrm{eq}}$ normalization; converting
+with $\Delta\gamma = \sqrt{3/2}\,\Delta\lambda$ reproduces their $2G\theta$ /
+$-2G\bar\theta$ coefficients identically.
 
-`C_ep` here is **symmetric**: `M = N`, so the dyad in (11.10) is `N⊗N`.
+$\mathbb{C}_{ep}$ here is **symmetric**: $\boldsymbol{M} = \boldsymbol{N}$, so
+the dyad in (11.10) is $\boldsymbol{N}\otimes\boldsymbol{N}$.
 
-### 11.7 Drucker-Prager in closed form
+### 11.7 Drucker–Prager in closed form
 
 DP keeps the general form (11.10). Two differences from J2:
 
-- `M ≠ N` when `β ≠ η`, so the rank-one term is `(C_e:N) ⊗ (M:C_e)` with two
-  *different* tensors. **`C_ep` is not symmetric.** That is intrinsic to
-  non-associative flow, not an implementation artefact, and a host assembling
-  only the upper triangle will get the wrong stiffness.
-- `C_e : N` retains its volumetric part (6.6), and `M : C_e = 2G dev(M) + K tr(M) I`
-  likewise with `tr(M) = η`.
+- $\boldsymbol{M} \neq \boldsymbol{N}$ when $\beta \neq \eta$, so the rank-one
+  term is
+  $(\mathbb{C}_e : \boldsymbol{N}) \otimes (\boldsymbol{M} : \mathbb{C}_e)$ with
+  two *different* tensors. **$\mathbb{C}_{ep}$ is not symmetric.** That is
+  intrinsic to non-associative flow, not an implementation artefact, and a host
+  assembling only the upper triangle will get the wrong stiffness.
+- $\mathbb{C}_e : \boldsymbol{N}$ retains its volumetric part (6.6), and
+  $\boldsymbol{M} : \mathbb{C}_e = 2G\operatorname{dev}(\boldsymbol{M}) + K\operatorname{tr}(\boldsymbol{M})\boldsymbol{I}$
+  likewise with $\operatorname{tr}(\boldsymbol{M}) = \eta$.
 
 ### 11.8 Where the tangent is evaluated
 
-At the **trial** state, not the converged one. The `∂ε_p/∂ε|_Δλ` term
-differentiates `N_tr(σ_tr)`, so `dN/dσ` must be taken at `σ_eq_tr`. Substituting
-the converged `σ_eq = σ_eq_tr - 3GΔλ` degrades the tangent by 2.6e-3 relative
-against a central difference — a real loss of Newton rate, measured, not a wash.
+At the **trial** state, not the converged one. The
+$\partial\boldsymbol{\varepsilon}^p/\partial\boldsymbol{\varepsilon}|_{\Delta\lambda}$
+term differentiates
+$\boldsymbol{N}^{\mathrm{tr}}(\boldsymbol{\sigma}^{\mathrm{tr}})$, so
+$\partial\boldsymbol{N}/\partial\boldsymbol{\sigma}$ must be taken at
+$\sigma_{\mathrm{eq}}^{\mathrm{tr}}$. Substituting the converged
+$\sigma_{\mathrm{eq}} = \sigma_{\mathrm{eq}}^{\mathrm{tr}} - 3G\Delta\lambda$
+degrades the tangent by $2.6\times10^{-3}$ relative against a central difference
+— a real loss of Newton rate, measured, not a wash.
 
-`N` itself is a separate question: for radial return `s ∥ s_tr` exactly, so
-`N_tr ≡ N`, and that substitution genuinely does not matter. The code uses trial
-quantities for both.
+$\boldsymbol{N}$ itself is a separate question: for radial return
+$\boldsymbol{s} \parallel \boldsymbol{s}^{\mathrm{tr}}$ exactly, so
+$\boldsymbol{N}^{\mathrm{tr}} \equiv \boldsymbol{N}$, and that substitution
+genuinely does not matter. The code uses trial quantities for both.
 
 ---
 
 ## 12. The multi-stage variant
 
-`j2_rk_plasticity` replaces the single backward-Euler step with a Runge-Kutta
-tableau `(a, b, c)`. Per stage `i`, with `s` stages:
+`j2_rk_plasticity` replaces the single backward-Euler step with a Runge–Kutta
+tableau $(a_{ij}, b_i, c_i)$. Per stage $i$, of $s$ stages:
 
-```
-ε_p^{(i)} = ε_p^n + Σ_{j<i} a_ij Δλ_j N_j  ( + a_ii Δλ_i N_tr  if implicit )
-κ^{(i)}   = κ^n   + Σ_{j<i} a_ij Δλ_j      ( + a_ii Δλ_i       if implicit )
-```
+$$\boldsymbol{\varepsilon}^{p,(i)} = \boldsymbol{\varepsilon}^p_n
++ \sum_{j<i} a_{ij}\Delta\lambda_j\boldsymbol{N}_j
+\;\left(+\; a_{ii}\Delta\lambda_i\boldsymbol{N}^{\mathrm{tr}}\ \text{if implicit}\right)$$
 
-with `Δλ_i` from the same scalar residual as (7.3) evaluated at the stage state —
-directly for an explicit stage (`a_ii = 0`), by Newton for an implicit one. The
-step closes with the `b`-weighted sum:
+$$\kappa^{(i)} = \kappa_n + \sum_{j<i} a_{ij}\Delta\lambda_j
+\;\left(+\; a_{ii}\Delta\lambda_i\ \text{if implicit}\right) \tag{12.1}$$
 
-```
-ε_p^{n+1} = ε_p^n + Σ_i b_i Δλ_i N_i
-κ^{n+1}   = κ^n   + Σ_i b_i Δλ_i
-Δλ_total  = Σ_i b_i Δλ_i                                                 (12.1)
-```
+with $\Delta\lambda_i$ from the same scalar residual as (7.4) evaluated at the
+stage state — directly for an explicit stage ($a_{ii} = 0$), by Newton for an
+implicit one. The step closes with the $b$-weighted sum:
+
+$$\boldsymbol{\varepsilon}^p_{n+1} = \boldsymbol{\varepsilon}^p_n + \sum_i b_i\Delta\lambda_i\boldsymbol{N}_i,
+\qquad \kappa_{n+1} = \kappa_n + \sum_i b_i\Delta\lambda_i,
+\qquad \Delta\lambda_{\mathrm{tot}} = \sum_i b_i\Delta\lambda_i \tag{12.2}$$
 
 and the tangent is (11.10) evaluated at the **converged** state with
-`Δλ = Δλ_total`.
+$\Delta\lambda = \Delta\lambda_{\mathrm{tot}}$.
 
 Three things follow, all of them limitations worth stating plainly:
 
-- **The stage sum runs over `j < i` only.** A tableau with coupling *above* the
-  diagonal — a fully implicit scheme such as Gauss-Legendre — is not integrated
-  by this loop; its `a_0,1` is silently dropped. Before it was guarded,
-  `gauss_legendre_4` produced an equivalent plastic strain of **-8.81** with a
-  yield residual of +10880 and no error. The constructor now rejects any tableau
-  that is neither DIRK nor explicit.
-- **The implicit stage iterates on `N_tr`, not on its own stage normal.** It
-  stores the converged stage normal afterwards. This is an approximation, and it
-  is one reason the RK tangent is not exact.
-- **The tangent is assembled from `Δλ_total` rather than differentiated through
-  the stages.** Measured against a central difference on fully plastic steps it
-  sits at ~3e-4, against ~1e-10 for the monolithic J2 tangent. That is a genuine
-  approximation, not roundoff, and the test bounds reflect it.
+- **The stage sum runs over $j < i$ only.** A tableau with coupling *above* the
+  diagonal — a fully implicit scheme such as Gauss–Legendre — is not integrated
+  by this loop; its $a_{01}$ is silently dropped. Before it was guarded,
+  `gauss_legendre_4` produced an equivalent plastic strain of $-8.81$ with a
+  yield residual of $+10880$ and no error. The constructor now rejects any
+  tableau that is neither DIRK nor explicit.
+- **The implicit stage iterates on $\boldsymbol{N}^{\mathrm{tr}}$, not on its own
+  stage normal.** It stores the converged stage normal afterwards. This is an
+  approximation, and it is one reason the RK tangent is not exact.
+- **The tangent is assembled from $\Delta\lambda_{\mathrm{tot}}$ rather than
+  differentiated through the stages.** Measured against a central difference on
+  fully plastic steps it sits at $\sim3\times10^{-4}$, against
+  $\sim10^{-10}$ for the monolithic J2 tangent. That is a genuine approximation,
+  not roundoff, and the test bounds reflect it.
 
 For linear hardening the stage residual is linear, so every consistent DIRK or
 explicit scheme lands on the same root as the monolithic map — which is the exact
@@ -788,50 +788,50 @@ identity §7.3 uses as a test.
 
 | equation | quantity | code |
 |---|---|---|
-| (2.1) | `C_e = K I⊗I + 2G IIdev` | `plasticity_utils.h: make_isotropic_tangent` |
-| (3.1) | `σ_eq = √(3J₂)`, `F` | `yield_functions.h: equivalent_stress`, `trial_yield` |
-| (3.2) | `q = √J₂`, `F = q + ηp - k - H` | `drucker_prager_yield_function.h: trial_yield` |
-| (4.3) | `N = 3/2 s/σ_eq` | `yield_functions.h: flow_normal` |
-| (4.5) | `N`, `M` with `β`, `η` | `drucker_prager_yield_function.h: flow_normal`, `yield_normal` |
-| (6.5) | `G_eff = 3G` | `yield_functions.h: effective_modulus` |
-| (6.7) | `G_eff = G + Kηβ` | `drucker_prager_yield_function.h: effective_modulus` |
+| (2.1) | $\mathbb{C}_e = K\boldsymbol{I}\otimes\boldsymbol{I} + 2G\mathbb{I}^{\mathrm{dev}}$ | `plasticity_utils.h: make_isotropic_tangent` |
+| (3.1) | $\sigma_{\mathrm{eq}} = \sqrt{3J_2}$, $F$ | `yield_functions.h: equivalent_stress`, `trial_yield` |
+| (3.2) | $q = \sqrt{J_2}$, $F = q + \eta p - k - H$ | `drucker_prager_yield_function.h: trial_yield` |
+| (4.2) | $\boldsymbol{N} = \tfrac{3}{2}\boldsymbol{s}/\sigma_{\mathrm{eq}}$ | `yield_functions.h: flow_normal` |
+| (4.4) | $\boldsymbol{N}$, $\boldsymbol{M}$ with $\beta$, $\eta$ | `drucker_prager_yield_function.h: flow_normal`, `yield_normal` |
+| (6.5) | $G_{\mathrm{eff}} = 3G$ | `yield_functions.h: effective_modulus` |
+| (6.7) | $G_{\mathrm{eff}} = G + K\eta\beta$ | `drucker_prager_yield_function.h: effective_modulus` |
 | (7.2) | trial state | `plasticity_utils.h: compute_trial`, `evaluate_at_state` |
-| (7.3) | scalar residual, jacobian | `*_yield_function.h: residual`, `jacobian` |
-| (8.3) | `σ = σ_tr - 2GΔλ N` | `j2_plasticity.h: compute` |
-| (9.3) | `σ = σ_tr - Δλ C_e:N` | `drucker_prager_plasticity.h: do_smooth_return` |
-| (9.4) | `GΔλ ≥ q_tr` | `drucker_prager_yield_function.h: needs_apex_return` |
+| (7.4) | scalar residual, jacobian | `*_yield_function.h: residual`, `jacobian` |
+| (8.3) | $\boldsymbol{\sigma} = \boldsymbol{\sigma}^{\mathrm{tr}} - 2G\Delta\lambda\boldsymbol{N}$ | `j2_plasticity.h: compute` |
+| (9.3) | $\boldsymbol{\sigma} = \boldsymbol{\sigma}^{\mathrm{tr}} - \Delta\lambda\,\mathbb{C}_e:\boldsymbol{N}$ | `drucker_prager_plasticity.h: do_smooth_return` |
+| (9.4) | $G\Delta\lambda \ge q^{\mathrm{tr}}$ | `drucker_prager_yield_function.h: needs_apex_return` |
 | (10.2) | apex projection | `drucker_prager_yield_function.h: apex_plastic_strain` |
-| (10.5) | `C_ep^apex` | `drucker_prager_yield_function.h: apex_tangent` |
-| (11.5) | `dN/dσ` | `*_yield_function.h: flow_normal_stress_derivative` |
-| (11.10) | general `C_ep` | `plasticity_utils.h: compute_tangent` |
-| (11.12) | J2 closed-form `C_ep` | `j2_plasticity.h: compute` |
+| (10.5) | $\mathbb{C}_{ep}^{\mathrm{apex}}$ | `drucker_prager_yield_function.h: apex_tangent` |
+| (11.5) | $\partial\boldsymbol{N}/\partial\boldsymbol{\sigma}$ | `*_yield_function.h: flow_normal_stress_derivative` |
+| (11.10) | general $\mathbb{C}_{ep}$ | `plasticity_utils.h: compute_tangent` |
+| (11.12) | J2 closed-form $\mathbb{C}_{ep}$ | `j2_plasticity.h: compute` |
 | (12.1) | RK stage assembly | `j2_rk_plasticity.h: compute` |
 
 ### 13.1 The identities, checked
 
 Every algebraic identity this document rests on, evaluated on a generic
-multiaxial stress with `K = 166.67`, `G = 76.92`, `η = 0.1`, `β = 0.05`, against
-the actual yield-function and tangent code:
+multiaxial stress with $K = 166.67$, $G = 76.92$, $\eta = 0.1$, $\beta = 0.05$,
+against the actual yield-function and tangent code:
 
 | identity | equation | result |
 |---|---|---|
-| `C:a = K tr(a) I + 2G dev(a)` | (2.2) | 4.1e-12 on a scale of 3.6e+4 |
-| `tr(N) = 0` (J2) | (4.4) | -2.8e-17 |
-| `N:N = 3/2` (J2) | (4.4) | -2.2e-16 |
-| `C:N = 2G N` (J2) | (4.4) | 1.5e-14 |
-| `N:C:N = 3G` | (6.5) | 230.760000000 vs 230.760000000 |
-| `tr(N) = β` (DP) | (4.6) | 1.4e-17 |
-| `C:N = G s/q + Kβ I` (DP) | (6.6) | 1.7e-14 |
-| `M:C:N = G + Kηβ` | (6.7) | 77.753350000 vs 77.753350000 |
-| `C:X:C = 4G² X`, J2 `dN/dσ` | (11.6) | rel 2.2e-16 |
-| `C:X:C = 4G² X`, DP `dN/dσ` | (11.6) | rel 6.6e-16 |
-| same, `X` traceless but **skew** in the first pair | (11.6) | **rel 1.000** |
-| J2 closed form == general `compute_tangent` | (11.12) | rel 1.2e-16 |
-| `e_c/e_t` uniaxial-strain asymmetry | (3.3) | 0.189598 / 0.277190 = 1.462 |
+| $\mathbb{C}_e:\boldsymbol{a} = K\operatorname{tr}(\boldsymbol{a})\boldsymbol{I} + 2G\operatorname{dev}(\boldsymbol{a})$ | (2.2) | $4.1\times10^{-12}$ on a scale of $3.6\times10^{4}$ |
+| $\operatorname{tr}(\boldsymbol{N}) = 0$ (J2) | (4.3) | $-2.8\times10^{-17}$ |
+| $\boldsymbol{N}:\boldsymbol{N} = 3/2$ (J2) | (4.3) | $-2.2\times10^{-16}$ |
+| $\mathbb{C}_e:\boldsymbol{N} = 2G\boldsymbol{N}$ (J2) | (4.3) | $1.5\times10^{-14}$ |
+| $\boldsymbol{N}:\mathbb{C}_e:\boldsymbol{N} = 3G$ | (6.5) | $230.760000000$ vs $230.760000000$ |
+| $\operatorname{tr}(\boldsymbol{N}) = \beta$ (DP) | (4.5) | $1.4\times10^{-17}$ |
+| $\mathbb{C}_e:\boldsymbol{N} = G\boldsymbol{s}/q + K\beta\boldsymbol{I}$ (DP) | (6.6) | $1.7\times10^{-14}$ |
+| $\boldsymbol{M}:\mathbb{C}_e:\boldsymbol{N} = G + K\eta\beta$ | (6.7) | $77.753350000$ vs $77.753350000$ |
+| $\mathbb{C}_e:\mathbb{X}:\mathbb{C}_e = 4G^2\mathbb{X}$, J2 | (11.6) | rel $2.2\times10^{-16}$ |
+| $\mathbb{C}_e:\mathbb{X}:\mathbb{C}_e = 4G^2\mathbb{X}$, DP | (11.6) | rel $6.6\times10^{-16}$ |
+| same, $\mathbb{X}$ traceless but **skew** in the first pair | (11.6) | **rel $1.000$** |
+| J2 closed form $=$ general `compute_tangent` | (11.12) | rel $1.2\times10^{-16}$ |
+| $e_c/e_t$ uniaxial-strain asymmetry | (3.3) | $0.189598 / 0.277190 = 1.462$ |
 
-The skew row is the point of the four preconditions in §11.3: `X` traceless in
-both index pairs is not sufficient, and the failure is total rather than
-marginal.
+The skew row is the point of the four preconditions in §11.3: $\mathbb{X}$
+traceless in both index pairs is not sufficient, and the failure is total rather
+than marginal.
 
 The closed forms are also checked continuously against central differences
 through the graph by `tangent_checker` — see `plasticity.md` §5 for the load
@@ -844,43 +844,48 @@ paths and what that check can and cannot see.
 Collected, because each one is a place where a plausible extension silently
 produces wrong numbers.
 
-**Isotropic elasticity, in three independent places.** `G_eff = M:C_e:N` is a
-material constant only for isotropic `C_e` — otherwise the *residual* is wrong,
-not just the tangent. The stress shortcut (2.2) is the second. The `4G²` collapse
-(11.6) is the third. Measured with `C_e` made mildly orthotropic (1.6× on one
-shear component): the closed-form tangent misses a central difference by 2.3 %,
-the general `compute_tangent` by 1.9 %, and the stress shortcut by 5.19 absolute.
-Percent-level errors with no diagnostic. This is why the materials build `C_e`
-themselves.
+**Isotropic elasticity, in three independent places.**
+$G_{\mathrm{eff}} = \boldsymbol{M}:\mathbb{C}_e:\boldsymbol{N}$ is a material
+constant only for isotropic $\mathbb{C}_e$ — otherwise the *residual* is wrong,
+not just the tangent. The stress shortcut (2.2) is the second. The $4G^2$
+collapse (11.6) is the third. Measured with $\mathbb{C}_e$ made mildly
+orthotropic ($1.6\times$ on one shear component): the closed-form tangent misses
+a central difference by 2.3 %, the general `compute_tangent` by 1.9 %, and the
+stress shortcut by $5.19$ absolute. Percent-level errors with no diagnostic.
+This is why the materials build $\mathbb{C}_e$ themselves.
 
-**The volumetric part of `N` must be constant in `σ`.** This is the operative
-form of the `4G²` precondition for a *future* yield function, and it is narrower
-than "deviatoric". A pressure-dependent dilatancy `β(p) = β₀ + c·p` adds
-`(c/9) I⊗I` to `dN/dσ`, traceless in neither index pair; `c = 1e-3` measures a
-**35 %** tangent error, and the error scales with `K/G` rather than with `c`
-relative to `β`. Cap models, Matsuoka-Nakai and Lade surfaces, and any smoothed
-cone tip share the property. Nothing checks it.
+**The volumetric part of $\boldsymbol{N}$ must be constant in
+$\boldsymbol{\sigma}$.** This is the operative form of the $4G^2$ precondition
+for a *future* yield function, and it is narrower than "deviatoric". A
+pressure-dependent dilatancy $\beta(p) = \beta_0 + c\,p$ adds
+$\tfrac{c}{9}\boldsymbol{I}\otimes\boldsymbol{I}$ to
+$\partial\boldsymbol{N}/\partial\boldsymbol{\sigma}$, traceless in neither index
+pair; $c = 10^{-3}$ measures a **35 %** tangent error, and the error scales with
+$K/G$ rather than with $c$ relative to $\beta$. Cap models, Matsuoka–Nakai and
+Lade surfaces, and any smoothed cone tip share the property. Nothing checks it.
 
 **Small strain.** No objective rate, no frame rotation. Nothing detects the
 violation.
 
-**`H' > -G_eff`.** At or below that the yield residual has positive slope and
-the return map has no admissible solution. Both materials throw rather than
-clamp: clamping `Δλ` to zero returns the elastic stress, and on a uniaxial path
-with `H' = -300` against `3G = 230.8` the equivalent stress climbed past
-`σ₀ = 50` to 76.9 with `α` identically zero — 54 % outside the yield surface,
-silently. Moderate softening works. The *apex* criterion also inverts under
-softening, giving a missed apex with `q < 0`; that is still unguarded.
+**$H' > -G_{\mathrm{eff}}$.** At or below that the yield residual has positive
+slope and the return map has no admissible solution. Both materials throw rather
+than clamp: clamping $\Delta\lambda$ to zero returns the elastic stress, and on a
+uniaxial path with $H' = -300$ against $3G = 230.8$ the equivalent stress climbed
+past $\sigma_0 = 50$ to $76.9$ with $\alpha$ identically zero — 54 % outside the
+yield surface, silently. Moderate softening works. The *apex* criterion also
+inverts under softening, giving a missed apex with $q < 0$; that is still
+unguarded.
 
-**`D = 3` for the pressure terms.** `dev` divides the trace by `D`, but
-`p = tr(σ)/3` and the `η/3 I`, `β/3 I` terms in (4.5) use a hard 3. At `D = 3`
-they agree. At `D = 2` they do not, so the DP normals and the deviator would use
-different conventions. `material_policy_2d` exists but is registered by nothing
-and instantiated by no test, so this is latent — as was the `3K IIvol` spelling
-of §2 until it was measured at 30 % and fixed. If 2D is ever wanted, these are
-the lines to revisit.
+**$D = 3$ for the pressure terms.** $\operatorname{dev}$ divides the trace by
+$D$, but $p = \operatorname{tr}(\boldsymbol{\sigma})/3$ and the
+$\tfrac{\eta}{3}\boldsymbol{I}$, $\tfrac{\beta}{3}\boldsymbol{I}$ terms in (4.4)
+use a hard $3$. At $D = 3$ they agree. At $D = 2$ they do not, so the DP normals
+and the deviator would use different conventions. `material_policy_2d` exists but
+is registered by nothing and instantiated by no test, so this is latent — as was
+the $3K\,\mathbb{I}^{\mathrm{vol}}$ spelling of §2 until it was measured at 30 %
+and fixed. If 2D is ever wanted, these are the lines to revisit.
 
 **The apex tangent is a branch tangent.** Verified consistent *on* the branch to
-3.8e-8; a perturbation leaving the apex back onto the smooth cone is not covered
-and cannot be by a central difference. At the true branch boundary `C₀₁₀₁` jumps
-from 0 to 71.4 — inherent to a non-smooth return map.
+$3.8\times10^{-8}$; a perturbation leaving the apex back onto the smooth cone is
+not covered and cannot be by a central difference. At the true branch boundary
+$C_{0101}$ jumps from $0$ to $71.4$ — inherent to a non-smooth return map.
