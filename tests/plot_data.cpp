@@ -6,8 +6,9 @@
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/materials/linear_isotropic_hardening.h"
 #include "numsim-materials/materials/drucker_prager_yield_function.h"
-#include "numsim-materials/materials/small_strain_plasticity.h"
-#include "numsim-materials/solvers/backward_euler.h"
+#include "numsim-materials/materials/drucker_prager_plasticity.h"
+#include "numsim-materials/materials/j2_plasticity.h"
+#include "numsim-materials/solvers/local_newton.h"
 #include "numsim-materials/postprocessing/numerical_diff_checker.h"
 
 using policy = numsim::materials::material_policy_default;
@@ -67,7 +68,7 @@ run_result run_j2(T increment, int steps,
 
   p.clear();
   p.insert<std::string>("name", "solver");
-  ctx.create<numsim::materials::backward_euler<policy>>(p);
+  ctx.create<numsim::materials::local_newton<policy>>(p);
 
   p.clear();
   p.insert<std::string>("name", "hardening");
@@ -77,10 +78,10 @@ run_result run_j2(T increment, int steps,
 
   p.clear();
   p.insert<std::string>("name", "j2");
-  p.insert<std::string>("elastic_source", "elastic");
   p.insert<std::string>("hardening_source", "hardening");
   p.insert<std::string>("strain_source", "stepper");
   p.insert<std::string>("solver_source", "solver");
+  p.insert<T>("K", K_val);
   p.insert<T>("G", G_val);
   p.insert<T>("sigma_0", sigma_0);
   ctx.create<j2_plasticity>(p);
@@ -132,7 +133,7 @@ run_result run_dp(T increment, int steps,
 
   p.clear();
   p.insert<std::string>("name", "solver");
-  ctx.create<numsim::materials::backward_euler<policy>>(p);
+  ctx.create<numsim::materials::local_newton<policy>>(p);
 
   p.clear();
   p.insert<std::string>("name", "hardening");
@@ -140,17 +141,17 @@ run_result run_dp(T increment, int steps,
   p.insert<T>("K", H_mod);
   ctx.create<numsim::materials::linear_isotropic_hardening<policy>>(p);
 
-  dp_yield yf(T{0.3}, T{0.15}, K_val);
 
   p.clear();
   p.insert<std::string>("name", "dp");
-  p.insert<std::string>("elastic_source", "elastic");
   p.insert<std::string>("hardening_source", "hardening");
   p.insert<std::string>("strain_source", "stepper");
   p.insert<std::string>("solver_source", "solver");
   p.insert<T>("G", G_val);
   p.insert<T>("sigma_0", sigma_0);
-  p.insert<dp_yield>("yield_function", yf);
+  p.insert<T>("eta", T{0.3});
+  p.insert<T>("beta", T{0.15});
+  p.insert<T>("K_bulk", K_val);
   ctx.create<dp_plasticity>(p);
 
   p.clear();

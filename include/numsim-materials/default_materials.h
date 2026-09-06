@@ -1,15 +1,17 @@
-#ifndef NUMSIM_MATERIALS_DEFAULT_MATERIALS_H
-#define NUMSIM_MATERIALS_DEFAULT_MATERIALS_H
+#ifndef DEFAULT_MATERIALS_H
+#define DEFAULT_MATERIALS_H
 
 #include <numsim-core/object_registry.h>
 #include "numsim-materials/core/material_base.h"
 #include "numsim-materials/solvers/backward_euler.h"
+#include "numsim-materials/solvers/local_newton.h"
 #include "numsim-materials/solvers/vector_newton.h"
 #include "numsim-materials/materials/scalar_stepper.h"
 #include "numsim-materials/materials/constant_scalar.h"
 #include "numsim-materials/materials/props_scalar.h"
-#include "numsim-materials/materials/small_strain_plasticity.h"
-#include "numsim-materials/materials/rk_plasticity.h"
+#include "numsim-materials/materials/j2_plasticity.h"
+#include "numsim-materials/materials/j2_rk_plasticity.h"
+#include "numsim-materials/materials/drucker_prager_plasticity.h"
 #include "numsim-materials/materials/linear_isotropic_hardening.h"
 #include "numsim-materials/materials/exponential_isotropic_hardening.h"
 #include "numsim-materials/materials/linear_damage_law.h"
@@ -84,21 +86,21 @@ void register_default_materials() {
   factory.template register_type<constant_scalar<Traits>>("constant_scalar");
   factory.template register_type<props_scalar<Traits>>("props_scalar");
 
-  // Plasticity. small_strain_plasticity and rk_plasticity are templates over
-  // the yield-function TYPE, so the registrable names are the concrete
-  // aliases, not the templates.
-  //
+  // Plasticity. Each model is its own class -- j2_plasticity,
+  // j2_rk_plasticity and drucker_prager_plasticity -- rather than a template
+  // over the yield-function type, so the registrable names are the classes.
   factory.template register_type<j2_plasticity<Traits>>("j2_plasticity");
   factory.template register_type<j2_rk_plasticity<Traits>>("j2_rk_plasticity");
 
-  // drucker_prager_plasticity is deliberately NOT registered. Its yield
-  // function carries eta, beta and K_bulk and arrives as a C++ object through
-  // an undeclared "yield_function" parameter that the JSON reader cannot
-  // convert. Registered, a document could name it and would silently get a
-  // DEFAULT-constructed yield function -- eta = beta = k = 0 -- which builds,
-  // runs, never yields, and is indistinguishable from elasticity. An unknown
-  // material type is a loud error naming the type; a silently elastic
-  // Drucker-Prager is not. Register it once the yield function is expressible.
+  // Drucker-Prager was held back while its cone parameters arrived inside a
+  // C++ "yield_function" object the JSON reader could not convert: a document
+  // naming it would have got a DEFAULT-constructed one -- eta = beta = k = 0 --
+  // which builds, runs, never yields, and is indistinguishable from
+  // elasticity. #43 made eta, beta and K_bulk plain required scalars, so a
+  // deck now either supplies them or gets a named missing-parameter error.
+  // That was the stated condition for registering it (closes #33).
+  factory.template register_type<drucker_prager_plasticity<Traits>>(
+      "drucker_prager_plasticity");
 
   factory.template register_type<linear_isotropic_hardening<Traits>>(
       "linear_isotropic_hardening");
@@ -114,6 +116,11 @@ void register_default_materials() {
   factory.template register_type<linear_stress<Traits>>("linear_stress");
   factory.template register_type<autocatalytic_reaction<Traits>>("autocatalytic_reaction");
   factory.template register_type<backward_euler<Traits>>("backward_euler");
+  // local_newton is the solver every return map names through "solver_source".
+  // Registering the plasticity classes without it leaves them unreachable from
+  // a document anyway: the deck can name j2_plasticity but not the solver it
+  // requires.
+  factory.template register_type<local_newton<Traits>>("local_newton");
   factory.template register_type<tensor_component_stepper<1, Traits>>("tensor_component_stepper_rank1");
   factory.template register_type<tensor_component_stepper<2, Traits>>("tensor_component_stepper_rank2");
   factory.template register_type<scalar_identity_weight<Traits>>("scalar_identity_weight");
@@ -131,4 +138,4 @@ void register_default_materials() {
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_DEFAULT_MATERIALS_H
+#endif // DEFAULT_MATERIALS_H

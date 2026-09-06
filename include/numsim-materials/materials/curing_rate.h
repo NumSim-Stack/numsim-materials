@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_CURING_RATE_H
-#define NUMSIM_MATERIALS_CURING_RATE_H
+#ifndef CURING_RATE_H
+#define CURING_RATE_H
 
 #include <algorithm>
 #include <cmath>
@@ -86,4 +86,4 @@ private:
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_CURING_RATE_H
+#endif // CURING_RATE_H

@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_UNKNOWN_SPEC_H
-#define NUMSIM_MATERIALS_UNKNOWN_SPEC_H
+#ifndef UNKNOWN_SPEC_H
+#define UNKNOWN_SPEC_H
 
 #include <string>
 #include <utility>
@@ -31,4 +31,4 @@ using block_ref = std::pair<std::string, std::string>;
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_UNKNOWN_SPEC_H
+#endif // UNKNOWN_SPEC_H
