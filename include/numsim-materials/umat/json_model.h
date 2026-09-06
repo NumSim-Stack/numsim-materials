@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_UMAT_JSON_MODEL_H
-#define NUMSIM_MATERIALS_UMAT_JSON_MODEL_H
+#ifndef JSON_MODEL_H
+#define JSON_MODEL_H
 
 #include <algorithm>
 #include <cstddef>
@@ -282,4 +282,4 @@ void register_json_model(
 
 }  // namespace numsim::materials::umat
 
-#endif  // NUMSIM_MATERIALS_UMAT_JSON_MODEL_H
+#endif  // JSON_MODEL_H
