@@ -101,8 +101,8 @@ TEST(MaterialRegistry, ADruckerPragerModelRunsFromADocumentAlone) {
 /// The exception carries only a COUNT -- "missing 1 required parameter(s)" --
 /// not the name. numsim-core's input_parameter_controller prints the names to
 /// stdout and throws the count separately, so a deck typo is loud but not
-/// self-explanatory. That is a numsim-core change, tracked separately; what
-/// matters here is that the cone cannot be built without its parameters.
+/// self-explanatory. Tracked as NumSim-Stack/numsim-core#20; what matters here
+/// is that the cone cannot be built without its parameters.
 TEST(MaterialRegistry, ADruckerPragerDocumentMissingEtaFailsLoudly) {
   const char* doc = R"([
     {"type":"tensor_component_stepper_rank2","name":"stepper",
