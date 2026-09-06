@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_J2_PLASTICITY_H
-#define NUMSIM_MATERIALS_J2_PLASTICITY_H
+#ifndef J2_PLASTICITY_H
+#define J2_PLASTICITY_H
 
 #include <cmath>
 #include <stdexcept>
@@ -174,4 +174,4 @@ private:
 
 }  // namespace numsim::materials
 
-#endif  // NUMSIM_MATERIALS_J2_PLASTICITY_H
+#endif  // J2_PLASTICITY_H
