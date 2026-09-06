@@ -14,8 +14,8 @@ namespace numsim::materials {
 ///
 /// Normalization convention: equivalent_stress returns σ_eq = √(3J₂).
 /// The effective modulus (3G), residual, and flow normal are all consistent
-/// with this choice. See the documentation in small_strain_plasticity.md
-/// for the full consistency requirements.
+/// with this choice. See docs/plasticity-theory.md for the derivation and
+/// section 15 there for the ways this consistency is broken in practice.
 ///
 /// Stateless — default-constructible, all methods const.
 template<typename T, std::size_t Dim>

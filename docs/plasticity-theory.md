@@ -45,6 +45,7 @@ $\operatorname{dev}(\boldsymbol{a}) = \mathbb{I}^{\mathrm{dev}} : \boldsymbol{a}
 12. [The multi-stage variant](#12-the-multi-stage-variant)
 13. [Equation-to-code map](#13-equation-to-code-map)
 14. [What the derivations assume](#14-what-the-derivations-assume)
+15. [Common failure modes](#15-common-failure-modes)
 
 ---
 
@@ -889,3 +890,68 @@ and fixed. If 2D is ever wanted, these are the lines to revisit.
 $3.8\times10^{-8}$; a perturbation leaving the apex back onto the smooth cone is
 not covered and cannot be by a central difference. At the true branch boundary
 $C_{0101}$ jumps from $0$ to $71.4$ — inherent to a non-smooth return map.
+
+---
+
+## 15. Common failure modes
+
+Four ways an implementation of these equations goes wrong while still running,
+carried over from the notes this document replaces. Each is checked against the
+code here.
+
+### 15.1 Pressure factor mismatch
+
+The Drucker–Prager pressure term admits two self-consistent conventions, and
+mixing them puts a factor of three into the volumetric coupling of the tangent:
+
+$$\tilde\sigma = q + \eta\,p = q + \frac{\eta}{3}I_1
+\quad\text{with}\quad
+\boldsymbol{M} = \frac{\boldsymbol{s}}{2q} + \frac{\eta}{3}\boldsymbol{I}$$
+
+$$\tilde\sigma = q + \eta\,I_1
+\quad\text{with}\quad
+\boldsymbol{M} = \frac{\boldsymbol{s}}{2q} + \eta\,\boldsymbol{I}$$
+
+Writing $\tilde\sigma$ from the second and $\boldsymbol{M}$ from the first is
+the trap: both expressions look right in isolation, the residual still converges,
+and only the tangent is wrong.
+
+This code uses the **first**: `modified_equivalent_stress` returns
+`sqrt_j2 + eta * trace(sig) / 3` and `yield_normal` returns
+`sig_dev / (2 q) + (eta/3) I`. Consistent — and (6.7) is the check, since
+$\boldsymbol{M}:\mathbb{C}_e:\boldsymbol{N}$ reproduces $G + K\eta\beta$ to
+twelve digits only if the two agree.
+
+### 15.2 Using the full flow normal in its own derivative
+
+For Drucker–Prager $\boldsymbol{N} = \boldsymbol{s}/(2q) + (\beta/3)\boldsymbol{I}$,
+but
+
+$$\frac{\partial\boldsymbol{N}}{\partial\boldsymbol{\sigma}}
+= \frac{\partial}{\partial\boldsymbol{\sigma}}\left(\frac{\boldsymbol{s}}{2q}\right)$$
+
+because the volumetric term is constant in $\boldsymbol{\sigma}$. Reaching for
+the J2-shaped $\boldsymbol{N}\otimes\boldsymbol{N}$ formula here silently adds
+a volumetric contribution that does not exist — and, per §11.3, breaks the
+$4G^2$ collapse as well, since the extra term is traceless in neither index pair.
+
+### 15.3 Converged-state quantities in the smooth tangent
+
+The smooth return updates with $\boldsymbol{N}^{\mathrm{tr}}$, so its tangent
+must be built from trial quantities too. Substituting converged
+$\boldsymbol{N}$, $\boldsymbol{M}$ or
+$\partial\boldsymbol{N}/\partial\boldsymbol{\sigma}$ produces the tangent of
+a *different* algorithm — one that is consistent with nothing. Measured cost of
+the $\sigma_{\mathrm{eq}}$ substitution alone: §11.8.
+
+### 15.4 The smooth tangent at the apex
+
+$\partial\boldsymbol{N}/\partial\boldsymbol{\sigma}$ carries factors of
+$1/q$ and is singular at $q = 0$. Once the apex branch is active the apex
+tangent (10.5) applies instead. `compute_tangent` asserts `sig_eq > 0` for this
+reason.
+
+The converse — the *branch* being chosen wrongly rather than the tangent — is
+the failure §9.3 records, and it is worse: the tangent and the numerical
+derivative agree perfectly on a misclassified state, because both stay inside
+the wrong branch.

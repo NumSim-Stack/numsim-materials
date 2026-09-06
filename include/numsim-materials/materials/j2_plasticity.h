@@ -15,7 +15,8 @@ namespace numsim::materials {
 
 /// J2 (von Mises) plasticity with isotropic hardening, radial return.
 ///
-/// Split out of small_strain_plasticity<Traits, j2_yield_function>. That class
+/// Split out of a class templated on the yield function, which took both this
+/// model and Drucker-Prager. That class
 /// is parameterised over a yield function so it can also serve Drucker-Prager,
 /// and J2 paid for the generality without using it:
 ///
@@ -37,7 +38,7 @@ namespace numsim::materials {
 /// the general path computes, not an approximation of it.
 ///
 /// ISOTROPY. The closed form uses C_e : N = 2G N. That is not a new
-/// restriction: small_strain_plasticity already assumes isotropic elasticity
+/// restriction: the class this was split from already assumed isotropic elasticity
 /// through effective_modulus(G) = 3G in its residual, so both paths are
 /// equally limited. Here it is stated rather than implied.
 ///
