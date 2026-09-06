@@ -5,6 +5,9 @@
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/materials/scalar_stepper.h"
 #include "numsim-materials/solvers/local_newton.h"
+#include "numsim-materials/materials/j2_plasticity.h"
+#include "numsim-materials/materials/linear_isotropic_hardening.h"
+#include "numsim-materials/materials/tensor_component_stepper.h"
 #include "numsim-materials/materials/scalar_identity_weight.h"
 #include "numsim-materials/materials/autocatalytic_reaction.h"
 #include "numsim-materials/solvers/backward_euler.h"
@@ -222,5 +225,98 @@ TEST(LocalNewtonSolver, SolvesAndReportsConvergence) {
   const auto bad = s.solve(
       [](T2 x) { return std::pair<T2, T2>{x * x + T2{1}, T2{2} * x}; }, T2{1});
   EXPECT_FALSE(bad.converged);
+}
+}  // namespace
+
+namespace {
+namespace nm_w = numsim::materials;
+
+/// A wrongly-typed reference must say so, not report the material as missing.
+///
+/// wire_materials() wrapped look-up and type-check in one catch(...), so
+/// swapping a solver for one of another type told the user their solver did
+/// not exist -- sending them to look for a material that was sitting right
+/// there in the document.
+TEST(WireMaterials, WrongTypeIsNotReportedAsMissing) {
+  using policy = nm_w::material_policy_default;
+  using T2 = policy::value_type;
+  nm_w::material_context<policy> ctx;
+  policy::ParameterHandler p;
+
+  p.insert<std::string>("name", "stepper");
+  p.insert<T2>("increment", T2{0.01});
+  p.insert<std::vector<std::size_t>>("indices", {0, 0});
+  ctx.create<nm_w::tensor_component_stepper<2, policy>>(p);
+
+  p.clear();
+  p.insert<std::string>("name", "hardening");
+  p.insert<std::string>("source", "j2");
+  p.insert<T2>("K", T2{1000.0});
+  ctx.create<nm_w::linear_isotropic_hardening<policy>>(p);
+
+  // A backward_euler where a local_newton is required: it EXISTS.
+  p.clear();
+  p.insert<std::string>("name", "solver");
+  p.insert<std::string>("function", "j2");
+  ctx.create<nm_w::backward_euler<policy>>(p);
+
+  p.clear();
+  p.insert<std::string>("name", "j2");
+  p.insert<std::string>("hardening_source", "hardening");
+  p.insert<std::string>("strain_source", "stepper");
+  p.insert<std::string>("solver_source", "solver");
+  p.insert<T2>("K", T2{166.67});
+  p.insert<T2>("G", T2{76.92});
+  p.insert<T2>("sigma_0", T2{50.0});
+  ctx.create<nm_w::j2_plasticity<policy>>(p);
+
+  try {
+    ctx.finalize();
+    FAIL() << "wiring a wrongly-typed solver must fail";
+  } catch (const std::runtime_error& e) {
+    const std::string msg = e.what();
+    EXPECT_NE(msg.find("wrong type"), std::string::npos) << msg;
+    EXPECT_NE(msg.find("'solver'"), std::string::npos) << msg;
+    EXPECT_EQ(msg.find("do not exist"), std::string::npos)
+        << "the material exists; saying otherwise sends the user hunting for "
+           "something that is right there: " << msg;
+  }
+}
+
+/// The genuinely-absent case still reports absence.
+TEST(WireMaterials, MissingIsStillReportedAsMissing) {
+  using policy = nm_w::material_policy_default;
+  using T2 = policy::value_type;
+  nm_w::material_context<policy> ctx;
+  policy::ParameterHandler p;
+
+  p.insert<std::string>("name", "stepper");
+  p.insert<T2>("increment", T2{0.01});
+  p.insert<std::vector<std::size_t>>("indices", {0, 0});
+  ctx.create<nm_w::tensor_component_stepper<2, policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "hardening");
+  p.insert<std::string>("source", "j2");
+  p.insert<T2>("K", T2{1000.0});
+  ctx.create<nm_w::linear_isotropic_hardening<policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "j2");
+  p.insert<std::string>("hardening_source", "hardening");
+  p.insert<std::string>("strain_source", "stepper");
+  p.insert<std::string>("solver_source", "no_such_solver");
+  p.insert<T2>("K", T2{166.67});
+  p.insert<T2>("G", T2{76.92});
+  p.insert<T2>("sigma_0", T2{50.0});
+  ctx.create<nm_w::j2_plasticity<policy>>(p);
+
+  try {
+    ctx.finalize();
+    FAIL() << "a missing solver must fail";
+  } catch (const std::runtime_error& e) {
+    const std::string msg = e.what();
+    EXPECT_NE(msg.find("do not exist"), std::string::npos) << msg;
+    EXPECT_NE(msg.find("no_such_solver"), std::string::npos) << msg;
+    EXPECT_EQ(msg.find("wrong type"), std::string::npos) << msg;
+  }
 }
 }  // namespace
