@@ -58,10 +58,8 @@ public:
     m_yf = yield_fn(base::template get_parameter<value_type>("eta"),
                     base::template get_parameter<value_type>("beta"),
                     m_K_bulk);
-    const auto I = tmech::eye<value_type, Dim, 2>();
-    const tensor4 IIvol{tmech::otimes(I, I) / value_type{Dim}};
-    m_C_e = value_type{3} * m_K_bulk * IIvol +
-            value_type{2} * m_G * plasticity_detail::make_IIdev<value_type, Dim>();
+    m_C_e = plasticity_detail::make_isotropic_tangent<value_type, Dim>(
+        m_K_bulk, m_G);
   }
 
   static input_parameter_controller parameters() {

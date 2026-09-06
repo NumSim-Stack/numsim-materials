@@ -54,10 +54,7 @@ public:
         m_dH(base::template add_input<value_type>(
             m_hardening_source, "hardening_modulus", EdgeKind::Local))
   {
-    const auto I = tmech::eye<value_type, Dim, 2>();
-    const tensor4 IIvol{tmech::otimes(I, I) / value_type{Dim}};
-    m_C_e = value_type{3} * m_K * IIvol +
-            value_type{2} * m_G * plasticity_detail::make_IIdev<value_type, Dim>();
+    m_C_e = plasticity_detail::make_isotropic_tangent<value_type, Dim>(m_K, m_G);
 
     // The stage loop below accumulates only a(i,j) for j < i, plus the
     // diagonal. A tableau with a(i,j) != 0 for j > i would have those terms

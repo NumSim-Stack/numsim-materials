@@ -392,4 +392,52 @@ TEST(J2RKScheme, AcceptsEveryDirkAndExplicitScheme) {
         << scheme;
   }
 }
+
+/// The elastic tangent must agree with the closed forms the same materials use
+/// as shortcuts, at every dimension -- not only at Dim = 3.
+///
+/// do_smooth_return computes C:N as 2G*dev(N) + K*tr(N)*I instead of a rank-4
+/// contraction, and drucker_prager_yield_function::apex_tangent returns
+/// K*H'/(K*eta*beta + H')*I⊗I. Both assume C = K*I⊗I + 2G*IIdev. All three
+/// plasticity materials built 3K*IIvol instead, which is the same thing ONLY
+/// at Dim = 3, since IIvol = I⊗I/Dim. At Dim = 2 the old form was off by 30%
+/// against the shortcut in the same class.
+///
+/// material_policy_2d is not registered in the factory and no graph
+/// instantiates it, so this was latent -- but it sat in exactly the code the
+/// isotropy argument in docs/plasticity.md rests on.
+template <std::size_t Dim>
+void expect_tangent_matches_shortcut(const char* label) {
+  using tensor2 = tmech::tensor<T, Dim, 2>;
+  constexpr T K{166.67}, G{76.92};
+  const auto C = numsim::materials::plasticity_detail::
+      make_isotropic_tangent<T, Dim>(K, G);
+  const auto I = tmech::eye<T, Dim, 2>();
+
+  tensor2 x;
+  x.fill(T{0});
+  x(0, 0) = T{0.03};
+  x(1, 1) = T{-0.01};
+  x(0, 1) = T{0.02};
+  x(1, 0) = T{0.02};
+  if constexpr (Dim == 3) x(2, 2) = T{0.005};
+
+  const tensor2 shortcut{T{2} * G * tmech::dev(x) + K * tmech::trace(x) * I};
+  const tensor2 contracted{tmech::dcontract(C, x)};
+  const tensor2 diff{contracted - shortcut};
+  const T err = std::sqrt(tmech::dcontract(diff, diff));
+  const T scale = std::sqrt(tmech::dcontract(shortcut, shortcut));
+  EXPECT_LT(err, T{1e-12} * scale)
+      << label << ": C:x disagrees with 2G dev(x) + K tr(x) I by " << err
+      << " against a scale of " << scale;
+}
+
+TEST(ElasticTangent, MatchesTheShortcutIn3D) {
+  expect_tangent_matches_shortcut<3>("Dim=3");
+}
+
+TEST(ElasticTangent, MatchesTheShortcutIn2D) {
+  expect_tangent_matches_shortcut<2>("Dim=2");
+}
+
 }  // namespace

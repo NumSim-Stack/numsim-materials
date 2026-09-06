@@ -86,10 +86,12 @@ public:
             base::template get_parameter<std::string>("hardening_source"),
             "hardening_modulus", EdgeKind::Local)),
         m_IIdev(plasticity_detail::make_IIdev<value_type, Dim>()),
-        m_C_e(build_elastic_tangent(m_K, m_G, m_IIdev))
+        m_C_e(plasticity_detail::make_isotropic_tangent<value_type, Dim>(
+            m_K, m_G))
   {}
 
-  /// The elastic stiffness, built here rather than read from another material.
+  /// m_C_e above is the elastic stiffness, built here rather than read from
+  /// another material.
   ///
   /// The closed forms below REQUIRE an isotropic C_e -- that is what makes
   /// C_e : N = 2G N and N : C_e : N = 3G true. Accepting an arbitrary rank-4
@@ -97,13 +99,6 @@ public:
   /// cannot honour, and dragged a linear_elasticity into every plasticity graph
   /// whose own "stress" output (C : eps, ignoring eps_p) is meaningless once
   /// yielding starts.
-  static tensor4 build_elastic_tangent(value_type K, value_type G,
-                                       const tensor4& IIdev) {
-    const auto I = tmech::eye<value_type, Dim, 2>();
-    return value_type{3} * K * (tmech::otimes(I, I) / value_type{Dim}) +
-           value_type{2} * G * IIdev;
-  }
-
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
     para.template insert<std::string>("hardening_source")

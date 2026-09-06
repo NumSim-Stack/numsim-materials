@@ -17,6 +17,26 @@ tmech::tensor<T, Dim, 4> make_IIdev() {
   return tmech::tensor<T, Dim, 4>{IIsym - IIvol};
 }
 
+/// Isotropic elastic tangent C = K*I⊗I + 2G*IIdev.
+///
+/// The bulk term is K*I⊗I, NOT 3K*IIvol. Those are equal only at Dim = 3,
+/// because IIvol = I⊗I/Dim. All three plasticity materials wrote the 3K*IIvol
+/// form while their fast paths -- do_smooth_return's 2G*dev(N) + K*tr(N)*I and
+/// drucker_prager_yield_function::apex_tangent's K*H'/(...)*I⊗I -- assumed the
+/// K*I⊗I one, so at Dim = 2 a material disagreed with itself by 30% on
+/// C:x against its own shortcut. Building it here keeps the two consistent by
+/// construction, at every dimension.
+///
+/// linear_elasticity keeps its own 3K*IIvol spelling: it is a separate working
+/// material with no such shortcut, and plasticity no longer sources a tangent
+/// from it.
+template<typename T, std::size_t Dim>
+tmech::tensor<T, Dim, 4> make_isotropic_tangent(T K, T G) {
+  const auto I = tmech::eye<T, Dim, 2>();
+  return tmech::tensor<T, Dim, 4>{K * tmech::otimes(I, I) +
+                                  T{2} * G * make_IIdev<T, Dim>()};
+}
+
 /// Stress state evaluation at a given (ε_p, κ) state.
 template<typename T, std::size_t Dim>
 struct state_eval {
