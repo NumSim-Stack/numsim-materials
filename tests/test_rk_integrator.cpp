@@ -60,7 +60,7 @@ private:
 /// Run exponential decay with a given integrator type and tableau.
 /// Returns y at t=1.0 with N steps of size h=1/N.
 template<typename Integrator>
-T run_decay(int N, const numsim::materials::butcher_tableau& tab, T lambda = 1.0) {
+T run_decay(int N, const std::string& tableau, T lambda = 1.0) {
   ctx_type ctx;
   param_type p;
 
@@ -68,7 +68,7 @@ T run_decay(int N, const numsim::materials::butcher_tableau& tab, T lambda = 1.0
   p.insert<std::string>("name", "integrator");
   p.insert<std::string>("function", "decay");
   p.insert<T>("step_size", T{1.0} / T(N));
-  p.insert<const numsim::materials::butcher_tableau*>("tableau", &tab);
+  p.insert<std::string>("tableau", tableau);
   auto& integ = ctx.create<Integrator>(p);
 
   p.clear();
@@ -100,13 +100,13 @@ const T exact = std::exp(-1.0);  // y(1) = e^(-1) ≈ 0.367879...
 using RK = numsim::materials::rk_integrator<policy>;
 
 TEST(ExplicitRK, ForwardEulerConverges) {
-  auto tab = numsim::materials::forward_euler();
+  const std::string tab = "forward_euler";
   auto y = run_decay<RK>(100, tab);
   EXPECT_NEAR(y, exact, 0.01) << "Forward Euler with 100 steps should be close";
 }
 
 TEST(ExplicitRK, ForwardEulerOrder1) {
-  auto tab = numsim::materials::forward_euler();
+  const std::string tab = "forward_euler";
   auto err_10 = std::abs(run_decay<RK>(10, tab) - exact);
   auto err_20 = std::abs(run_decay<RK>(20, tab) - exact);
   auto ratio = err_10 / err_20;
@@ -116,7 +116,7 @@ TEST(ExplicitRK, ForwardEulerOrder1) {
 }
 
 TEST(ExplicitRK, RK4Order4) {
-  auto tab = numsim::materials::rk4();
+  const std::string tab = "rk4";
   auto err_10 = std::abs(run_decay<RK>(10, tab) - exact);
   auto err_20 = std::abs(run_decay<RK>(20, tab) - exact);
   auto ratio = err_10 / err_20;
@@ -126,7 +126,7 @@ TEST(ExplicitRK, RK4Order4) {
 }
 
 TEST(ExplicitRK, RK4HighAccuracy) {
-  auto tab = numsim::materials::rk4();
+  const std::string tab = "rk4";
   auto y = run_decay<RK>(100, tab);
   EXPECT_NEAR(y, exact, 1e-10) << "RK4 with 100 steps should be very accurate";
 }
@@ -135,13 +135,13 @@ TEST(ExplicitRK, RK4HighAccuracy) {
 
 
 TEST(DIRK, ImplicitEulerConverges) {
-  auto tab = numsim::materials::implicit_euler();
+  const std::string tab = "implicit_euler";
   auto y = run_decay<RK>(100, tab);
   EXPECT_NEAR(y, exact, 0.01) << "Implicit Euler with 100 steps";
 }
 
 TEST(DIRK, ImplicitMidpointOrder2) {
-  auto tab = numsim::materials::implicit_midpoint();
+  const std::string tab = "implicit_midpoint";
   auto err_10 = std::abs(run_decay<RK>(10, tab) - exact);
   auto err_20 = std::abs(run_decay<RK>(20, tab) - exact);
   auto ratio = err_10 / err_20;
@@ -151,7 +151,7 @@ TEST(DIRK, ImplicitMidpointOrder2) {
 }
 
 TEST(DIRK, CrankNicolsonOrder2) {
-  auto tab = numsim::materials::crank_nicolson();
+  const std::string tab = "crank_nicolson";
   auto err_10 = std::abs(run_decay<RK>(10, tab) - exact);
   auto err_20 = std::abs(run_decay<RK>(20, tab) - exact);
   auto ratio = err_10 / err_20;
@@ -164,7 +164,7 @@ TEST(DIRK, CrankNicolsonOrder2) {
 
 
 TEST(ImplicitRK, GaussLegendreOrder4) {
-  auto tab = numsim::materials::gauss_legendre_4();
+  const std::string tab = "gauss_legendre_4";
   auto err_10 = std::abs(run_decay<RK>(10, tab) - exact);
   auto err_20 = std::abs(run_decay<RK>(20, tab) - exact);
   auto ratio = err_10 / err_20;
@@ -174,7 +174,7 @@ TEST(ImplicitRK, GaussLegendreOrder4) {
 }
 
 TEST(ImplicitRK, GaussLegendreHighAccuracy) {
-  auto tab = numsim::materials::gauss_legendre_4();
+  const std::string tab = "gauss_legendre_4";
   auto y = run_decay<RK>(50, tab);
   EXPECT_NEAR(y, exact, 1e-10) << "Gauss-Legendre with 50 steps";
 }
@@ -184,7 +184,7 @@ TEST(ImplicitRK, GaussLegendreHighAccuracy) {
 // All should converge to z ≈ 1 after enough steps at 80°C.
 
 template<typename Integrator>
-T run_curing(int N, const numsim::materials::butcher_tableau& tab, T step_size = T{10}) {
+T run_curing(int N, const std::string& tableau, T step_size = T{10}) {
   ctx_type ctx;
   param_type p;
 
@@ -199,7 +199,7 @@ T run_curing(int N, const numsim::materials::butcher_tableau& tab, T step_size =
   p.insert<std::string>("name", "integrator");
   p.insert<std::string>("function", "curing_rate");
   p.insert<T>("step_size", step_size);
-  p.insert<const numsim::materials::butcher_tableau*>("tableau", &tab);
+  p.insert<std::string>("tableau", tableau);
   ctx.create<Integrator>(p);
 
   // Curing rate function — reads state from integrator
@@ -236,14 +236,14 @@ T run_curing(int N, const numsim::materials::butcher_tableau& tab, T step_size =
 }
 
 TEST(CuringRK, ExplicitRK4ConvergesToFullCure) {
-  auto tab = numsim::materials::rk4();
+  const std::string tab = "rk4";
   auto z = run_curing<RK>(50, tab);
   std::println("  RK4 curing (500s): z = {:.6f}", z);
   EXPECT_GT(z, 0.90) << "RK4 should approach full cure";
 }
 
 TEST(CuringRK, DIRKImplicitMidpointConverges) {
-  auto tab = numsim::materials::implicit_midpoint();
+  const std::string tab = "implicit_midpoint";
   // Smaller step for implicit — stiff initial phase needs h < 1/df_dy
   auto z = run_curing<RK>(500, tab, T{1});  // h=1, 500 steps
   std::println("  Implicit midpoint curing (500s, h=1): z = {:.6f}", z);
@@ -251,10 +251,45 @@ TEST(CuringRK, DIRKImplicitMidpointConverges) {
 }
 
 TEST(CuringRK, FullyImplicitGaussLegendreConverges) {
-  auto tab = numsim::materials::gauss_legendre_4();
+  const std::string tab = "gauss_legendre_4";
   auto z = run_curing<RK>(500, tab, T{1});  // h=1, 500 steps
   std::println("  Gauss-Legendre curing (500s, h=1): z = {:.6f}", z);
   EXPECT_GT(z, 0.90) << "Gauss-Legendre should approach full cure";
 }
 
 } // namespace
+
+namespace {
+namespace nm_tb = numsim::materials;
+
+/// The scheme must be selectable by NAME, because that is the explicit-vs-
+/// implicit choice and it belongs in the deck rather than in a recompile.
+TEST(TableauByName, ResolvesEveryPublishedScheme) {
+  for (const char* n : {"forward_euler", "explicit_midpoint", "rk4",
+                        "implicit_euler", "implicit_midpoint",
+                        "crank_nicolson", "sdirk3", "gauss_legendre_4"}) {
+    const auto t = nm_tb::tableau_by_name(n);
+    EXPECT_GT(t.stages(), 0) << n;
+  }
+  // and the explicit/implicit split really is what the name selects
+  EXPECT_TRUE(nm_tb::tableau_by_name("forward_euler").is_explicit());
+  EXPECT_TRUE(nm_tb::tableau_by_name("rk4").is_explicit());
+  EXPECT_FALSE(nm_tb::tableau_by_name("sdirk3").is_explicit());
+  EXPECT_FALSE(nm_tb::tableau_by_name("gauss_legendre_4").is_explicit());
+}
+
+/// A typo must name itself and list the alternatives, not fall back to a
+/// default scheme -- silently integrating with the wrong method would change
+/// results without changing anything visible.
+TEST(TableauByName, RejectsAnUnknownSchemeAndListsTheValidOnes) {
+  try {
+    nm_tb::tableau_by_name("sdirk4");
+    FAIL() << "an unknown scheme must throw";
+  } catch (const std::invalid_argument& e) {
+    const std::string msg = e.what();
+    EXPECT_NE(msg.find("sdirk4"), std::string::npos) << msg;
+    EXPECT_NE(msg.find("sdirk3"), std::string::npos)
+        << "the message should list what IS valid: " << msg;
+  }
+}
+}  // namespace

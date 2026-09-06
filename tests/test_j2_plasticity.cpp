@@ -233,8 +233,8 @@ TEST_F(J2TangentTest, ConsistentTangentAllSteps) {
 
 class RKPlasticityTest : public ::testing::Test {
 protected:
-  void setup_with_tableau(const numsim::materials::butcher_tableau& tab) {
-    m_tab = tab;
+  void setup_with_tableau(const std::string& name) {
+    m_tableau_name = name;
     param_type p;
 
     p.clear();
@@ -263,7 +263,7 @@ protected:
     p.insert<T>("K", T{166.67});
     p.insert<T>("G", T{76.92});
     p.insert<T>("sigma_0", T{50.0});
-    p.insert<const numsim::materials::butcher_tableau*>("tableau", &m_tab);
+    p.insert<std::string>("tableau", m_tableau_name);
     ctx.create<numsim::materials::j2_rk_plasticity<policy>>(p);
 
     p.clear();
@@ -281,11 +281,11 @@ protected:
   }
 
   ctx_type ctx;
-  numsim::materials::butcher_tableau m_tab;
+  std::string m_tableau_name;
 };
 
 TEST_F(RKPlasticityTest, ImplicitEulerMatchesMonolithic) {
-  setup_with_tableau(numsim::materials::implicit_euler());
+  setup_with_tableau("implicit_euler");
   T max_rel_error = 0;
   for (int i = 0; i < 20; ++i) {
     ctx.update();
@@ -300,7 +300,7 @@ TEST_F(RKPlasticityTest, ImplicitEulerMatchesMonolithic) {
 }
 
 TEST_F(RKPlasticityTest, SDIRK3TangentCheck) {
-  setup_with_tableau(numsim::materials::sdirk3());
+  setup_with_tableau("sdirk3");
   T max_rel_error = 0;
   for (int i = 0; i < 20; ++i) {
     ctx.update();
@@ -315,7 +315,7 @@ TEST_F(RKPlasticityTest, SDIRK3TangentCheck) {
 }
 
 TEST_F(RKPlasticityTest, PlasticStrainAccumulates) {
-  setup_with_tableau(numsim::materials::implicit_euler());
+  setup_with_tableau("implicit_euler");
   T prev_alpha = 0;
   for (int i = 0; i < 20; ++i) {
     ctx.update();
