@@ -132,17 +132,49 @@ tangent legitimately. It is simply the wrong dependency for plasticity.
 plastic multiplier and `abs(x)` about a curing degree; neither is about Newton's
 method. Each lives in the material that owns the assumption (issue #13).
 
-### The return map cannot be graph-driven
+### The return map solves conditionally; a graph property is evaluated unconditionally
 
-`local_newton` exists rather than everything using `backward_euler` because a
-return map solves **twice per update** — smooth cone, then apex — with different
-residuals, and chooses the branch on the first solve's convergence. A property
-edge carries one number; it cannot carry "and it failed, so take the other
-branch".
+This is why `local_newton` exists rather than everything using
+`backward_euler`.
+
+A property's update callback runs whenever the graph updates. **Plasticity only
+solves when the trial state exceeds yield** — and in a real analysis most
+integration points are elastic most of the time. Both return maps short-circuit
+before touching the solver:
+
+```cpp
+if (sig_eq - sigma_0 - H <= 0) { /* elastic: stress = trial, tangent = C_e */ return; }
+```
+
+Making the solve a property callback would run a Newton at every elastic point:
+
+| | measured |
+|---|---|
+| elastic step | ~92 ns |
+| plastic step | ~168 ns |
+
+Roughly 80 % more work, paid exactly where a real analysis spends most of its
+time.
+
+It is worse than a cost. At `Δλ = 0` on an elastic step the residual is
+negative, so Newton drives `Δλ` negative; holding it at zero needs a clamp —
+which is precisely the `max(x, 0)` that issue #13 objects to. **The clamp and
+the graph-driving are the same problem**: the graph mode has no way to express
+*do not solve*.
+
+Drucker-Prager cannot be graph-driven for a second, independent reason: it
+solves up to **twice** per update — an apex pre-check, a smooth-cone solve, then
+an apex fallback if that fails to converge — and chooses the branch on the first
+solve's convergence. A property edge carries one number, not "and it failed, so
+take the other branch".
+
+J2 solves once and has no such branch, so *only* the conditional argument
+applies to it. It could be graph-driven; it would simply cost more than it
+saves, and would leave two patterns where there is now one.
 
 Convergence therefore travels *with* the result (`{x, converged, iterations}`)
 rather than being queried from the solver afterwards, where it went stale
-between the two solves.
+between Drucker-Prager's two solves.
 
 ---
 
