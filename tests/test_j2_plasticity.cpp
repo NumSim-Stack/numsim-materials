@@ -372,6 +372,65 @@ TEST_F(RKPlasticityTest, SDIRK3TangentCheck) {
       << "the yield-crossing step is inexact but should stay bounded";
 }
 
+/// Equivalent plastic strain after a uniaxial path, for one tableau and one
+/// hardening modulus. No tangent checker -- only the return map is of
+/// interest here.
+T rk_alpha(const std::string& tableau, T hardening) {
+  ctx_type ctx;
+  param_type p;
+  p.insert<std::string>("name", "stepper");
+  p.insert<T>("increment", T{0.05});
+  p.insert<std::vector<std::size_t>>("indices", {0, 0});
+  ctx.create<numsim::materials::tensor_component_stepper<2, policy>>(p);
+
+  p.clear();
+  p.insert<std::string>("name", "hardening");
+  p.insert<std::string>("source", "j2");
+  p.insert<T>("K", hardening);
+  ctx.create<numsim::materials::linear_isotropic_hardening<policy>>(p);
+
+  p.clear();
+  p.insert<std::string>("name", "j2");
+  p.insert<std::string>("hardening_source", "hardening");
+  p.insert<std::string>("strain_source", "stepper");
+  p.insert<T>("K", T{166.67});
+  p.insert<T>("G", T{76.92});
+  p.insert<T>("sigma_0", T{50.0});
+  p.insert<std::string>("tableau", tableau);
+  ctx.create<numsim::materials::j2_rk_plasticity<policy>>(p);
+  ctx.finalize();
+
+  for (int i = 0; i < 20; ++i) {
+    ctx.update();
+    ctx.commit();
+  }
+  return ctx.get<T>("j2", "equivalent_plastic_strain");
+}
+
+/// An explicit stage must solve the same scalar equation as an implicit one.
+///
+/// For linear hardening the yield residual is linear in dlambda,
+/// r = F_trial - (3G + H')*dlambda, so the exact root is F_trial/(3G + H') and
+/// forward Euler, implicit Euler and the monolithic return map must all land on
+/// it -- IDENTICALLY, not merely close. That makes this an exact test rather
+/// than a tolerance test.
+///
+/// The explicit stage used to pass the raw G into jacobian(), which takes
+/// G_eff = 3G, and so solved F/(G + H'). Hardening masks it: at H' = 1000
+/// against 3G = 231 the two denominators differ by 14% and the incremental
+/// process recovers most of that, which is why the error looked like 0.5%. The
+/// low-hardening case is where it shows.
+TEST(J2RKStage, ExplicitAndImplicitStagesSolveTheSameEquation) {
+  for (const T hardening : {T{1000.0}, T{100.0}, T{10.0}}) {
+    const T explicit_alpha = rk_alpha("forward_euler", hardening);
+    const T implicit_alpha = rk_alpha("implicit_euler", hardening);
+    ASSERT_GT(implicit_alpha, T{1e-6}) << "the path must yield";
+    EXPECT_NEAR(explicit_alpha, implicit_alpha, T{1e-12} * implicit_alpha)
+        << "forward vs implicit Euler disagree at H' = " << hardening << ": "
+        << explicit_alpha << " vs " << implicit_alpha;
+  }
+}
+
 TEST_F(RKPlasticityTest, PlasticStrainAccumulates) {
   setup_with_tableau("implicit_euler");
   T prev_alpha = 0;

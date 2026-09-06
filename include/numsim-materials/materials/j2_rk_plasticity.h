@@ -147,7 +147,13 @@ public:
 
         if (se.F > value_type{0} && se.sig_eq > value_type{1e-30}) {
           m_N_stage[i] = se.N;
-          m_dlambda[i] = -se.F / m_yf.jacobian(m_G, m_dH.get());
+          // jacobian() takes G_eff = effective_modulus(G) = 3G, which is what
+          // the implicit stage below and drucker_prager_plasticity both pass.
+          // Passing the raw G here made every explicit stage solve
+          // F/(G + H') instead of F/(3G + H') -- a 3x overshoot in the
+          // multiplier once hardening stops masking it.
+          m_dlambda[i] = -se.F / m_yf.jacobian(
+              m_yf.effective_modulus(m_G), m_dH.get());
         } else {
           m_N_stage[i] = tensor2{};
           m_dlambda[i] = value_type{0};
