@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_CONSTANT_SCALAR_H
-#define NUMSIM_MATERIALS_CONSTANT_SCALAR_H
+#ifndef CONSTANT_SCALAR_H
+#define CONSTANT_SCALAR_H
 
 #include "numsim-materials/core/material_base.h"
 
@@ -38,4 +38,4 @@ private:
 
 }  // namespace numsim::materials
 
-#endif  // NUMSIM_MATERIALS_CONSTANT_SCALAR_H
+#endif  // CONSTANT_SCALAR_H

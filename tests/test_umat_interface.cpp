@@ -9,10 +9,11 @@
 #include "numsim-materials/core/input_types.h"
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/materials/linear_isotropic_hardening.h"
-#include "numsim-materials/materials/small_strain_plasticity.h"
 #include "numsim-materials/solvers/backward_euler.h"
 #include "numsim-materials/umat/external_state_source.h"
 #include "numsim-materials/umat/umat_interface.h"
+#include "numsim-materials/solvers/local_newton.h"
+#include "numsim-materials/materials/j2_plasticity.h"
 
 // The Fortran-callable symbol. Exactly one TU may define it.
 NUMSIM_MATERIALS_DEFINE_UMAT(numsim::materials::material_policy_default)
@@ -49,7 +50,7 @@ void build_j2(ctx_type& ctx, std::span<const double> /*props*/) {
 
   p.clear();
   p.insert<std::string>("name", "solver");
-  ctx.create<nm::backward_euler<policy>>(p);
+  ctx.create<nm::local_newton<policy>>(p);
 
   p.clear();
   p.insert<std::string>("name", "hardening");
@@ -59,7 +60,7 @@ void build_j2(ctx_type& ctx, std::span<const double> /*props*/) {
 
   p.clear();
   p.insert<std::string>("name", "j2");
-  p.insert<std::string>("elastic_source", "elastic");
+  p.insert<T>("K", K);
   p.insert<std::string>("hardening_source", "hardening");
   p.insert<std::string>("strain_source", "stepper");
   p.insert<std::string>("solver_source", "solver");
@@ -166,6 +167,9 @@ struct Registration {
     // against an already-built name the NPROPS-consistency check fires first
     // and require_props is never reached.
     registry::instance().register_model("COLDNAME", build_deck_elastic, de);
+    // One test only: it warms the cache itself, so a shared name would let
+    // test order decide the outcome.
+    registry::instance().register_model("VALUEPROBE", build_deck_elastic, de);
 
     // Deliberately lower-case, to prove the registry folds case on both sides.
     registry::config lc;
@@ -765,7 +769,43 @@ TEST(UmatInterface, ChangingNpropsForTheSameNameIsFatal) {
   call_umat("STIFF", stress, statev.data(), ddsdde, stran, dstran, 0.0, 0.1, 3,
             3, 6, 0, &pnewdt, nullptr, nullptr, nullptr, nullptr, three, 3);
   EXPECT_EQ(FatalProbe::count, 1);
-  EXPECT_NE(FatalProbe::last.find("constant"), std::string::npos)
+  // Both counts, so NPROPS=3 is not left to be matched against one number.
+  EXPECT_NE(FatalProbe::last.find("2 constants"), std::string::npos)
+      << FatalProbe::last;
+  EXPECT_NE(FatalProbe::last.find("supplies 3"), std::string::npos)
+      << FatalProbe::last;
+}
+
+/// Same count, different numbers — the case that reaches a material. A count
+/// check accepts it and serves the first call's stiffness forever: a converged
+/// analysis with the wrong moduli.
+TEST(UmatInterface, ChangingPropsValuesForTheSameNameIsFatal) {
+  FatalProbe probe;
+  std::vector<T> statev(1, 0.0);
+  const T stran[6] = {0, 0, 0, 0, 0, 0};
+  const T dstran[6] = {0.001, 0, 0, 0, 0, 0};
+  T stress[6] = {0}, ddsdde[36] = {0}, pnewdt = 1.0;
+  const T soft[2] = {100.0, 40.0};
+  const T stiff[2] = {300.0, 140.0};
+
+  // Builds the context, and shows which constants it was built from.
+  call_umat("VALUEPROBE", stress, statev.data(), ddsdde, stran, dstran, 0.0, 0.1,
+            3, 3, 6, 0, &pnewdt, nullptr, nullptr, nullptr, nullptr, soft, 2);
+  ASSERT_EQ(FatalProbe::count, 0);
+  ASSERT_NEAR(ddsdde[0], 100.0 + 4.0 * 40.0 / 3.0, 1e-9);
+
+  // Same name, same count, different values.
+  call_umat("VALUEPROBE", stress, statev.data(), ddsdde, stran, dstran, 0.0, 0.1,
+            3, 3, 6, 0, &pnewdt, nullptr, nullptr, nullptr, nullptr, stiff, 2);
+  EXPECT_EQ(FatalProbe::count, 1)
+      << "a same-length PROPS with different numbers must be reported, not "
+         "silently served from the cached graph";
+  // Must name which constant disagrees, and both values.
+  EXPECT_NE(FatalProbe::last.find("constant 1"), std::string::npos)
+      << FatalProbe::last;
+  EXPECT_NE(FatalProbe::last.find("100.0"), std::string::npos)
+      << FatalProbe::last;
+  EXPECT_NE(FatalProbe::last.find("300.0"), std::string::npos)
       << FatalProbe::last;
 }
 

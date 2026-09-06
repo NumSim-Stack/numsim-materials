@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_NUMERICAL_DIFF_CHECKER_H
-#define NUMSIM_MATERIALS_NUMERICAL_DIFF_CHECKER_H
+#ifndef NUMERICAL_DIFF_CHECKER_H
+#define NUMERICAL_DIFF_CHECKER_H
 
 #include <cassert>
 #include <cmath>
@@ -319,4 +319,4 @@ using scalar_derivative_checker = numerical_diff_checker<Traits,
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_NUMERICAL_DIFF_CHECKER_H
+#endif // NUMERICAL_DIFF_CHECKER_H

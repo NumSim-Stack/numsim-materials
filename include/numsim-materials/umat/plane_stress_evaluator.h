@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_UMAT_PLANE_STRESS_EVALUATOR_H
-#define NUMSIM_MATERIALS_UMAT_PLANE_STRESS_EVALUATOR_H
+#ifndef PLANE_STRESS_EVALUATOR_H
+#define PLANE_STRESS_EVALUATOR_H
 
 #include <cmath>
 #include <cstddef>
@@ -187,4 +187,4 @@ private:
 
 }  // namespace numsim::materials::umat
 
-#endif  // NUMSIM_MATERIALS_UMAT_PLANE_STRESS_EVALUATOR_H
+#endif  // PLANE_STRESS_EVALUATOR_H

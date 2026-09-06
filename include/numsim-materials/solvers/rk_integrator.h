@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_RK_INTEGRATOR_H
-#define NUMSIM_MATERIALS_RK_INTEGRATOR_H
+#ifndef RK_INTEGRATOR_H
+#define RK_INTEGRATOR_H
 
 #include <cmath>
 #include <vector>
@@ -37,28 +37,29 @@ public:
         m_h(base::template get_parameter<value_type>("step_size")),
         m_tol(base::template get_parameter<value_type>("tolerance")),
         m_max_iter(base::template get_parameter<int>("max_iter")),
-        m_tableau(base::template get_parameter<const butcher_tableau*>("tableau")),
+        m_tableau(tableau_by_name(
+            base::template get_parameter<std::string>("tableau"))),
         m_func_name(base::template get_parameter<std::string>("function")),
         m_rate(base::template add_input<value_type>(
             m_func_name, "rate", EdgeKind::Local)),
         // rate_derivative only needed for implicit stages — not created for
         // explicit tableaux (the rate function may not provide it).
         // Safe: compute_explicit() never dereferences m_drate.
-        m_drate(m_tableau->is_explicit()
+        m_drate(m_tableau.is_explicit()
             ? nullptr
             : &base::template add_input<value_type>(
                 m_func_name, "rate_derivative", EdgeKind::Local)),
-        m_k(Eigen::VectorXd::Zero(m_tableau->stages()))
+        m_k(Eigen::VectorXd::Zero(m_tableau.stages()))
   {
-    const int s = m_tableau->stages();
-    m_is_explicit = m_tableau->is_explicit();
-    m_is_dirk = m_tableau->is_dirk();
+    const int s = m_tableau.stages();
+    m_is_explicit = m_tableau.is_explicit();
+    m_is_dirk = m_tableau.is_dirk();
 
     // Pre-compute diagonal properties for DIRK
     m_diag.resize(s);
     m_stage_implicit.resize(s);
     for (int i = 0; i < s; ++i) {
-      m_diag[i] = m_tableau->a(i, i);
+      m_diag[i] = m_tableau.a(i, i);
       m_stage_implicit[i] = std::abs(m_diag[i]) >= 1e-30;
     }
 
@@ -78,6 +79,12 @@ public:
         .template add<set_default>(value_type{1e-12});
     para.template insert<int>("max_iter")
         .template add<set_default>(int{50});
+        // The scheme by NAME. This parameter was never in the schema at all --
+    // the constructor read it while parameters() never declared it, so it
+    // could only ever be supplied from C++, where insert() bypasses the
+    // schema. That is why the explicit/implicit choice, which is the whole
+    // point of a tableau, was unreachable from a document.
+    para.template insert<std::string>("tableau").template add<is_required>();
     return para;
   }
 
@@ -89,7 +96,7 @@ public:
 
 private:
   void compute_explicit() {
-    const auto& tab = *m_tableau;
+    const auto& tab = m_tableau;
     const int s = tab.stages();
     const auto y_n = m_state.old_value();
     m_k.setZero();
@@ -105,7 +112,7 @@ private:
   }
 
   void compute_dirk() {
-    const auto& tab = *m_tableau;
+    const auto& tab = m_tableau;
     const int s = tab.stages();
     const auto y_n = m_state.old_value();
     m_k.setZero();
@@ -137,7 +144,7 @@ private:
   }
 
   void compute_fully_implicit() {
-    const auto& tab = *m_tableau;
+    const auto& tab = m_tableau;
     const int s = tab.stages();
     const auto y_n = m_state.old_value();
     m_k.setZero();
@@ -163,7 +170,7 @@ private:
   const value_type& m_h;
   const value_type& m_tol;
   const int& m_max_iter;
-  const butcher_tableau* m_tableau;
+  const butcher_tableau m_tableau;
   const std::string& m_func_name;
   const input_property<value_type, property_traits>& m_rate;
   const input_property<value_type, property_traits>* m_drate;
@@ -183,4 +190,4 @@ private:
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_RK_INTEGRATOR_H
+#endif // RK_INTEGRATOR_H

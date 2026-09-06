@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_UMAT_UMAT_INTERFACE_H
-#define NUMSIM_MATERIALS_UMAT_UMAT_INTERFACE_H
+#ifndef UMAT_INTERFACE_H
+#define UMAT_INTERFACE_H
 
 #include <algorithm>
 #include <cctype>
@@ -207,10 +207,9 @@ private:
     std::unique_ptr<context_type> ctx;
     std::unique_ptr<evaluator_type> solid;
     std::unique_ptr<ps_evaluator_type> ps;
-    /// How many constants the context was built from. The graph is built once
-    /// and reused, so a later call arriving with a different count would mean
-    /// the cached parameters no longer describe this material.
-    std::size_t nprops{0};
+    /// What the context was built from; the graph is reused, so different
+    /// constants on a later call would no longer describe this material.
+    std::vector<double> props;
   };
 
   static std::unordered_map<std::string, thread_state, transparent_string_hash,
@@ -229,17 +228,26 @@ private:
     const auto key = normalise_cmname(cmname.data(), cmname.size(), buf);
     auto& cache = thread_cache();
     if (auto it = cache.find(key); it != cache.end()) {
-      // PROPS cannot vary for a given material name — two *MATERIAL blocks must
-      // have distinct names — so a changed count means the deck contradicts the
-      // cached graph. Checking the size is one comparison; checking the values
-      // is not worth it per integration point.
-      if (it->second.nprops != props.size())
+      // PROPS cannot vary for one material name, so anything different
+      // contradicts the graph the constants were baked into. Values, not just
+      // the count: same length with different numbers is the case that reaches
+      // a material. Two faults, two messages — the check only ever explains.
+      if (it->second.props.size() != props.size())
         throw fatal_error(
-            "numsim UMAT: material '" + std::string(key) +
-            "' was built from " + std::to_string(it->second.nprops) +
-            " constants but this call supplies " +
-            std::to_string(props.size()) +
-            " — PROPS must be constant for a given material name");
+            "numsim UMAT: material '" + std::string(key) + "' was built from " +
+            std::to_string(it->second.props.size()) +
+            " constants but this call supplies " + std::to_string(props.size()) +
+            " — NPROPS cannot vary for a given material name");
+
+      for (std::size_t i = 0; i < props.size(); ++i)
+        if (it->second.props[i] != props[i])
+          throw fatal_error(
+              "numsim UMAT: material '" + std::string(key) + "' constant " +
+              std::to_string(i + 1) + " was baked into the graph as " +
+              std::to_string(it->second.props[i]) + " but this call supplies " +
+              std::to_string(props[i]) +
+              " — PROPS must be constant for a given material name; use "
+              "distinct *MATERIAL names for distinct constants");
       return it->second;
     }
 
@@ -269,7 +277,7 @@ private:
       thread_state ts;
       ts.ctx = std::make_unique<context_type>();
       m.build(*ts.ctx, props);
-      ts.nprops = props.size();
+      ts.props.assign(props.begin(), props.end());
       if (!ts.ctx->is_finalized())
         throw fatal_error(
             "the builder returned without calling finalize() on the context");
@@ -551,4 +559,4 @@ void umat_dispatch(const dispatch_args<typename Traits::value_type>& a) noexcept
     ::numsim::materials::umat::umat_dispatch<TRAITS>(a);                       \
   }
 
-#endif  // NUMSIM_MATERIALS_UMAT_UMAT_INTERFACE_H
+#endif  // UMAT_INTERFACE_H

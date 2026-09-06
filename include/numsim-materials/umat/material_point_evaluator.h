@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_UMAT_MATERIAL_POINT_EVALUATOR_H
-#define NUMSIM_MATERIALS_UMAT_MATERIAL_POINT_EVALUATOR_H
+#ifndef MATERIAL_POINT_EVALUATOR_H
+#define MATERIAL_POINT_EVALUATOR_H
 
 #include <cstddef>
 #include <memory>
@@ -348,4 +348,4 @@ private:
 
 }  // namespace numsim::materials::umat
 
-#endif  // NUMSIM_MATERIALS_UMAT_MATERIAL_POINT_EVALUATOR_H
+#endif  // MATERIAL_POINT_EVALUATOR_H

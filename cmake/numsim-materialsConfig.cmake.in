@@ -2,14 +2,6 @@
 
 include(CMakeFindDependencyMacro)
 
-# The exported target set names these imported targets, so a consumer has to be
-# able to resolve them. Without this, find_package(numsim-materials) fails with
-# "the following imported targets are referenced, but are missing:
-# numsim-core::numsim-core" -- an error that says nothing about what to install.
-#
-# The list is whatever was linked INTERFACE at build time: a dependency that was
-# FETCHED is header-only and consumed through BUILD_INTERFACE, so it never
-# reaches the installed package and is not listed here.
 foreach(_dep @NUMSIM_MATERIALS_EXPORTED_DEPS@)
   find_dependency(${_dep})
 endforeach()
