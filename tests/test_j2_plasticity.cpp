@@ -286,32 +286,90 @@ protected:
 
 TEST_F(RKPlasticityTest, ImplicitEulerMatchesMonolithic) {
   setup_with_tableau("implicit_euler");
-  T max_rel_error = 0;
+
+  // Split by regime, for the reason recorded on
+  // J2TangentTest.ConsistentTangentAllSteps: the yield-crossing step is
+  // genuinely inexact because a central difference straddles the tangent's
+  // discontinuity, and bounding the whole run by that step makes the check
+  // blind to everything else.
+  //
+  // The bound this test used to carry was 0.1 against a measured worst of
+  // 3.0e-4 -- 336x of headroom. Dropping the ENTIRE plastic-softening
+  // correction from the tangent lands at about 1.2e-2 and still passed.
+  //
+  // Unlike the monolithic J2 tangent, which is exact to ~1e-10, this one is a
+  // genuine approximation: the stage-wise return map's tangent is assembled
+  // from the b-weighted multiplier rather than differentiated through the
+  // stages. 1e-3 is a little over 3x the measured worst and an order of
+  // magnitude below a dropped softening term.
+  T worst_plastic = 0, worst_transition = 0, alpha_before = 0;
+  int plastic_steps = 0;
   for (int i = 0; i < 20; ++i) {
     ctx.update();
-    auto rel = ctx.get<T>("checker", "rel_error");
-    auto alpha = ctx.get<T>("j2", "equivalent_plastic_strain");
-    std::println("  IE step {:2d}: rel={:.2e} alpha={:.4e}", i, rel, alpha);
-    if (rel > max_rel_error) max_rel_error = rel;
+    const auto rel = ctx.get<T>("checker", "rel_error");
+    const auto alpha = ctx.get<T>("j2", "equivalent_plastic_strain");
+    const bool was_plastic = alpha_before > T{1e-10};
+    const bool is_plastic = alpha > T{1e-10};
+    if (was_plastic && is_plastic) {
+      worst_plastic = std::max(worst_plastic, rel);
+      ++plastic_steps;
+    } else if (is_plastic) {
+      worst_transition = std::max(worst_transition, rel);
+    }
+    alpha_before = alpha;
     ctx.commit();
   }
-  EXPECT_LT(max_rel_error, 0.1)
-      << "Implicit Euler RK should match monolithic J2";
+
+  ASSERT_GT(plastic_steps, 5) << "the path must spend real time yielding";
+  EXPECT_LT(worst_plastic, 1e-3)
+      << "implicit Euler RK tangent disagrees with the numerical derivative on fully "
+         "plastic steps (worst " << worst_plastic << ")";
+  EXPECT_LT(worst_transition, 0.1)
+      << "the yield-crossing step is inexact but should stay bounded";
 }
 
 TEST_F(RKPlasticityTest, SDIRK3TangentCheck) {
   setup_with_tableau("sdirk3");
-  T max_rel_error = 0;
+
+  // Split by regime, for the reason recorded on
+  // J2TangentTest.ConsistentTangentAllSteps: the yield-crossing step is
+  // genuinely inexact because a central difference straddles the tangent's
+  // discontinuity, and bounding the whole run by that step makes the check
+  // blind to everything else.
+  //
+  // The bound this test used to carry was 0.1 against a measured worst of
+  // 3.0e-4 -- 336x of headroom. Dropping the ENTIRE plastic-softening
+  // correction from the tangent lands at about 1.2e-2 and still passed.
+  //
+  // Unlike the monolithic J2 tangent, which is exact to ~1e-10, this one is a
+  // genuine approximation: the stage-wise return map's tangent is assembled
+  // from the b-weighted multiplier rather than differentiated through the
+  // stages. 1e-3 is a little over 3x the measured worst and an order of
+  // magnitude below a dropped softening term.
+  T worst_plastic = 0, worst_transition = 0, alpha_before = 0;
+  int plastic_steps = 0;
   for (int i = 0; i < 20; ++i) {
     ctx.update();
-    auto rel = ctx.get<T>("checker", "rel_error");
-    auto alpha = ctx.get<T>("j2", "equivalent_plastic_strain");
-    std::println("  SDIRK3 step {:2d}: rel={:.2e} alpha={:.4e}", i, rel, alpha);
-    if (rel > max_rel_error) max_rel_error = rel;
+    const auto rel = ctx.get<T>("checker", "rel_error");
+    const auto alpha = ctx.get<T>("j2", "equivalent_plastic_strain");
+    const bool was_plastic = alpha_before > T{1e-10};
+    const bool is_plastic = alpha > T{1e-10};
+    if (was_plastic && is_plastic) {
+      worst_plastic = std::max(worst_plastic, rel);
+      ++plastic_steps;
+    } else if (is_plastic) {
+      worst_transition = std::max(worst_transition, rel);
+    }
+    alpha_before = alpha;
     ctx.commit();
   }
-  EXPECT_LT(max_rel_error, 0.1)
-      << "SDIRK3 tangent should be consistent";
+
+  ASSERT_GT(plastic_steps, 5) << "the path must spend real time yielding";
+  EXPECT_LT(worst_plastic, 1e-3)
+      << "SDIRK3 tangent disagrees with the numerical derivative on fully "
+         "plastic steps (worst " << worst_plastic << ")";
+  EXPECT_LT(worst_transition, 0.1)
+      << "the yield-crossing step is inexact but should stay bounded";
 }
 
 TEST_F(RKPlasticityTest, PlasticStrainAccumulates) {

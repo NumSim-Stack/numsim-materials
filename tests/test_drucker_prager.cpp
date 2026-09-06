@@ -84,6 +84,55 @@ void add_hydrostatic_stepper(ctx_type& ctx, T increment) {
   ctx.create<multiaxial_stepper<policy>>(p);
 }
 
+/// A DP graph driven by a multiaxial stepper, with the parameters used
+/// throughout this file. Held in a struct because material_context is neither
+/// copyable nor movable.
+struct dp_graph {
+  ctx_type ctx;
+  static constexpr T K{166.67};
+  static constexpr T G{76.92};
+  static constexpr T cohesion{20.0};
+  static constexpr T eta{0.1};
+  static constexpr T beta{0.05};
+
+  dp_graph(std::vector<double> direction, T increment, T H_mod) {
+    param_type p;
+    p.insert<std::string>("name", "stepper");
+    p.insert<T>("increment", increment);
+    p.insert<std::vector<double>>("direction", std::move(direction));
+    ctx.create<multiaxial_stepper<policy>>(p);
+
+    p.clear();
+    p.insert<std::string>("name", "solver");
+    ctx.create<numsim::materials::local_newton<policy>>(p);
+
+    p.clear();
+    p.insert<std::string>("name", "hardening");
+    p.insert<std::string>("source", "dp");
+    p.insert<T>("K", H_mod);
+    ctx.create<numsim::materials::linear_isotropic_hardening<policy>>(p);
+
+    p.clear();
+    p.insert<std::string>("name", "dp");
+    p.insert<std::string>("hardening_source", "hardening");
+    p.insert<std::string>("strain_source", "stepper");
+    p.insert<std::string>("solver_source", "solver");
+    p.insert<T>("G", G);
+    p.insert<T>("sigma_0", cohesion);
+    p.insert<T>("eta", eta);
+    p.insert<T>("beta", beta);
+    p.insert<T>("K_bulk", K);
+    ctx.create<dp_plasticity>(p);
+    ctx.finalize();
+  }
+
+  T deviatoric_norm() {
+    const auto& sig = ctx.get<tensor2>("dp", "stress");
+    const auto s = tmech::dev(sig);
+    return std::sqrt(tmech::dcontract(s, s));
+  }
+};
+
 class DruckerPragerTest : public ::testing::Test {
 protected:
   void SetUp() override {
@@ -176,15 +225,51 @@ TEST_F(DruckerPragerTest, PlasticStrainHasVolumetricComponent) {
   }
 }
 
-TEST_F(DruckerPragerTest, PressureSensitiveYielding) {
-  // DP yields earlier under tension (positive I1) than compression
-  // because F = sqrt(J2) + alpha*I1 - k
-  ctx.update();
-  const auto& sig = ctx.get<tensor2>("dp", "stress");
-  auto I1 = tmech::trace(sig);
-  std::println("  I1 = {:.4f} (positive = tension in uniaxial strain)", I1);
-  // Under uniaxial strain, I1 > 0 → DP yields earlier than pure J2
-  ctx.commit();
+/// Pressure sensitivity, the property that distinguishes DP from J2.
+///
+/// This test used to print I1 and assert nothing at all -- it passed whether
+/// the cone was pressure sensitive, pressure insensitive, or wired backwards.
+/// It now pins the ratio the friction term actually produces.
+///
+/// Under uniaxial strain e the deviatoric part is 2G dev(eps), so
+/// q = 2G|e|/sqrt(3), and p = K e carries the sign. F = q + eta p - k gives
+///
+///   e_tension     = k / (2G/sqrt(3) + eta K)
+///   |e_compression| = k / (2G/sqrt(3) - eta K)
+///
+/// so tension yields first, by a factor that depends on eta. With eta = 0 the
+/// two coincide, which is what makes this a test of the friction term rather
+/// than of yielding in general.
+TEST(DruckerPragerPressure, YieldsEarlierInTensionThanInCompression) {
+  constexpr T increment{0.001};
+  auto strain_at_first_yield = [](double sign) {
+    dp_graph g({sign, 0.0, 0.0, 0.0}, increment, T{500.0});
+    for (int i = 1; i <= 1000; ++i) {
+      g.ctx.update();
+      if (g.ctx.get<T>("dp", "equivalent_plastic_strain") > T{1e-12})
+        return increment * i;
+      g.ctx.commit();
+    }
+    return T{-1};
+  };
+
+  const T e_tension = strain_at_first_yield(+1.0);
+  const T e_compression = strain_at_first_yield(-1.0);
+  ASSERT_GT(e_tension, T{0}) << "tension never yielded";
+  ASSERT_GT(e_compression, T{0}) << "compression never yielded";
+
+  const T shear_term = T{2} * dp_graph::G / std::sqrt(T{3});
+  const T friction_term = dp_graph::eta * dp_graph::K;
+  const T expected_tension = dp_graph::cohesion / (shear_term + friction_term);
+  const T expected_compression =
+      dp_graph::cohesion / (shear_term - friction_term);
+
+  EXPECT_NEAR(e_tension, expected_tension, T{2} * increment);
+  EXPECT_NEAR(e_compression, expected_compression, T{2} * increment);
+  EXPECT_NEAR(e_compression / e_tension,
+              expected_compression / expected_tension, T{0.02})
+      << "tension/compression asymmetry does not match the friction term: "
+      << e_tension << " vs " << e_compression;
 }
 
 // --- Tangent checker for DP ---
@@ -567,55 +652,6 @@ TEST(DruckerPragerApex, ApexStateIsAdmissible) {
 // ---------------------------------------------------------------------------
 // Branch selection between the smooth cone and the apex
 // ---------------------------------------------------------------------------
-
-/// A DP graph driven by a multiaxial stepper, with the parameters used
-/// throughout this file. Held in a struct because material_context is neither
-/// copyable nor movable.
-struct dp_graph {
-  ctx_type ctx;
-  static constexpr T K{166.67};
-  static constexpr T G{76.92};
-  static constexpr T cohesion{20.0};
-  static constexpr T eta{0.1};
-  static constexpr T beta{0.05};
-
-  dp_graph(std::vector<double> direction, T increment, T H_mod) {
-    param_type p;
-    p.insert<std::string>("name", "stepper");
-    p.insert<T>("increment", increment);
-    p.insert<std::vector<double>>("direction", std::move(direction));
-    ctx.create<multiaxial_stepper<policy>>(p);
-
-    p.clear();
-    p.insert<std::string>("name", "solver");
-    ctx.create<numsim::materials::local_newton<policy>>(p);
-
-    p.clear();
-    p.insert<std::string>("name", "hardening");
-    p.insert<std::string>("source", "dp");
-    p.insert<T>("K", H_mod);
-    ctx.create<numsim::materials::linear_isotropic_hardening<policy>>(p);
-
-    p.clear();
-    p.insert<std::string>("name", "dp");
-    p.insert<std::string>("hardening_source", "hardening");
-    p.insert<std::string>("strain_source", "stepper");
-    p.insert<std::string>("solver_source", "solver");
-    p.insert<T>("G", G);
-    p.insert<T>("sigma_0", cohesion);
-    p.insert<T>("eta", eta);
-    p.insert<T>("beta", beta);
-    p.insert<T>("K_bulk", K);
-    ctx.create<dp_plasticity>(p);
-    ctx.finalize();
-  }
-
-  T deviatoric_norm() {
-    const auto& sig = ctx.get<tensor2>("dp", "stress");
-    const auto s = tmech::dev(sig);
-    return std::sqrt(tmech::dcontract(s, s));
-  }
-};
 
 /// The apex branch must be taken only where it is actually the answer.
 ///
