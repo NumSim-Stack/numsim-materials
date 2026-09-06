@@ -328,3 +328,68 @@ TEST_F(RKPlasticityTest, PlasticStrainAccumulates) {
 }
 
 } // namespace
+
+namespace {
+/// A fully implicit tableau must be refused, not silently mis-integrated.
+///
+/// The stage loop sums only a(i,j) for j < i plus the diagonal, so coupling
+/// above the diagonal is dropped. gauss_legendre_4 has a(0,1) != 0; before the
+/// guard it produced an equivalent plastic strain of -8.8 -- NEGATIVE -- and a
+/// yield residual of +10880, with no error. It became reachable from a deck
+/// when the tableau turned into a named parameter.
+TEST(J2RKScheme, RefusesAFullyImplicitTableau) {
+  using policy = numsim::materials::material_policy_default;
+  numsim::materials::material_context<policy> ctx;
+  policy::ParameterHandler p;
+  p.insert<std::string>("name", "stepper");
+  p.insert<T>("increment", T{0.01});
+  p.insert<std::vector<std::size_t>>("indices", {0, 0});
+  ctx.create<numsim::materials::tensor_component_stepper<2, policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "hardening");
+  p.insert<std::string>("source", "m");
+  p.insert<T>("K", T{1000.0});
+  ctx.create<numsim::materials::linear_isotropic_hardening<policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "m");
+  p.insert<std::string>("hardening_source", "hardening");
+  p.insert<std::string>("strain_source", "stepper");
+  p.insert<T>("K", T{166.67});
+  p.insert<T>("G", T{76.92});
+  p.insert<T>("sigma_0", T{50.0});
+  p.insert<std::string>("tableau", std::string("gauss_legendre_4"));
+  EXPECT_THROW(ctx.create<numsim::materials::j2_rk_plasticity<policy>>(p),
+               std::invalid_argument);
+}
+
+/// The DIRK and explicit schemes it CAN integrate must still be accepted, so
+/// the guard cannot pass by refusing everything.
+TEST(J2RKScheme, AcceptsEveryDirkAndExplicitScheme) {
+  using policy = numsim::materials::material_policy_default;
+  for (const char* scheme : {"forward_euler", "explicit_midpoint", "rk4",
+                             "implicit_euler", "implicit_midpoint",
+                             "crank_nicolson", "sdirk3"}) {
+    numsim::materials::material_context<policy> ctx;
+    policy::ParameterHandler p;
+    p.insert<std::string>("name", "stepper");
+    p.insert<T>("increment", T{0.01});
+    p.insert<std::vector<std::size_t>>("indices", {0, 0});
+    ctx.create<numsim::materials::tensor_component_stepper<2, policy>>(p);
+    p.clear();
+    p.insert<std::string>("name", "hardening");
+    p.insert<std::string>("source", "m");
+    p.insert<T>("K", T{1000.0});
+    ctx.create<numsim::materials::linear_isotropic_hardening<policy>>(p);
+    p.clear();
+    p.insert<std::string>("name", "m");
+    p.insert<std::string>("hardening_source", "hardening");
+    p.insert<std::string>("strain_source", "stepper");
+    p.insert<T>("K", T{166.67});
+    p.insert<T>("G", T{76.92});
+    p.insert<T>("sigma_0", T{50.0});
+    p.insert<std::string>("tableau", std::string(scheme));
+    EXPECT_NO_THROW(ctx.create<numsim::materials::j2_rk_plasticity<policy>>(p))
+        << scheme;
+  }
+}
+}  // namespace
