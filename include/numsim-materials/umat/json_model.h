@@ -43,6 +43,10 @@
 ///
 /// Named "constants", not "props": a PROPERTY here is a graph node, and it is
 /// what the deck calls them (*USER MATERIAL, CONSTANTS=).
+///
+/// An entry naming a props_scalar binds the SLOT instead: that material reads
+/// the number from the host each call rather than having it baked in. Swap the
+/// type and nothing else in the document changes.
 namespace numsim::materials::umat {
 
 /// Host-driven source materials. Kept out of register_default_materials() so
@@ -69,14 +73,31 @@ void ensure_materials_registered() {
   });
 }
 
-/// The parameter a binding will actually write.
-///
-/// Its own function because it is the single place that has to stay in step
-/// with the substitution loop below — validating one name and writing another
-/// is how a target ends up half-checked.
-inline std::string bound_parameter(const nlohmann::json& /*material*/,
-                                   const connection_source& binding) {
-  return binding.property;
+/// What a binding writes into the document. One function for both the
+/// validation and the substitution below — checking one parameter name and
+/// writing another is how a target ends up half-verified.
+struct constant_binding_target {
+  std::string parameter;
+  /// props_scalar is told its SLOT and reads the number itself each call;
+  /// everything else has the number written in now.
+  bool writes_slot{false};
+};
+
+inline constant_binding_target bound_parameter(
+    const nlohmann::json& material, const connection_source& binding) {
+  if (material.value("type", std::string{}) == "props_scalar") {
+    // The target names the property the constant arrives on — "value", as for
+    // constant_scalar — so swapping the type does not force "constants" to be
+    // rewritten. The parameter written ("index") is therefore not what the
+    // document says.
+    if (binding.property != "value")
+      throw fatal_error(
+          "json_model: a props_scalar target names the property it publishes, "
+          "which is \"value\" — got \"" + binding.property +
+          "\"; the slot comes from the entry's position in \"constants\"");
+    return {"index", true};
+  }
+  return {binding.property, false};
 }
 
 /// Reject a target naming a parameter the material does not declare.
@@ -102,7 +123,7 @@ void require_declared_parameter(const nlohmann::json& material,
   // Declared AND numeric. Every material declares "name", and most declare
   // *_source strings, so checking mere existence accepts targets that can only
   // fail later — with a JSON type error rather than anything about decks.
-  const auto wanted = bound_parameter(material, binding);
+  const auto wanted = bound_parameter(material, binding).parameter;
   const auto schema = factory.schema(type);
   std::vector<std::string> numeric;
   bool declared = false, wanted_is_numeric = false;
@@ -231,10 +252,16 @@ typename umat_registry<Traits>::builder make_json_builder(
     // Into a copy, so the registered document stays a template.
     nlohmann::json doc = parsed;
     for (std::size_t i = 0; i < bindings.size(); ++i)
-      for (auto& material : doc["materials"])
-        if (material.contains("name") &&
-            material["name"].get<std::string>() == bindings[i].material)
-          material[bindings[i].property] = props[i];
+      for (auto& material : doc["materials"]) {
+        if (!material.contains("name") ||
+            material["name"].get<std::string>() != bindings[i].material)
+          continue;
+        // Resolved by the function that validated the target, so the two
+        // cannot drift.
+        const auto target = bound_parameter(material, bindings[i]);
+        material[target.parameter] =
+            target.writes_slot ? nlohmann::json(i) : nlohmann::json(props[i]);
+      }
 
     for (const auto& material : doc["materials"])
       create_from_json<Traits>(ctx, material);

@@ -179,10 +179,13 @@ public:
   void evaluate(std::string_view cmname, std::span<const double> props,
                 const call& c) {
     auto& ts = thread_state_for(cmname, props);
-    if (c.ec == element_case::plane_stress)
+    if (c.ec == element_case::plane_stress) {
+      ts.ps->bind_props(props);
       ts.ps->evaluate(c);
-    else
+    } else {
+      ts.solid->bind_props(props);
       ts.solid->evaluate(c);
+    }
   }
 
   /// Drop this thread's cached contexts. Only needed if models are
@@ -239,15 +242,22 @@ private:
             " constants but this call supplies " + std::to_string(props.size()) +
             " — NPROPS cannot vary for a given material name");
 
+      // Then per SLOT, skipping the ones the model reads live. Asking
+      // has_live_props() for the whole model instead would wave a mixed
+      // document's BAKED constants through as well: they would keep the first
+      // call's values while the live ones tracked the deck, silently, which is
+      // the defect this check exists to catch.
       for (std::size_t i = 0; i < props.size(); ++i)
-        if (it->second.props[i] != props[i])
+        if (!it->second.solid->is_live_prop(i) &&
+            it->second.props[i] != props[i])
           throw fatal_error(
               "numsim UMAT: material '" + std::string(key) + "' constant " +
               std::to_string(i + 1) + " was baked into the graph as " +
               std::to_string(it->second.props[i]) + " but this call supplies " +
               std::to_string(props[i]) +
               " — PROPS must be constant for a given material name; use "
-              "distinct *MATERIAL names for distinct constants");
+              "distinct *MATERIAL names for distinct constants, or a "
+              "props_scalar for a constant that genuinely varies per call");
       return it->second;
     }
 
