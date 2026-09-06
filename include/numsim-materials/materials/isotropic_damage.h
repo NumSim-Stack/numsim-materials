@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_ISOTROPIC_DAMAGE_H
-#define NUMSIM_MATERIALS_ISOTROPIC_DAMAGE_H
+#ifndef ISOTROPIC_DAMAGE_H
+#define ISOTROPIC_DAMAGE_H
 
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_base.h"
@@ -111,4 +111,4 @@ private:
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_ISOTROPIC_DAMAGE_H
+#endif // ISOTROPIC_DAMAGE_H

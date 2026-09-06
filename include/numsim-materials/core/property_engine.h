@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_PROPERTY_ENGINE_H
-#define NUMSIM_MATERIALS_PROPERTY_ENGINE_H
+#ifndef PROPERTY_ENGINE_H
+#define PROPERTY_ENGINE_H
 
 #include <algorithm>
 #include <print>
@@ -282,4 +282,4 @@ private:
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_PROPERTY_ENGINE_H
+#endif // PROPERTY_ENGINE_H

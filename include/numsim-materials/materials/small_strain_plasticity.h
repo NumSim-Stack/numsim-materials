@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_SMALL_STRAIN_PLASTICITY_H
-#define NUMSIM_MATERIALS_SMALL_STRAIN_PLASTICITY_H
+#ifndef SMALL_STRAIN_PLASTICITY_H
+#define SMALL_STRAIN_PLASTICITY_H
 
 #include <cmath>
 #include <concepts>
@@ -223,4 +223,4 @@ using drucker_prager_plasticity = small_strain_plasticity<Traits,
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_SMALL_STRAIN_PLASTICITY_H
+#endif // SMALL_STRAIN_PLASTICITY_H

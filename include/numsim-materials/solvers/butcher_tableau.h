@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_BUTCHER_TABLEAU_H
-#define NUMSIM_MATERIALS_BUTCHER_TABLEAU_H
+#ifndef BUTCHER_TABLEAU_H
+#define BUTCHER_TABLEAU_H
 
 #include <Eigen/Dense>
 
@@ -120,4 +120,4 @@ inline butcher_tableau gauss_legendre_4() {
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_BUTCHER_TABLEAU_H
+#endif // BUTCHER_TABLEAU_H

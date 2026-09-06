@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_QCUSTOMPLOT_BACKEND_H
-#define NUMSIM_MATERIALS_QCUSTOMPLOT_BACKEND_H
+#ifndef QCUSTOMPLOT_BACKEND_H
+#define QCUSTOMPLOT_BACKEND_H
 
 #include "numsim-materials/postprocessing/plot_backend.h"
 #include <qcustomplot.h>
@@ -104,4 +104,4 @@ private:
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_QCUSTOMPLOT_BACKEND_H
+#endif // QCUSTOMPLOT_BACKEND_H

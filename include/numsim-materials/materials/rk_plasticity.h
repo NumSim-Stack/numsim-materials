@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_RK_PLASTICITY_H
-#define NUMSIM_MATERIALS_RK_PLASTICITY_H
+#ifndef RK_PLASTICITY_H
+#define RK_PLASTICITY_H
 
 #include <cmath>
 #include <vector>
@@ -208,4 +208,4 @@ using j2_rk_plasticity = rk_plasticity<Traits,
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_RK_PLASTICITY_H
+#endif // RK_PLASTICITY_H

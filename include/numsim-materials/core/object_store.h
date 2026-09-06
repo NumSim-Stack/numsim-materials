@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_OBJECT_STORE_H
-#define NUMSIM_MATERIALS_OBJECT_STORE_H
+#ifndef OBJECT_STORE_H
+#define OBJECT_STORE_H
 
 #include <memory>
 #include <stdexcept>
@@ -76,4 +76,4 @@ private:
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_OBJECT_STORE_H
+#endif // OBJECT_STORE_H
