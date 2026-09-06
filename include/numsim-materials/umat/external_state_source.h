@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_UMAT_EXTERNAL_STATE_SOURCE_H
-#define NUMSIM_MATERIALS_UMAT_EXTERNAL_STATE_SOURCE_H
+#ifndef EXTERNAL_STATE_SOURCE_H
+#define EXTERNAL_STATE_SOURCE_H
 
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_base.h"
@@ -114,4 +114,4 @@ private:
 
 }  // namespace numsim::materials
 
-#endif  // NUMSIM_MATERIALS_UMAT_EXTERNAL_STATE_SOURCE_H
+#endif  // EXTERNAL_STATE_SOURCE_H

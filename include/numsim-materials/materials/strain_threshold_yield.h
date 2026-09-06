@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_STRAIN_THRESHOLD_YIELD_H
-#define NUMSIM_MATERIALS_STRAIN_THRESHOLD_YIELD_H
+#ifndef STRAIN_THRESHOLD_YIELD_H
+#define STRAIN_THRESHOLD_YIELD_H
 
 #include <algorithm>
 #include "numsim-materials/core/material_base.h"
@@ -64,4 +64,4 @@ private:
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_STRAIN_THRESHOLD_YIELD_H
+#endif // STRAIN_THRESHOLD_YIELD_H

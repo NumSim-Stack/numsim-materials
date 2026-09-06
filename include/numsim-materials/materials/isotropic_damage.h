@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_ISOTROPIC_DAMAGE_H
-#define NUMSIM_MATERIALS_ISOTROPIC_DAMAGE_H
+#ifndef ISOTROPIC_DAMAGE_H
+#define ISOTROPIC_DAMAGE_H
 
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_base.h"
@@ -24,6 +24,8 @@ namespace numsim::materials {
 ///   damage_source::damage, damage_source::d_damage   — from propagation law
 ///   state_source::d_equivalent_strain                — from state function
 ///   yield_source::is_yielding                        — from yield function
+/// The tangent may come from a different material than the stress: set the
+/// optional "tangent_source". Absent, both come from "elastic_source".
 template <typename Traits>
 class isotropic_damage final
     : public material_base<isotropic_damage<Traits>, Traits> {
@@ -50,8 +52,13 @@ public:
         // inputs
         m_stress(base::template add_input<tensor2>(
             m_elastic_source, "stress", EdgeKind::Global)),
+        // Absent: same material as the stress. contains() rather than an
+        // empty-string test, so "" is an error and not a fallback.
         m_tangent(base::template add_input<tensor4>(
-            m_elastic_source, "tangent", EdgeKind::Global)),
+            base::m_parameter_handler.contains("tangent_source")
+                ? base::template get_parameter<std::string>("tangent_source")
+                : m_elastic_source,
+            "tangent", EdgeKind::Global)),
         m_damage(base::template add_input<value_type>(
             m_damage_source, "damage", EdgeKind::Global)),
         m_d_damage(base::template add_input<value_type>(
@@ -65,6 +72,8 @@ public:
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
     para.template insert<std::string>("elastic_source").template add<is_required>();
+    // No check == optional; declared so the JSON schema still knows the key.
+    para.template insert<std::string>("tangent_source");
     para.template insert<std::string>("damage_source").template add<is_required>();
     para.template insert<std::string>("state_source").template add<is_required>();
     para.template insert<std::string>("yield_source").template add<is_required>();
@@ -111,4 +120,4 @@ private:
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_ISOTROPIC_DAMAGE_H
+#endif // ISOTROPIC_DAMAGE_H

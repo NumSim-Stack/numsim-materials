@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_EXPONENTIAL_DAMAGE_LAW_H
-#define NUMSIM_MATERIALS_EXPONENTIAL_DAMAGE_LAW_H
+#ifndef EXPONENTIAL_DAMAGE_LAW_H
+#define EXPONENTIAL_DAMAGE_LAW_H
 
 #include <cmath>
 #include "numsim-materials/core/material_base.h"
@@ -74,4 +74,4 @@ private:
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_EXPONENTIAL_DAMAGE_LAW_H
+#endif // EXPONENTIAL_DAMAGE_LAW_H

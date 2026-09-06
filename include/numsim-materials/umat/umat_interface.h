@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_UMAT_UMAT_INTERFACE_H
-#define NUMSIM_MATERIALS_UMAT_UMAT_INTERFACE_H
+#ifndef UMAT_INTERFACE_H
+#define UMAT_INTERFACE_H
 
 #include <algorithm>
 #include <cctype>
@@ -569,4 +569,4 @@ void umat_dispatch(const dispatch_args<typename Traits::value_type>& a) noexcept
     ::numsim::materials::umat::umat_dispatch<TRAITS>(a);                       \
   }
 
-#endif  // NUMSIM_MATERIALS_UMAT_UMAT_INTERFACE_H
+#endif  // UMAT_INTERFACE_H

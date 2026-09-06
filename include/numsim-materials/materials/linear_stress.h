@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_LINEAR_STRESS_H
-#define NUMSIM_MATERIALS_LINEAR_STRESS_H
+#ifndef LINEAR_STRESS_H
+#define LINEAR_STRESS_H
 
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_base.h"
@@ -54,4 +54,4 @@ private:
 
 }  // namespace numsim::materials
 
-#endif  // NUMSIM_MATERIALS_LINEAR_STRESS_H
+#endif  // LINEAR_STRESS_H

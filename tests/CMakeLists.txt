@@ -30,6 +30,8 @@ add_numsim_test(test_material_registry test_material_registry.cpp)
 add_numsim_test(test_material_conformance test_material_conformance.cpp)
 target_compile_definitions(test_material_conformance PRIVATE
   NUMSIM_MATERIALS_INCLUDE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../include/numsim-materials/materials")
+add_numsim_test(test_uncovered_materials test_uncovered_materials.cpp)
+add_numsim_test(test_weighted_sum test_weighted_sum.cpp)
 target_link_libraries(test_umat_interface PRIVATE Threads::Threads)
 
 # Data dumper for plotting (not a test — standalone executable)

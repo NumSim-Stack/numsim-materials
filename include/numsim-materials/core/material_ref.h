@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_MATERIAL_REF_H
-#define NUMSIM_MATERIALS_MATERIAL_REF_H
+#ifndef MATERIAL_REF_H
+#define MATERIAL_REF_H
 
 #include <cassert>
 #include <stdexcept>
@@ -49,4 +49,4 @@ private:
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_MATERIAL_REF_H
+#endif // MATERIAL_REF_H
