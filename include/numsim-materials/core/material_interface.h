@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_MATERIAL_INTERFACE_H
-#define NUMSIM_MATERIALS_MATERIAL_INTERFACE_H
+#ifndef MATERIAL_INTERFACE_H
+#define MATERIAL_INTERFACE_H
 
 #include <any>
 #include <functional>
@@ -70,19 +70,39 @@ public:
   /// Collects ALL missing materials and reports them in one error.
   void wire_materials(material_handler& handler) {
     std::vector<std::string> missing;
+    std::vector<std::string> wrong_type;
     for (auto& ref : m_material_refs) {
+      // Look-up and type-check are separate failures and must stay separate.
+      // A single catch(...) around both reported a wrongly-typed material as
+      // MISSING, so swapping a solver for one of another type told the user
+      // their solver did not exist.
+      material_interface* target = nullptr;
       try {
         auto& any_ref = handler.get(ref->target_name());
-        auto& mat = std::any_cast<
+        target = &std::any_cast<
             std::reference_wrapper<material_interface> const&>(any_ref).get();
-        ref->wire(mat);
       } catch (...) {
         missing.push_back(ref->target_name());
+        continue;
+      }
+      try {
+        ref->wire(*target);
+      } catch (...) {
+        wrong_type.push_back(ref->target_name());
       }
     }
-    if (!missing.empty()) {
-      std::string msg = "wire_materials(): material '" + m_name + "' references missing materials:";
-      for (auto& name : missing) msg += " '" + name + "'";
+    if (!missing.empty() || !wrong_type.empty()) {
+      std::string msg = "wire_materials(): material '" + m_name + "'";
+      if (!missing.empty()) {
+        msg += " references materials that do not exist:";
+        for (auto& name : missing) msg += " '" + name + "'";
+      }
+      if (!wrong_type.empty()) {
+        if (!missing.empty()) msg += ";";
+        msg += " references materials of the wrong type:";
+        for (auto& name : wrong_type) msg += " '" + name + "'";
+        msg += " (they exist, but are not the type this material requires)";
+      }
       throw std::runtime_error(msg);
     }
   }
@@ -145,4 +165,4 @@ private:
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_MATERIAL_INTERFACE_H
+#endif // MATERIAL_INTERFACE_H

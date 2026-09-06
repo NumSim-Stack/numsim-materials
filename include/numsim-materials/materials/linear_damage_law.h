@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_LINEAR_DAMAGE_LAW_H
-#define NUMSIM_MATERIALS_LINEAR_DAMAGE_LAW_H
+#ifndef LINEAR_DAMAGE_LAW_H
+#define LINEAR_DAMAGE_LAW_H
 
 #include <algorithm>
 #include "numsim-materials/core/material_base.h"
@@ -70,4 +70,4 @@ private:
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_LINEAR_DAMAGE_LAW_H
+#endif // LINEAR_DAMAGE_LAW_H

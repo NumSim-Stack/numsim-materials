@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_VECTOR_STRAIN_STATE_FUNCTION_H
-#define NUMSIM_MATERIALS_VECTOR_STRAIN_STATE_FUNCTION_H
+#ifndef VECTOR_STRAIN_STATE_FUNCTION_H
+#define VECTOR_STRAIN_STATE_FUNCTION_H
 
 #include <cmath>
 #include <tmech/tmech.h>
@@ -77,4 +77,4 @@ private:
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_VECTOR_STRAIN_STATE_FUNCTION_H
+#endif // VECTOR_STRAIN_STATE_FUNCTION_H
