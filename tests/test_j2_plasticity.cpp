@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <print>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_context.h"
@@ -6,6 +7,7 @@
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/materials/linear_isotropic_hardening.h"
 #include "numsim-materials/materials/small_strain_plasticity.h"
+#include "numsim-materials/materials/j2_plasticity.h"
 #include "numsim-materials/materials/rk_plasticity.h"
 #include "numsim-materials/solvers/backward_euler.h"
 #include "numsim-materials/solvers/butcher_tableau.h"
@@ -192,19 +194,39 @@ protected:
 };
 
 TEST_F(J2TangentTest, ConsistentTangentAllSteps) {
-  T max_rel_error = 0;
+  // The elastic->plastic transition step is genuinely inexact: the tangent is
+  // discontinuous across the yield surface, so a central difference straddling
+  // it averages two different tangents. That step gets a loose bound.
+  //
+  // Every OTHER step is fully plastic and matches at ~1e-10. Bounding the whole
+  // run by the transition step's 10% made the check blind: a 0.5% error in the
+  // closed-form tangent still landed at 2.4e-4 and passed. The two regimes are
+  // now bounded separately.
+  T worst_plastic = 0, worst_transition = 0;
+  T alpha_before = 0;
+  int plastic_steps = 0;
   for (int i = 0; i < 20; ++i) {
     ctx.update();
-    auto rel = ctx.get<T>("checker", "rel_error");
-    auto alpha = ctx.get<T>("j2", "equivalent_plastic_strain");
-    std::println("  step {:2d}: rel={:.2e} alpha={:.4e}", i, rel, alpha);
-    if (rel > max_rel_error) max_rel_error = rel;
+    const auto rel = ctx.get<T>("checker", "rel_error");
+    const auto alpha = ctx.get<T>("j2", "equivalent_plastic_strain");
+    const bool was_plastic = alpha_before > T{1e-10};
+    const bool is_plastic = alpha > T{1e-10};
+    if (was_plastic && is_plastic) {          // fully inside the plastic regime
+      worst_plastic = std::max(worst_plastic, rel);
+      ++plastic_steps;
+    } else if (is_plastic) {                  // the crossing step
+      worst_transition = std::max(worst_transition, rel);
+    }
+    alpha_before = alpha;
     ctx.commit();
   }
-  // Transition steps (elastic→plastic) show ~5% error due to yield surface crossing.
-  // Fully elastic and fully plastic steps match at machine precision.
-  EXPECT_LT(max_rel_error, 0.1)
-      << "Consistent tangent should match numerical derivative";
+
+  ASSERT_GT(plastic_steps, 5) << "the path must spend real time yielding";
+  EXPECT_LT(worst_plastic, 1e-8)
+      << "the consistent tangent must match the numerical derivative on fully "
+         "plastic steps (worst " << worst_plastic << ")";
+  EXPECT_LT(worst_transition, 0.1)
+      << "the yield-crossing step is inexact but should stay bounded";
 }
 
 // --- RK plasticity: multi-stage return mapping via tableau parameter ---
