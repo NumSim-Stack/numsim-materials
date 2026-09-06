@@ -18,8 +18,9 @@ namespace numsim::materials {
 ///
 /// Normalization convention: equivalent_stress returns q = √J₂ (not √(3J₂)).
 /// The effective modulus (G + K·η·β), residual, and flow normal are all
-/// consistent with this choice. See the documentation in small_strain_plasticity.md
-/// for the full consistency requirements and the relationship to J2.
+/// consistent with this choice. See docs/plasticity-theory.md section 3 for the
+/// relationship to J2, and section 15.1 for the pressure-factor mismatch this
+/// normalization invites.
 template<typename T, std::size_t Dim>
 struct drucker_prager_yield_function {
   using tensor2 = tmech::tensor<T, Dim, 2>;
