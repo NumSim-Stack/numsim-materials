@@ -317,12 +317,43 @@ argument is indirection — it was removed from `small_strain_plasticity` and fr
 `rk_plasticity`. A template parameter with two genuinely different arguments is
 what templates are for.
 
-## 9. Known gaps
+## 9. Settled: the solver is reached by `material_ref`, not by the graph
 
-- **`material_ref`** exists for exactly two call sites (the two backward-Euler
-  return maps) and costs ~99 lines of core machinery. It bypasses the
-  topological sort, so the plasticity↔solver ordering is not an edge the engine
-  knows about. Safe today because `local_newton` holds no per-solve state.
+The return maps hold a `material_ref<local_newton>` and call `solve()`. The
+alternative — publishing a `yielding` flag so a graph-driven `backward_euler`
+knows when to iterate — was considered and **rejected**.
+
+The pattern would work: `strain_threshold_yield` already publishes
+`is_yielding` and `isotropic_damage` consumes it, so a gating flag is native to
+this codebase. It would retire `local_newton` and, with it, `material_ref` —
+about 99 lines of core machinery whose only two call sites are these.
+
+It was rejected on what it would cost to express:
+
+- **The material splits into phases.** `compute()` currently does trial →
+  solve → update in one callback. Graph-driven it becomes publish
+  `yielding`/`residual`/`jacobian`, solver runs, read `delta`, update. Two or
+  three properties where there is one, and graph dispatch measures ~30 ns even
+  for a trivial graph.
+- **A flag cannot carry Drucker-Prager's branch.** The apex fallback fires when
+  the *smooth solve fails*, which is not known until after it runs. Expressible
+  only as trial → smooth solver → `smooth_converged` → apex solver gated on
+  that flag → update: two solver instances, three flags, four phases, replacing
+  `if (!smooth.converged) do_apex_return(...)`.
+- **The elastic saving is partial** anyway — the solver's callback still fires
+  and returns early on the flag.
+
+The cost of the machinery is real but bounded; the cost of removing it is a
+graph harder to read than the code it replaces.
+
+**One constraint this decision carries.** `material_ref` bypasses the
+topological sort, so the plasticity↔solver ordering is not an edge the engine
+knows about. That is safe only because `local_newton` holds **no per-solve
+state** — its `solve()` is `const` and returns everything it computes. Give it
+mutable state and the ordering becomes real and unenforced.
+
+## 10. Known gaps
+
 - **The apex tangent is a branch tangent.** Verified consistent *on* the branch;
   a perturbation that leaves the apex back onto the smooth cone is not covered,
   and cannot be by a central difference.
