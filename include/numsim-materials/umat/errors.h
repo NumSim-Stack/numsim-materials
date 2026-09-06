@@ -1,5 +1,5 @@
-#ifndef ERRORS_H
-#define ERRORS_H
+#ifndef UMAT_ERRORS_H
+#define UMAT_ERRORS_H
 
 #include <atomic>
 #include <cstdio>
@@ -92,4 +92,4 @@ inline void invoke_fatal(const char* message) noexcept {
 
 }  // namespace numsim::materials::umat
 
-#endif  // ERRORS_H
+#endif  // UMAT_ERRORS_H
