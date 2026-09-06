@@ -284,6 +284,63 @@ TEST(WireMaterials, WrongTypeIsNotReportedAsMissing) {
 }
 
 /// The genuinely-absent case still reports absence.
+/// A material whose construction throws must leave nothing behind.
+///
+/// material_base used to register itself in the material handler BEFORE
+/// validating its parameters, and derived constructors can throw after that in
+/// any case -- a missing required parameter, an unknown tableau name, any deck
+/// typo. The handler stores std::ref and query_map has no erase, so the failed
+/// object stayed reachable under a live name: wire_materials would find it and
+/// dynamic_cast storage that had already been freed. Registration now happens
+/// in object_store::create, after the constructor has returned.
+///
+/// Here "solver" fails to construct (backward_euler requires "function") and
+/// is then referenced. The wiring must report it as absent. Before the fix it
+/// resolved to the destroyed object and was reported as merely the wrong type.
+TEST(WireMaterials, AFailedConstructionLeavesNoMaterialBehind) {
+  using policy = nm_w::material_policy_default;
+  using T2 = policy::value_type;
+  nm_w::material_context<policy> ctx;
+  policy::ParameterHandler p;
+
+  p.insert<std::string>("name", "stepper");
+  p.insert<T2>("increment", T2{0.01});
+  p.insert<std::vector<std::size_t>>("indices", {0, 0});
+  ctx.create<nm_w::tensor_component_stepper<2, policy>>(p);
+
+  p.clear();
+  p.insert<std::string>("name", "hardening");
+  p.insert<std::string>("source", "j2");
+  p.insert<T2>("K", T2{1000.0});
+  ctx.create<nm_w::linear_isotropic_hardening<policy>>(p);
+
+  p.clear();
+  p.insert<std::string>("name", "solver");
+  EXPECT_ANY_THROW(ctx.create<nm_w::backward_euler<policy>>(p))
+      << "backward_euler must reject a missing \"function\"";
+
+  p.clear();
+  p.insert<std::string>("name", "j2");
+  p.insert<std::string>("hardening_source", "hardening");
+  p.insert<std::string>("strain_source", "stepper");
+  p.insert<std::string>("solver_source", "solver");
+  p.insert<T2>("K", T2{166.67});
+  p.insert<T2>("G", T2{76.92});
+  p.insert<T2>("sigma_0", T2{50.0});
+  ctx.create<nm_w::j2_plasticity<policy>>(p);
+
+  try {
+    ctx.finalize();
+    FAIL() << "a reference to a material that failed to construct must fail "
+              "the wiring";
+  } catch (const std::runtime_error& e) {
+    const std::string msg = e.what();
+    EXPECT_NE(msg.find("do not exist"), std::string::npos) << msg;
+    EXPECT_EQ(msg.find("wrong type"), std::string::npos)
+        << "the failed material is still registered: " << msg;
+  }
+}
+
 TEST(WireMaterials, MissingIsStillReportedAsMissing) {
   using policy = nm_w::material_policy_default;
   using T2 = policy::value_type;

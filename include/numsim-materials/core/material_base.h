@@ -32,7 +32,9 @@ public:
       : base(parameter, property_handler),
         m_material_handler(material_handler)
   {
-    register_material();
+    // Validation only. Registration in the material handler happens in
+    // object_store::create, AFTER the derived constructor has returned -- see
+    // the note there.
     static auto check_para{Derived::parameters()};
     check_para.check_parameter(base::m_parameter_handler);
   }
@@ -81,12 +83,6 @@ private:
     Derived& obj = static_cast<Derived&>(*this);
     if (auto p = base::m_property_handler.find(base::m_name, property_name))
       (*p)->traits().update = [&obj, callback]() { (obj.*callback)(); };
-  }
-
-  void register_material() {
-    m_material_handler.set(
-        std::ref(static_cast<material_interface<Traits>&>(*this)),
-        base::m_name);
   }
 };
 
