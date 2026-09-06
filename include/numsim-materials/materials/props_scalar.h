@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_PROPS_SCALAR_H
-#define NUMSIM_MATERIALS_PROPS_SCALAR_H
+#ifndef PROPS_SCALAR_H
+#define PROPS_SCALAR_H
 
 #include <cstddef>
 #include <span>
@@ -73,4 +73,4 @@ private:
 
 }  // namespace numsim::materials
 
-#endif  // NUMSIM_MATERIALS_PROPS_SCALAR_H
+#endif  // PROPS_SCALAR_H
