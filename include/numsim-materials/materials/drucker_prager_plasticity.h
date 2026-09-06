@@ -96,6 +96,18 @@ public:
 
     const auto smooth = solve_smooth_newton(ts.eval.modified_sig_eq, kappa_n);
 
+    // A negative multiplier means G_eff + H' < 0 -- see the note in
+    // j2_plasticity. The smooth root is F_trial / (G_eff + H') and the return
+    // map is only entered with F_trial > 0, so the sign is a statement about
+    // the material, not about roundoff. Clamping it leaves the stress outside
+    // the cone with no plastic flow and no error.
+    if (smooth.converged && smooth.x < value_type{0})
+      throw std::runtime_error(
+          "drucker_prager_plasticity: the return map produced a negative "
+          "plastic multiplier, which means the hardening modulus is at or "
+          "below -(G + K*eta*beta). The softening branch is unstable and this "
+          "local return map cannot resolve it; use a smaller magnitude, or a "
+          "formulation with viscous or gradient regularisation.");
     // dlambda >= 0 is a statement about the plastic multiplier, enforced here
     // rather than inside a general scalar solver (see #13).
     const auto dlambda = std::max(smooth.x, value_type{0});

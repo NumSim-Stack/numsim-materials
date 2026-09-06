@@ -150,6 +150,24 @@ public:
     if (!sol.converged)
       throw std::runtime_error(
           "j2_plasticity: return-mapping Newton failed to converge");
+    // A negative multiplier is not a rounding artefact to be clamped away.
+    // The return map is only entered with F_trial > 0, and the root is
+    // F_trial / (G_eff + H'), so dlambda < 0 means G_eff + H' < 0: the material
+    // softens faster than it can unload elastically, the yield residual has
+    // positive slope, and the local problem has no admissible solution.
+    // Clamping to zero returns the elastic stress -- outside the yield surface,
+    // with no plastic flow and no indication. Measured on a uniaxial path with
+    // H' = -300 against 3G = 230.8, the equivalent stress climbed past
+    // sigma_0 = 50 to 76.9 with alpha identically zero.
+    // Moderate softening, -G_eff < H' < 0, still gives a positive root and is
+    // untouched.
+    if (sol.x < value_type{0})
+      throw std::runtime_error(
+          "j2_plasticity: the return map produced a negative plastic "
+          "multiplier, which means the hardening modulus is at or below "
+          "-3G. The softening branch is unstable and this local return map "
+          "cannot resolve it; use a smaller magnitude, or a formulation with "
+          "viscous or gradient regularisation.");
     // dlambda >= 0 is a statement about the plastic multiplier, so it is
     // enforced here rather than inside a general scalar solver (see #13).
     const auto dlambda = std::max(sol.x, value_type{0});

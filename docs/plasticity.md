@@ -398,6 +398,16 @@ mutable state and the ordering becomes real and unenforced.
   a perturbation that leaves the apex back onto the smooth cone is not covered,
   and cannot be by a central difference. It is also rank 1 by construction, so
   an element fully at the apex is singular regardless of hardening.
+- **Unstable softening is rejected, not resolved.** `Δλ = F/(G_eff + H')` turns
+  negative once `H' ≤ −G_eff`, where the yield residual has positive slope and
+  the local problem has no admissible solution. Both return maps now throw
+  there; they used to clamp `Δλ` to zero, which returned the elastic stress —
+  measured on a uniaxial path with `H' = −300` against `3G = 230.8`, the
+  equivalent stress climbed past `σ₀ = 50` to 76.9 with `α` identically zero.
+  Resolving that branch needs viscous or gradient regularisation, which is out
+  of scope for a local return map. Moderate softening, `−G_eff < H' < 0`, works.
+  The apex criterion also inverts under softening, giving a *missed* apex with
+  `q_new < 0`; that is still unguarded.
 - **The yield-function template is unconstrained.** `compute_tangent`'s 4G²
   collapse holds for the two yield functions in the tree and would be wrong for
   a stress-dependent volumetric flow (§3). A `static_assert` cannot express it;
