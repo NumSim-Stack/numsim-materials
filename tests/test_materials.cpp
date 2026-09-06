@@ -6,6 +6,7 @@
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/materials/scalar_stepper.h"
 #include "numsim-materials/solvers/local_newton.h"
+#include "numsim-materials/solvers/newton_scalar.h"
 #include "numsim-materials/materials/j2_plasticity.h"
 #include "numsim-materials/materials/linear_isotropic_hardening.h"
 #include "numsim-materials/materials/tensor_component_stepper.h"
@@ -236,6 +237,62 @@ TEST(BackwardEulerSetup, RejectsAFunctionWithoutResidualOrJacobian) {
 /// local_newton is the material-driven one: no function, no graph inputs, and
 /// its result carries convergence so a caller cannot read the number without
 /// the flag being at hand.
+/// newton_scalar had no direct test at all -- it was reached only through
+/// local_newton, whose cases all converge inside the budget or stall on a zero
+/// jacobian first. Its budget-exhaustion path, and the deliberate re-check on
+/// that path, ran in no test.
+TEST(NewtonScalar, ConvergesAndReportsTheIterationCount) {
+  const numsim::materials::newton_scalar<T> solver{T{1e-12}, 50};
+  // x^2 - 4 = 0 from x0 = 3
+  const auto r = solver.solve(
+      [](T x) { return std::pair<T, T>{x * x - T{4}, T{2} * x}; }, T{3});
+  EXPECT_TRUE(r.converged);
+  EXPECT_NEAR(r.x, T{2}, 1e-10);
+  EXPECT_GT(r.iterations, 1);
+  EXPECT_LE(r.iterations, 50);
+}
+
+/// The comment on the post-loop re-check says "the last step may still have
+/// landed on the root". This is that case: one iteration is budgeted, the
+/// linear problem is solved exactly by it, and the loop exits before it can
+/// observe the zero residual. Without the re-check this reports failure on a
+/// correct answer.
+TEST(NewtonScalar, ABudgetExhaustedOnTheRootStillReportsConvergence) {
+  const numsim::materials::newton_scalar<T> solver{T{1e-12}, 1};
+  const auto r = solver.solve(
+      [](T x) { return std::pair<T, T>{x - T{1}, T{1}}; }, T{0});
+  EXPECT_TRUE(r.converged) << "the single budgeted step lands exactly on the "
+                              "root; the re-check exists to notice";
+  EXPECT_NEAR(r.x, T{1}, 1e-15);
+  EXPECT_EQ(r.iterations, 1);
+}
+
+/// And the other side of the same branch: the budget runs out short of the
+/// root, so the re-check must report failure rather than rubber-stamping the
+/// last iterate.
+TEST(NewtonScalar, ABudgetExhaustedShortOfTheRootReportsFailure) {
+  const numsim::materials::newton_scalar<T> solver{T{1e-12}, 2};
+  const auto r = solver.solve(
+      [](T x) {
+        return std::pair<T, T>{x * x * x - T{2}, T{3} * x * x};
+      },
+      T{100});
+  EXPECT_FALSE(r.converged);
+  EXPECT_EQ(r.iterations, 2);
+  EXPECT_GT(r.x, T{1});   // still far above the root at 2^(1/3)
+}
+
+/// A vanishing jacobian is a stall and must not be reported as convergence,
+/// nor divided by.
+TEST(NewtonScalar, AVanishingJacobianStopsWithoutConverging) {
+  const numsim::materials::newton_scalar<T> solver{T{1e-12}, 50};
+  const auto r = solver.solve(
+      [](T x) { return std::pair<T, T>{x * x + T{1}, T{0}}; }, T{1});
+  EXPECT_FALSE(r.converged);
+  EXPECT_EQ(r.iterations, 1);
+  EXPECT_TRUE(std::isfinite(r.x));
+}
+
 TEST(LocalNewtonSolver, SolvesAndReportsConvergence) {
   using policy = nm_be::material_policy_default;
   using T2 = policy::value_type;
@@ -305,7 +362,12 @@ TEST(WireMaterials, WrongTypeIsNotReportedAsMissing) {
     FAIL() << "wiring a wrongly-typed solver must fail";
   } catch (const std::runtime_error& e) {
     const std::string msg = e.what();
-    EXPECT_NE(msg.find("wrong type"), std::string::npos) << msg;
+    // The contract is that a wrong type is DISTINGUISHABLE from a missing
+    // material and that the offending name is reported -- not the exact
+    // phrasing, which is copy and may be reworded. "type" survives
+    // "wrong type", "incompatible type" and "not the required type"; the
+    // earlier exact match on "wrong type" broke on all but the first.
+    EXPECT_NE(msg.find("type"), std::string::npos) << msg;
     EXPECT_NE(msg.find("'solver'"), std::string::npos) << msg;
     EXPECT_EQ(msg.find("do not exist"), std::string::npos)
         << "the material exists; saying otherwise sends the user hunting for "
