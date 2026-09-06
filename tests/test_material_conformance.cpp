@@ -30,11 +30,6 @@ const Registration registration_{};
 /// An entry here is a decision someone wrote down; the point of the test is
 /// that omission can no longer be mistaken for one.
 const std::set<std::string> kNotForJson = {
-    // Templates over a yield-function TYPE. The registrable names are their
-    // concrete aliases (j2_plasticity, drucker_prager_plasticity,
-    // j2_rk_plasticity), which ARE registered.
-    "small_strain_plasticity",
-    "rk_plasticity",
     // Template over Rank, registered as tensor_component_stepper_rank1 and
     // _rank2. Reachable from a document, just not under this stem.
     "tensor_component_stepper",
@@ -69,7 +64,7 @@ TEST(MaterialConformance, EveryMaterialIsRegisteredOrExplicitlyNotForJson) {
   for (const auto& stem : material_headers()) {
     if (kNotForJson.contains(stem)) continue;
     // Registered under its own name, or under an alias that mentions it
-    // (j2_plasticity -> small_strain_plasticity is handled by kNotForJson).
+    // Every plasticity class is now its own header and its own factory entry.
     EXPECT_TRUE(reg.contains(stem))
         << stem << " derives material_base but is not registered, so it cannot "
                    "be named in a JSON document. Register it, or add it to "
