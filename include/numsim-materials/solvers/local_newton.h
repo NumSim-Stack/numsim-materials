@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_LOCAL_NEWTON_H
-#define NUMSIM_MATERIALS_LOCAL_NEWTON_H
+#ifndef LOCAL_NEWTON_H
+#define LOCAL_NEWTON_H
 
 #include <string>
 #include "numsim-materials/core/material_base.h"
@@ -66,4 +66,4 @@ private:
 
 }  // namespace numsim::materials
 
-#endif  // NUMSIM_MATERIALS_LOCAL_NEWTON_H
+#endif  // LOCAL_NEWTON_H

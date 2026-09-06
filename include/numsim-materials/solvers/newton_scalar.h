@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_NEWTON_SCALAR_H
-#define NUMSIM_MATERIALS_NEWTON_SCALAR_H
+#ifndef NEWTON_SCALAR_H
+#define NEWTON_SCALAR_H
 
 #include <cmath>
 #include <utility>
@@ -70,4 +70,4 @@ private:
 
 }  // namespace numsim::materials
 
-#endif  // NUMSIM_MATERIALS_NEWTON_SCALAR_H
+#endif  // NEWTON_SCALAR_H
