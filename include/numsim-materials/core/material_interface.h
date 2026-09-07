@@ -53,21 +53,18 @@ public:
     return m_parameter_handler.template get<T>(std::forward<std::string>(key));
   }
 
-  /// Overwrite a parameter in place, so references bound by get_parameter()
-  /// stay valid and see the new value.
+  /// Overwrite a parameter in place so references bound by get_parameter() stay
+  /// valid and see the new value. Assigns through the non-const get<T>(), not
+  /// insert(): insert_or_assign replaces the whole std::any and relocates
+  /// anything past its small buffer.
   ///
-  /// Assigns through the non-const get<T>(), NOT insert(): insert_or_assign
-  /// replaces the whole std::any, relocating anything past its small buffer.
+  /// T is not deduced -- set_parameter<double>("K", 250) compiles,
+  /// set_parameter("K", 250) does not, where deducing int lost the write to a
+  /// run-time bad_any_cast.
   ///
-  /// T is deliberately NOT deduced. The stored type must be named exactly, so
-  /// set_parameter<double>("K", 250) is fine while set_parameter("K", 250)
-  /// fails to compile instead of throwing bad_any_cast at run time.
-  ///
-  /// Reaches only what the material re-reads through its bound reference. It
-  /// does NOT affect anything derived at construction (linear_elasticity's
-  /// tangent), copied into a member, or consumed once for wiring (source
-  /// names) — those keep their original values with no error. The write is also
-  /// local to THIS material, since each holds its own copy of the handler.
+  /// Reaches only what the material re-reads through its bound reference: not
+  /// state derived at construction, copied into a member, or consumed once for
+  /// wiring, and not other materials, which hold their own handler copy.
   template <typename T>
   void set_parameter(std::string const& key,
                      std::type_identity_t<T> const& value) {
