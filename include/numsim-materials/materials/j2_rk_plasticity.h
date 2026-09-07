@@ -17,7 +17,7 @@ namespace numsim::materials {
 /// Applies a Butcher tableau to the plasticity evolution equations.
 /// Each implicit stage solves F = 0 for Δλ_i. Explicit stages use
 /// the consistency condition. Shares trial/tangent code with
-/// small_strain_plasticity via plasticity_utils.h.
+/// drucker_prager_plasticity via plasticity_utils.h.
 template<typename Traits>
 class j2_rk_plasticity final
     : public material_base<j2_rk_plasticity<Traits>, Traits> {

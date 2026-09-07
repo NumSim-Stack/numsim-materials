@@ -1,10 +1,12 @@
 # Plasticity materials
 
-How the plasticity models are put together after the split of
-`small_strain_plasticity`, what each one requires, and which assumptions are
-load-bearing.
+How the three plasticity models — `j2_plasticity`, `drucker_prager_plasticity`
+and `j2_rk_plasticity` — are put together, what each one requires, and which
+assumptions are load-bearing.
 
-Current as of `refactor/scalar-newton-split` (PRs #39 and #40).
+This is the design. The mathematics behind it, from additive kinematics through
+the return map to the consistent tangent, is in
+[`plasticity-theory.md`](plasticity-theory.md).
 
 ---
 
@@ -351,8 +353,9 @@ real: `drucker_prager_plasticity` instantiates them with the DP cone and
 functions, shared return-mapping algebra.
 
 That is the distinction worth holding onto. A template parameter with **one**
-argument is indirection — it was removed from `small_strain_plasticity` and from
-`rk_plasticity`. A template parameter with two genuinely different arguments is
+argument is indirection — it was removed from the two classes that carried it,
+which are now `drucker_prager_plasticity` and `j2_rk_plasticity`. A template
+parameter with two genuinely different arguments is
 what templates are for.
 
 ## 9. Settled: the solver is reached by `material_ref`, not by the graph
