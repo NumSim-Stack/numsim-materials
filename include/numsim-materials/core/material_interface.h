@@ -3,6 +3,8 @@
 
 #include <any>
 #include <functional>
+#include <stdexcept>
+#include <type_traits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -49,6 +51,38 @@ public:
   template <typename T>
   const T& get_parameter(std::string&& key) const {
     return m_parameter_handler.template get<T>(std::forward<std::string>(key));
+  }
+
+  /// Overwrite a parameter in place so references bound by get_parameter() stay
+  /// valid and see the new value. Assigns through the non-const get<T>(), not
+  /// insert(): insert_or_assign replaces the whole std::any and relocates
+  /// anything past its small buffer.
+  ///
+  /// T is not deduced -- set_parameter<double>("K", 250) compiles,
+  /// set_parameter("K", 250) does not, where deducing int lost the write to a
+  /// run-time bad_any_cast.
+  ///
+  /// Reaches only what the material re-reads through its bound reference: not
+  /// state derived at construction, copied into a member, or consumed once for
+  /// wiring, and not other materials, which hold their own handler copy.
+  template <typename T>
+  void set_parameter(std::string const& key,
+                     std::type_identity_t<T> const& value) {
+    // The identity is cached in m_name and used as the registry key, so a write
+    // here would leave the parameter disagreeing with both.
+    if (key == "name")
+      throw std::invalid_argument(
+          "material_interface::set_parameter(): 'name' is the material's "
+          "identity and cannot be changed after construction");
+    try {
+      m_parameter_handler.template get<T>(key) = value;
+    } catch (const std::bad_any_cast&) {
+      // Otherwise this surfaces as a bare "bad any_cast" naming nothing, and
+      // from a type that is neither invalid_argument nor runtime_error.
+      throw std::invalid_argument(
+          "material_interface::set_parameter('" + key +
+          "'): the requested type does not match the stored one");
+    }
   }
 
   const auto& get_property_registry() const { return m_property_handler; }
