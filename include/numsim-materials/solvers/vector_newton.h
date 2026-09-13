@@ -165,7 +165,36 @@ public:
 
   void solve() {
     m_converged = false;
-    gather_state(m_x);   // seed from whatever the properties currently hold
+
+    // Cold start, every solve. This class used to seed from its own output
+    // properties, which looks like a warm start and is not one.
+    //
+    // The unknowns are plain outputs, not history properties, so statev_map
+    // never collects them (it skips anything !is_history()) and unpack() never
+    // restores them. One instance serves every integration point on a thread --
+    // umat_interface builds one material_context per thread and says why that
+    // is sufficient: "a consequence of the evaluator being stateless: all point
+    // state lives in the host's STATEV array". material_point_evaluator is
+    // blunter still: "anything the evaluator remembered across calls would be
+    // state from a trial the host has since discarded".
+    //
+    // Seeding from the properties is exactly such a memory. It seeds point N
+    // from point N-1's converged answer, and after a failure from a diverged
+    // iterate. For a system with several roots that silently selects a
+    // different one -- converged, plausible, and not the root this point is on.
+    //
+    // backward_euler is point-local by construction for the same reason: it
+    // passes a fixed literal seed rather than reading back its own "delta".
+    //
+    // Warm-starting is worth having, and plane_stress_evaluator shows the shape
+    // -- it keeps eps_33 in its own STATEV slot precisely because a cold start
+    // costs several extra graph evaluations per Gauss point. But it has to be
+    // PER POINT, which means the unknowns becoming history properties. Tracked
+    // in #21; until then, correct and slower beats fast and point-dependent.
+    //
+    // Zero is the seed. A model whose jacobian is singular there needs an
+    // explicit initial guess, which is the same #21 follow-up.
+    m_x.setZero(m_N);
 
     // Evaluate-first: the residual AFTER the final update is the one tested, so
     // a solve that converges on its last allowed update is reported converged.
