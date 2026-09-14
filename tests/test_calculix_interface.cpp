@@ -17,9 +17,7 @@
 #include "numsim-materials/umat/external_state_source.h"
 #include "numsim-materials/umat/umat_interface.h"
 
-// Both entry points live in this one translation unit: umat_ is the reference
-// path the CalculiX adapter is checked against, and the clx_* symbols are the
-// adapter under test. They are distinct extern "C" symbols, so they coexist.
+// umat_ is the reference path; the clx_* symbols are the adapter under test.
 NUMSIM_MATERIALS_DEFINE_UMAT(numsim::materials::material_policy_default)
 NUMSIM_MATERIALS_DEFINE_CALCULIX_BEHAVIOUR(
     numsim::materials::material_policy_default, clx_linear_elastic_, "LINELAS")
@@ -64,8 +62,7 @@ void build_deck_elastic(ctx_type& ctx, std::span<const double> props) {
   ctx.finalize();
 }
 
-/// A genuinely stateful model, so the xstateini -> xstate plumbing has real
-/// state to carry. Mirrors the sibling suite's J2 build.
+/// A stateful model, so the xstateini -> xstate plumbing has real state.
 void build_j2(ctx_type& ctx, std::span<const double> /*props*/) {
   param_type p;
   p.insert<std::string>("name", "stepper");
@@ -100,18 +97,13 @@ void build_j2(ctx_type& ctx, std::span<const double> /*props*/) {
 constexpr int slot_i[6] = {0, 1, 2, 0, 0, 1};
 constexpr int slot_j[6] = {0, 1, 2, 1, 2, 2};
 
-/// The value this probe puts at 6x6 entry (a, b). Deliberately NOT symmetric:
-/// asym_value(a,b) != asym_value(b,a) for a != b, which is what makes a
-/// transposed or one-sided read of the tangent observable.
+/// Deliberately NOT symmetric, so a transposed or one-sided read is visible.
 constexpr T asym_value(int a, int b) {
   return static_cast<T>(100 * (a + 1) + (b + 1));
 }
 
-/// Publishes a known, minor-symmetric but major-ASYMMETRIC tangent.
-///
-/// Minor symmetry is required (tangent_to_buffer asserts it); major symmetry is
-/// not, and is exactly what a non-associative model lacks. Stress is left zero:
-/// this probe exists only to pin the tangent packing.
+/// Minor-symmetric (which tangent_to_buffer asserts) but major-ASYMMETRIC, as a
+/// non-associative model is. Stress stays zero; this pins the tangent packing.
 template <typename Traits>
 class asym_tangent_material final
     : public nm::material_base<asym_tangent_material<Traits>, Traits> {
@@ -159,9 +151,8 @@ private:
   tensor4& m_tangent;
 };
 
-/// Reports the time it was bound with, so the TIME rebasing is observable from
-/// outside. Without a probe like this, nothing reaching a material through the
-/// shim depends on time at all and a wrong TIME(2) is undetectable at the ABI.
+/// Reports the time it was bound with; nothing else through the shim depends on
+/// time, so without this a wrong TIME(2) is undetectable at the ABI.
 template <typename Traits>
 class time_probe_material final
     : public nm::material_base<time_probe_material<Traits>, Traits> {
@@ -282,8 +273,7 @@ using clx_fn = void (*)(const char*, const int*, const int*, const int*,
                         double*, double*, double*, const int*, const double*,
                         const double*, double*, const int*, const int);
 
-/// Everything a CalculiX call needs, with the defaults a well-formed solid-3D
-/// call uses. Only what a test actually varies is set.
+/// Defaults for a well-formed solid-3D call; tests set only what they vary.
 struct clx_call {
   int iel = 1;
   int iint = 1;
@@ -353,12 +343,9 @@ void call_umat_reference(const std::string& name, T* stress, T* statev,
 // Convention translation
 // ---------------------------------------------------------------------------
 
-/// The load-bearing claim: the CalculiX adapter and the Abaqus entry, given the
-/// SAME physical strain expressed in their respective conventions, produce the
-/// same stress and the same tangent. A nonzero shear component makes the
-/// tensorial->engineering doubling observable, and a NONZERO start strain makes
-/// the stran/dstran split observable — with emec0 = 0 a swapped or dropped
-/// emec0 is invisible.
+/// The same physical strain, in each hook's own convention, must give the same
+/// stress and tangent. Nonzero shear exposes the engineering doubling; nonzero
+/// emec0 exposes the stran/dstran split (at emec0 = 0 a swap is invisible).
 TEST(CalculiXInterface, MatchesTheAbaqusEntryForTheSamePhysicalStrain) {
   const T props[2] = {K, G};
   const int nconst = 2;
@@ -404,8 +391,7 @@ TEST(CalculiXInterface, MatchesTheAbaqusEntryForTheSamePhysicalStrain) {
           << "stiff(" << i << "," << j << ")";
 }
 
-/// The shear conversion is not a no-op: feeding emec directly (tensorial) where
-/// the adapter must double it would halve every shear-driven stress.
+/// Feeding emec straight through would halve every shear-driven stress.
 TEST(CalculiXInterface, TensorialShearIsConvertedToEngineering) {
   const T props[2] = {K, G};
   const T e12 = 2.5e-3;
@@ -431,11 +417,9 @@ TEST(CalculiXInterface, TensorialShearIsConvertedToEngineering) {
   EXPECT_NEAR(stiff[3 + 3 * (3 + 1) / 2], G, 1e-9);
 }
 
-/// stiff(21) must carry the SYMMETRIZED tangent, as umat_abaqus.f:335-355 does.
-///
-/// The buffer umat_dispatch fills is column-major, so a row-major read would
-/// hand CalculiX C(j,i) instead of the average — invisible for every symmetric
-/// material, which is why this probe is deliberately major-asymmetric.
+/// stiff(21) carries the SYMMETRIZED tangent (umat_abaqus.f:335-355). The buffer
+/// is column-major, so a row-major read would hand ccx C(j,i) — invisible for
+/// any symmetric material, hence the asymmetric probe.
 TEST(CalculiXInterface, PacksTheSymmetrizedTangentIntoStiff21) {
   const T emec0[6] = {0, 0, 0, 0, 0, 0};
   const T emec[6] = {1.0e-3, 0, 0, 0, 0, 0};
@@ -453,8 +437,7 @@ TEST(CalculiXInterface, PacksTheSymmetrizedTangentIntoStiff21) {
       EXPECT_NEAR(stiff[i + j * (j + 1) / 2], expected, 1e-9)
           << "stiff(" << i << "," << j << ")";
       if (i != j) {
-        // Pin the bug this test exists for: a one-sided read would land on
-        // exactly one of these, and the average equals neither.
+        // A one-sided read lands on one of these; the average equals neither.
         EXPECT_NE(expected, asym_value(i, j));
         EXPECT_NE(expected, asym_value(j, i));
       }
@@ -466,16 +449,11 @@ TEST(CalculiXInterface, PacksTheSymmetrizedTangentIntoStiff21) {
 // State variables: the full-array indexing contract
 // ---------------------------------------------------------------------------
 
-/// CalculiX passes the WHOLE xstateini/xstate arrays — `(nstate_, mi(1),
-/// #elements)`, umat_main.f:40 — and their base pointer, not a slice for this
-/// point (contrast umat_abaqus.f:295). The adapter must therefore index by
-/// (iint, iel) itself.
-///
-/// Driven at element 2, integration point 3, this fails outright if the adapter
-/// works at offset 0: the trajectory would be read back from, and written to,
-/// the wrong block. The untouched blocks are checked too, because writing the
-/// right values into the wrong place AND leaving neighbours dirty are different
-/// bugs.
+/// ccx passes the WHOLE state arrays' base (umat_main.f:40,233), not a per-point
+/// slice as umat_abaqus.f:295 does, so the adapter must index by (iint, iel).
+/// Driven at element 2, point 3, this fails outright at offset 0. Neighbouring
+/// blocks are checked too: right values in the wrong place and dirty neighbours
+/// are different bugs.
 TEST(CalculiXInterface, IndexesStateByElementAndIntegrationPoint) {
   const int nstatv = static_cast<int>(registry::instance().nstatv("J2CLX"));
   ASSERT_GT(nstatv, 0) << "this test is meaningless without real state";
@@ -488,8 +466,7 @@ TEST(CalculiXInterface, IndexesStateByElementAndIntegrationPoint) {
   const std::size_t offset =
       static_cast<std::size_t>(nstatv) * ((iint - 1) + mi1 * (iel - 1));
 
-  // A strain ramp well past yield, so state genuinely accumulates. TENSORIAL,
-  // so the shear slot is half the engineering increment the sibling suite uses.
+  // Past yield, so state accumulates. TENSORIAL: shear is half the engineering.
   const T de[6] = {0.01, -0.0025, 0.0, 0.0025, 0.0, 0.0};
   constexpr int steps = 40;
 
@@ -512,7 +489,7 @@ TEST(CalculiXInterface, IndexesStateByElementAndIntegrationPoint) {
     c.nstatv = nstatv;
     c.run(&clx_j2_, "J2CLX", emec, emec0, st_old.data(), st_new.data(),
           clx_stress, clx_stiff);
-    // CalculiX commits xstate -> xstateini between increments.
+    // ccx commits xstate -> xstateini between increments.
     st_old = st_new;
   }
 
@@ -559,9 +536,8 @@ TEST(CalculiXInterface, IndexesStateByElementAndIntegrationPoint) {
 /// the START of the increment (umat_abaqus.f:187-188). Passing {time, ttime}
 /// through is right only on the first increment of the first step.
 ///
-/// The probe reports the bound times directly, so the exact rebasing is
-/// asserted rather than inferred. The material sees the TOTAL time spanning the
-/// increment: [ttime + time - dtime, ttime + time].
+/// The probe reports the bound times, so the rebasing is asserted exactly: the
+/// material sees [ttime + time - dtime, ttime + time].
 TEST(CalculiXInterface, RebasesTimeOntoTheStartOfTheIncrement) {
   const T emec0[6] = {0, 0, 0, 0, 0, 0};
   const T emec[6] = {1.0e-4, 0, 0, 0, 0, 0};
@@ -579,8 +555,7 @@ TEST(CalculiXInterface, RebasesTimeOntoTheStartOfTheIncrement) {
     return std::array<T, 3>{stress[0], stress[1], stress[2]};
   };
 
-  // First increment of the first step: time = dtime, ttime = 0. This is the one
-  // case where passing {time, ttime} straight through would also be correct.
+  // First increment of the first step — the one case the naive mapping gets right.
   {
     const auto t = times_seen(/*time=*/0.1, /*ttime=*/0.0, /*dt=*/0.1);
     EXPECT_NEAR(t[0], 0.0, 1e-12) << "total time at the START of the increment";
@@ -588,9 +563,7 @@ TEST(CalculiXInterface, RebasesTimeOntoTheStartOfTheIncrement) {
     EXPECT_NEAR(t[2], 0.1, 1e-12) << "dtime";
   }
 
-  // A later increment of a later step — where the naive mapping is wrong.
-  // ccx: step time ends at 0.9, the step began at total time 5.0, dt = 0.1.
-  // So the increment spans total time [5.0 + 0.9 - 0.1, 5.0 + 0.9] = [5.8, 5.9].
+  // A later increment of a later step: spans [5.0+0.9-0.1, 5.0+0.9] = [5.8, 5.9].
   {
     const auto t = times_seen(/*time=*/0.9, /*ttime=*/5.0, /*dt=*/0.1);
     EXPECT_NEAR(t[0], 5.8, 1e-12)
@@ -604,8 +577,7 @@ TEST(CalculiXInterface, RebasesTimeOntoTheStartOfTheIncrement) {
 // Guards and error paths
 // ---------------------------------------------------------------------------
 
-/// A local orientation is not applied around the native hook, so silently
-/// ignoring it would return results in the wrong frame. It must be refused.
+/// Nothing rotates around the native hook, so ignoring iorien is wrong-frame.
 TEST(CalculiXInterface, RefusesALocalOrientation) {
   FatalProbe probe;
   const T props[2] = {K, G};
@@ -624,8 +596,7 @@ TEST(CalculiXInterface, RefusesALocalOrientation) {
 
   EXPECT_EQ(FatalProbe::count, 1);
   EXPECT_NE(FatalProbe::last.find("ORIENTATION"), std::string::npos);
-  // Outputs are zeroed, so a handler that returns cannot leave the solver
-  // consuming the caller's uninitialised buffer.
+  // Zeroed, so a returning handler cannot leave the solver on a stale buffer.
   for (int i = 0; i < 6; ++i) EXPECT_EQ(stress[i], 0.0);
   for (int i = 0; i < 21; ++i) EXPECT_EQ(stiff[i], 0.0);
 }
@@ -672,8 +643,7 @@ TEST(CalculiXInterface, AcceptsAZeroInitialStress) {
   EXPECT_GT(stress[0], 0.0);
 }
 
-/// kode carries the constant count as -100 - nconst. Supplying fewer constants
-/// than the model reads is a setup fault, and the decode is what surfaces it.
+/// kode carries the count as -100 - nconst; too few constants is a setup fault.
 TEST(CalculiXInterface, DecodesTheConstantCountFromKode) {
   FatalProbe probe;
   const T props[2] = {K, G};
