@@ -34,8 +34,37 @@
 ///
 /// Errors belong to umat_dispatch: a setup fault zeroes outputs and terminates,
 /// anything else zeroes them and asks for a cutback with PNEWDT = 0.25 (a valid
-/// ccx pnewdt). REFUSED rather than ignored: `iorien != 0` and a nonzero `beta`.
-/// IGNORED: deformation gradients, temperature, and `ielas`.
+/// ccx pnewdt). REFUSED rather than ignored: `iorien != 0`, a nonzero `beta`,
+/// and `ielas != 0`. IGNORED: deformation gradients and temperature.
+///
+/// ## Building and naming the .so
+///
+/// ccx resolves the plugin itself, and both halves of the name are its choice,
+/// not ours. `external.c` prepends "lib" and appends ".so" to the LIB part of
+/// `*MATERIAL, NAME=@LIB,FUNC`, then `dlsym`s FUNC **verbatim** -- no Fortran
+/// mangling, no trailing underscore. So for
+///
+///     *MATERIAL, NAME=@numsimmat,my_model
+///
+/// the shared object must be `libnumsimmat.so` on ccx's library path, and this
+/// macro must be instantiated with FUNC spelled exactly `my_model`:
+///
+///     NUMSIM_MATERIALS_DEFINE_CALCULIX_BEHAVIOUR(my_traits, my_model, "MYMODEL")
+///
+/// That is why FUNC carries no underscore here while the Abaqus entry point in
+/// umat_interface.h is `umat_` -- that one is called from Fortran directly, this
+/// one through dlsym. Getting it backwards fails at run time with ccx's
+/// "unable to load function" and produces nothing at build time.
+///
+/// Two further constraints, both ccx's:
+///
+///  * The symbol must be EXPORTED. `extern "C"` alone is enough only while the
+///    build leaves default visibility; a target compiled `-fvisibility=hidden`
+///    hides it and ccx reports "unable to load function" with no other symptom.
+///    Add `-fvisibility=default` for this translation unit if that changes.
+///  * Keep LIB short. `external.c` builds the file name into a fixed `char
+///    b[80]` with an unchecked `memcpy`, so a long name overwrites its stack.
+///
 namespace numsim::materials::umat {
 
 /// The native hook is always full 3D.
@@ -91,6 +120,22 @@ void calculix_dispatch(const calculix_args& a, const char* model_name) noexcept 
   // umat_main.f does not rotate around this hook, unlike umat_abaqus.f; the
   // material owes results in the material frame (umat_user.f:86-104). Ignoring
   // iorien would return the wrong frame with no symptom.
+  // ielas = 1 is an ELASTIC iteration: ccx is asking for a response with no
+  // irreversible deformation. arpack.c, arpackbu.c and arpackcs.c set it, i.e.
+  // every eigenvalue and buckling analysis. A material that ignores it returns
+  // a tangent with plastic flow folded in, and the extracted eigenvalues are
+  // quietly wrong. Nothing in this library can suppress irreversible effects on
+  // request, so refuse rather than answer the wrong question.
+  if (a.ielas != 0) {
+    calculix_zero_outputs(a.stress, a.stiff);
+    report_fatal(model_name,
+                 "numsim CalculiX: an elastic iteration (ielas != 0) was "
+                 "requested -- *BUCKLE and *FREQUENCY need a response with no "
+                 "irreversible deformation, which this material cannot "
+                 "produce. Use a linear elastic material for those steps.");
+    return;
+  }
+
   if (a.iorien != 0) {
     calculix_zero_outputs(a.stress, a.stiff);
     report_fatal(model_name,

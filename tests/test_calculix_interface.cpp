@@ -1,9 +1,12 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <span>
+#include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <tmech/tmech.h>
@@ -29,6 +32,8 @@ NUMSIM_MATERIALS_DEFINE_CALCULIX_BEHAVIOUR(
     numsim::materials::material_policy_default, clx_missing_, "NOSUCHMODEL")
 NUMSIM_MATERIALS_DEFINE_CALCULIX_BEHAVIOUR(
     numsim::materials::material_policy_default, clx_time_, "TIMEPROBE")
+NUMSIM_MATERIALS_DEFINE_CALCULIX_BEHAVIOUR(
+    numsim::materials::material_policy_default, clx_throws_, "THROWSCLX")
 
 namespace {
 
@@ -187,6 +192,42 @@ private:
   const nm::input_history<value_type, nm::property_traits>& m_time;
 };
 
+/// Always throws a plain exception, to drive the cutback path.
+template <typename Traits>
+class throwing_material final
+    : public nm::material_base<throwing_material<Traits>, Traits> {
+ public:
+  using base = nm::material_base<throwing_material<Traits>, Traits>;
+  using value_type = typename base::value_type;
+  using input_parameter_controller = typename base::input_parameter_controller;
+  using tensor2 = tmech::tensor<value_type, 3, 2>;
+  using tensor4 = tmech::tensor<value_type, 3, 4>;
+
+  template <typename... Args>
+  explicit throwing_material(Args&&... args)
+      : base(std::forward<Args>(args)...),
+        m_stress(base::template add_output<tensor2>(
+            "stress", &throwing_material::compute)),
+        m_tangent(base::template add_output<tensor4>("tangent")) {}
+
+  static input_parameter_controller parameters() { return base::parameters(); }
+  void compute() { throw std::runtime_error("deliberate non-convergence"); }
+
+ private:
+  tensor2& m_stress;
+  tensor4& m_tangent;
+};
+
+void build_throws(ctx_type& ctx, std::span<const double> /*props*/) {
+  param_type p;
+  p.insert<std::string>("name", "stepper");
+  ctx.create<nm::external_strain_source<policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "probe");
+  ctx.create<throwing_material<policy>>(p);
+  ctx.finalize();
+}
+
 void build_time_probe(ctx_type& ctx, std::span<const double> /*props*/) {
   param_type p;
   p.insert<std::string>("name", "stepper");
@@ -234,6 +275,11 @@ struct Registration {
     tp.stress_source = "probe";
     tp.time_source = "clock";
     registry::instance().register_model("TIMEPROBE", build_time_probe, tp);
+
+    registry::config th;
+    th.strain_source = "stepper";
+    th.stress_source = "probe";
+    registry::instance().register_model("THROWSCLX", build_throws, th);
   }
 };
 const Registration registration;
@@ -249,6 +295,20 @@ struct fortran_name {
 
 /// A fatal fault must terminate the analysis. The handler is replaced so the
 /// test can observe it instead of the runner being killed by XIT/abort.
+/// The default fatal handler calls std::abort(), which is right in a solver --
+/// returning would hand the host a silently wrong material response -- and
+/// wrong in a test binary, where it takes every remaining test with it. This
+/// installs a binary-wide handler that fails the current test instead. A test
+/// that EXPECTS a fatal wraps itself in FatalProbe.
+struct UnexpectedFatalsFailTheTest : ::testing::Environment {
+  static void handler(const char* msg) {
+    ADD_FAILURE() << "unexpected fatal from the adapter: " << msg;
+  }
+  void SetUp() override { u::set_fatal_handler(&handler); }
+};
+const auto* const fatal_env =
+    ::testing::AddGlobalTestEnvironment(new UnexpectedFatalsFailTheTest);
+
 struct FatalProbe {
   static inline std::string last;
   static inline int count = 0;
@@ -261,7 +321,9 @@ struct FatalProbe {
     count = 0;
     u::set_fatal_handler(&handler);
   }
-  ~FatalProbe() { u::set_fatal_handler(nullptr); }
+  /// Restore the binary-wide handler, NOT the library default -- otherwise the
+  /// first probe in a run re-arms std::abort() for every test after it.
+  ~FatalProbe() { u::set_fatal_handler(&UnexpectedFatalsFailTheTest::handler); }
 };
 
 using clx_fn = void (*)(const char*, const int*, const int*, const int*,
@@ -663,6 +725,148 @@ TEST(CalculiXInterface, DecodesTheConstantCountFromKode) {
 }
 
 /// A symbol bound to a name nothing registered is unrecoverable.
+/// M6's guard, which the review table lists as resolved and nothing exercised.
+/// Removing the null check leaves every other test passing; with this one, the
+/// binary segfaults instead, which is the point -- the guard exists so a wiring
+/// mistake degrades rather than crashing.
+TEST(CalculiXInterface, RefusesANullStrainPointer) {
+  const T props[2] = {166.67, 76.92};
+  const T emec[6] = {1e-3, 0, 0, 0, 0, 0};
+  T so[1] = {0}, sn[1] = {0};
+
+  for (int which = 0; which < 2; ++which) {
+    T stress[6] = {9, 9, 9, 9, 9, 9};
+    T stiff[21];
+    for (auto& v : stiff) v = 5.0;
+
+    FatalProbe probe;
+    clx_call c;
+    c.mprops = props;
+    c.nconst = 2;
+    c.run(&clx_linear_elastic_, "LINELAS", which == 0 ? nullptr : emec,
+          which == 0 ? emec : nullptr, so, sn, stress, stiff);
+
+    EXPECT_EQ(FatalProbe::count, 1)
+        << (which == 0 ? "null emec" : "null emec0") << " was not refused";
+    for (int i = 0; i < 6; ++i) EXPECT_EQ(stress[i], 0.0) << "i=" << i;
+    for (int i = 0; i < 21; ++i) EXPECT_EQ(stiff[i], 0.0) << "i=" << i;
+  }
+}
+
+/// ielas = 1 asks for a response with no irreversible deformation -- what
+/// *BUCKLE and *FREQUENCY need; arpack.c, arpackbu.c and arpackcs.c all set it.
+/// Nothing here can suppress plastic flow on request, so answering anyway would
+/// fold irreversible effects into the tangent and quietly skew the eigenvalues.
+TEST(CalculiXInterface, RefusesAnElasticIteration) {
+  const T props[2] = {166.67, 76.92};
+  const T emec0[6] = {0, 0, 0, 0, 0, 0};
+  const T emec[6] = {1e-3, 0, 0, 0, 0, 0};
+  T so[1] = {0}, sn[1] = {0};
+  T stress[6] = {9, 9, 9, 9, 9, 9};
+  T stiff[21];
+  for (auto& v : stiff) v = 5.0;
+
+  FatalProbe probe;
+  clx_call c;
+  c.mprops = props;
+  c.nconst = 2;
+  c.ielas = 1;
+  c.run(&clx_linear_elastic_, "LINELAS", emec, emec0, so, sn, stress, stiff);
+
+  EXPECT_EQ(FatalProbe::count, 1) << "an elastic iteration must be refused";
+  EXPECT_NE(FatalProbe::last.find("ielas"), std::string::npos)
+      << FatalProbe::last;
+  for (int i = 0; i < 6; ++i) EXPECT_EQ(stress[i], 0.0) << "i=" << i;
+  for (int i = 0; i < 21; ++i) EXPECT_EQ(stiff[i], 0.0) << "i=" << i;
+}
+
+/// And ielas = 0 -- every static increment -- must still go through.
+TEST(CalculiXInterface, AcceptsTheOrdinaryNonElasticIteration) {
+  const T props[2] = {166.67, 76.92};
+  const T emec0[6] = {0, 0, 0, 0, 0, 0};
+  const T emec[6] = {1e-3, 0, 0, 0, 0, 0};
+  T so[1] = {0}, sn[1] = {0};
+  T stress[6] = {0, 0, 0, 0, 0, 0};
+  T stiff[21] = {0};
+
+  clx_call c;
+  c.mprops = props;
+  c.nconst = 2;
+  c.ielas = 0;
+  c.run(&clx_linear_elastic_, "LINELAS", emec, emec0, so, sn, stress, stiff);
+  EXPECT_GT(std::abs(stress[0]), 1e-12) << "the ordinary path was refused too";
+}
+
+/// A cutback must reach ccx through PNEWDT on the CALLER's buffer. umat_user.f:
+/// pnewdt "should exceed zero but be less than 1. Default is -1 indicating that
+/// the user routine has converged", and checkconvergence.c multiplies the step
+/// by it. Drop the write and a diverged point is reported as converged.
+TEST(CalculiXInterface, ACutbackPropagatesThroughTheAdapter) {
+  const T emec0[6] = {0, 0, 0, 0, 0, 0};
+  const T emec[6] = {1e-3, 0, 0, 0, 0, 0};
+  T so[1] = {0}, sn[1] = {0};
+  T stress[6] = {1, 1, 1, 1, 1, 1};
+  T stiff[21];
+  for (auto& v : stiff) v = 1.0;
+
+  clx_call c;
+  c.pnewdt = -1.0;  // ccx's "converged" default
+  c.run(&clx_throws_, "THROWSCLX", emec, emec0, so, sn, stress, stiff);
+
+  EXPECT_DOUBLE_EQ(c.pnewdt, 0.25)
+      << "a throwing material must ask ccx for a smaller increment";
+  for (int i = 0; i < 6; ++i) EXPECT_EQ(stress[i], 0.0) << "i=" << i;
+  for (int i = 0; i < 21; ++i) EXPECT_EQ(stiff[i], 0.0) << "i=" << i;
+}
+
+/// ccx drives one .so from a threaded element loop, so the entry point is
+/// re-entered concurrently at distinct (iel, iint). umat_interface caches one
+/// context per thread; this pins that the adapter adds no sharing of its own.
+TEST(CalculiXInterface, ConcurrentCallsAtDistinctPointsAgreeWithSerialOnes) {
+  constexpr int nthreads = 8;
+  constexpr int steps = 50;
+  const T props[2] = {166.67, 76.92};
+
+  auto drive = [&](int thread_index) {
+    T emec0[6] = {0, 0, 0, 0, 0, 0}, emec[6] = {0, 0, 0, 0, 0, 0};
+    T last = 0;
+    for (int step = 0; step < steps; ++step) {
+      for (int i = 0; i < 6; ++i) {
+        emec0[i] = emec[i];
+        emec[i] = emec0[i] + 1e-5 * (thread_index + 1);
+      }
+      T so[1] = {0}, sn[1] = {0};
+      T stress[6] = {0, 0, 0, 0, 0, 0};
+      T stiff[21] = {0};
+      clx_call c;
+      c.iel = thread_index + 1;
+      c.iint = 1;
+      c.mi1 = 4;
+      c.mprops = props;
+      c.nconst = 2;
+      c.run(&clx_linear_elastic_, "LINELAS", emec, emec0, so, sn, stress,
+            stiff);
+      last = stress[0];
+    }
+    return last;
+  };
+
+  std::vector<T> serial(nthreads);
+  for (int t = 0; t < nthreads; ++t) serial[t] = drive(t);
+
+  std::vector<T> concurrent(nthreads);
+  std::vector<std::thread> pool;
+  for (int t = 0; t < nthreads; ++t)
+    pool.emplace_back([&, t] { concurrent[t] = drive(t); });
+  for (auto& th : pool) th.join();
+
+  for (int t = 0; t < nthreads; ++t) {
+    ASSERT_TRUE(std::isfinite(serial[t])) << "t=" << t;
+    EXPECT_DOUBLE_EQ(concurrent[t], serial[t])
+        << "thread " << t << " disagreed with the same sequence run serially";
+  }
+}
+
 TEST(CalculiXInterface, UnknownModelIsFatal) {
   FatalProbe probe;
   const T emec0[6] = {0, 0, 0, 0, 0, 0};
