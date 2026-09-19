@@ -47,7 +47,8 @@ using solver_type = vector_newton<policy>;
 // may bind wherever it likes. It does NOT re-fire for the Jacobian blocks,
 // since this one callback produces residual and Jacobian together.
 
-enum class system_mode { linear, nonlinear, singular, decoupled };
+enum class system_mode { linear, nonlinear, singular, decoupled,
+                         near_singular };
 
 class scalar_system_2 final : public material_base<scalar_system_2, policy> {
 public:
@@ -99,6 +100,16 @@ public:
         // legitimately land on a point of the solution manifold.
         m_rx = x + y - m_a;   m_jxx = 1;  m_jxy = 1;
         m_ry = x + y - m_b;   m_jyx = 1;  m_jyy = 1;
+        break;
+      case system_mode::near_singular:
+        // Condition ~2/eps. At eps = 1e-13 partialPivLu returns a FINITE dx of
+        // order 1e10, so allFinite() lets it through and only the backward-error
+        // check can see that J*dx does not reproduce R.
+        {
+          constexpr T eps = 1e-13;
+          m_rx = x + y - m_a;                 m_jxx = 1;  m_jxy = 1;
+          m_ry = x + (1 + eps) * y - m_b;     m_jyx = 1;  m_jyy = 1 + eps;
+        }
         break;
       case system_mode::decoupled:
         // dR_x/dy is IDENTICALLY zero, so declaring that block zero is exact
@@ -257,6 +268,39 @@ TEST(VectorNewton, SingularJacobianReportsFailure) {
   const auto y = f.ctx.get<T>("solver", "y");
   EXPECT_TRUE(std::isfinite(x) && std::isfinite(y))
       << "and must not scatter NaN/inf into the state";
+}
+
+/// The backward-error guard, which had no test and was suspected unreachable.
+///
+/// It is reachable, in a window allFinite() cannot cover. Measured on the 2x2
+/// system below with partialPivLu:
+///
+///     cond ~1e8    back_err/|R| = 3.8e-12   below linear_tolerance, no fire
+///     cond  1e12   back_err/|R| = 4.7e-08   fires; dx finite at 1e9
+///     cond  1e14   back_err/|R| = 7.1e-06   fires; dx finite at 1e11
+///     cond >=1e16  dx = inf/nan             allFinite catches it first
+///
+/// So between roughly 1e12 and 1e15 the linear solve returns finite garbage,
+/// and this check is the only thing that notices.
+///
+/// What it must do is not merely report failure -- an unguarded solve also ends
+/// up not converged, by exhausting max_iter. It must decline to APPLY the step,
+/// leaving the iterate where it was rather than 1e10 away from it.
+TEST(VectorNewton, ANearSingularJacobianStopsWithoutMovingTheIterate) {
+  scalar_fixture f(system_mode::near_singular, 1.0, 1.001);
+  f.solver->solve();
+
+  EXPECT_FALSE(f.solver->converged())
+      << "a linear solve this badly conditioned must not be reported converged";
+
+  const auto x = f.ctx.get<T>("solver", "x");
+  const auto y = f.ctx.get<T>("solver", "y");
+  EXPECT_TRUE(std::isfinite(x)) << x;
+  EXPECT_TRUE(std::isfinite(y)) << y;
+  EXPECT_LT(std::abs(x), 1e3)
+      << "the rejected step was applied anyway: the iterate ran to " << x;
+  EXPECT_LT(std::abs(y), 1e3)
+      << "the rejected step was applied anyway: the iterate ran to " << y;
 }
 
 TEST(VectorNewton, MaxIterExhaustedReportsFailure) {
