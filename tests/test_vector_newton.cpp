@@ -180,6 +180,73 @@ TEST(VectorNewton, NonlinearSystemConvergesToAnalyticRoot) {
   EXPECT_NEAR(f.ctx.get<T>("solver", "y"), 2.0, 1e-9);
 }
 
+/// One solver instance, two different problems: each must land where a fresh
+/// instance lands.
+///
+/// This is the property the class needs and did not have. vector_newton's
+/// unknowns are plain outputs, so statev_map never collects them and unpack()
+/// never restores them; one instance serves every integration point on a
+/// thread, driven by an evaluator whose stated design is that nothing is
+/// retained between calls. solve() nevertheless seeded itself by reading those
+/// properties back, so point N started from point N-1's answer.
+///
+/// x^2 + y = a ; x + y^2 = b has several real roots, so a seed does not merely
+/// change the iteration count -- it selects WHICH root is returned, converged
+/// and plausible and wrong for this point.
+TEST(VectorNewton, SolvesArePointLocal) {
+  auto fresh = [](T a, T b) {
+    scalar_fixture f(system_mode::nonlinear, a, b);
+    f.solver->solve();
+    EXPECT_TRUE(f.solver->converged());
+    return std::pair<T, T>{f.ctx.get<T>("solver", "x"),
+                           f.ctx.get<T>("solver", "y")};
+  };
+  const auto first  = fresh(5.248, 27.4);
+  const auto second = fresh(3.0, 5.0);
+
+  // Now drive BOTH through one instance, changing the problem in place.
+  scalar_fixture shared(system_mode::nonlinear, 5.248, 27.4);
+  auto* sys = shared.ctx.find("sys");
+  ASSERT_NE(sys, nullptr);
+  shared.solver->solve();
+  ASSERT_TRUE(shared.solver->converged());
+  EXPECT_DOUBLE_EQ(shared.ctx.get<T>("solver", "x"), first.first);
+
+  sys->template set_parameter<T>("a", 3.0);
+  sys->template set_parameter<T>("b", 5.0);
+  shared.solver->solve();
+  ASSERT_TRUE(shared.solver->converged());
+  EXPECT_DOUBLE_EQ(shared.ctx.get<T>("solver", "x"), second.first)
+      << "the second solve was seeded by the first: this instance returned a "
+         "different root than a fresh one does for the same problem";
+  EXPECT_DOUBLE_EQ(shared.ctx.get<T>("solver", "y"), second.second);
+}
+
+/// And a FAILED solve in between must not move the one after it either.
+///
+/// On failure the output properties deliberately keep the last raw iterate, so
+/// that a failed solve cannot pass for a plausible answer. Seeding the next
+/// solve from them turned that honesty into a hazard.
+TEST(VectorNewton, AFailedSolveDoesNotMoveTheNext) {
+  scalar_fixture reference(system_mode::nonlinear, 3.0, 5.0);
+  reference.solver->solve();
+  ASSERT_TRUE(reference.solver->converged());
+  const auto x_ref = reference.ctx.get<T>("solver", "x");
+
+  scalar_fixture f(system_mode::nonlinear, -10.0, -10.0);
+  f.solver->solve();
+  ASSERT_FALSE(f.solver->converged()) << "the setup must actually fail";
+
+  auto* sys = f.ctx.find("sys");
+  ASSERT_NE(sys, nullptr);
+  sys->template set_parameter<T>("a", 3.0);
+  sys->template set_parameter<T>("b", 5.0);
+  f.solver->solve();
+  ASSERT_TRUE(f.solver->converged());
+  EXPECT_DOUBLE_EQ(f.ctx.get<T>("solver", "x"), x_ref)
+      << "the solve after a failure was seeded from the diverged iterate";
+}
+
 TEST(VectorNewton, SingularJacobianReportsFailure) {
   scalar_fixture f(system_mode::singular, 4.0, 7.0);   // inconsistent: a != b
   f.solver->solve();
