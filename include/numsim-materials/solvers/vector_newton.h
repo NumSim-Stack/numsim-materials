@@ -229,11 +229,27 @@ public:
       // check would silently pass an infinite step. They are independent
       // because of comparison semantics, not merely because of magnitudes.
       //
-      // Conversely a nearly singular jacobian yields a FINITE dx that does not
-      // solve the system -- cond ~4e13 gives |dx| ~ 1e10 with a relative
+      // Conversely a nearly singular jacobian can yield a FINITE dx that does
+      // not solve the system -- cond ~4e13 gives |dx| ~ 1e10 with a relative
       // residual of 5.5e-07 -- which allFinite cannot see. The boundary between
       // the two is not a condition number but fl(1 + eps) == 1.0 making the
       // pivot exactly zero.
+      //
+      // What this does NOT do is detect ill-conditioning, and the distinction
+      // is sharper than it looks. Measured on one system at fixed cond ~4e13,
+      // varying only the problem scale:
+      //
+      //     scale   rel. residual   fires   forward error of the step
+      //     1e0     5.5e-07         yes     8.0e-04
+      //     1e2     2.4e-07         yes     8.0e-04
+      //     1e3     1.1e-16         NO      8.0e-04
+      //     1e6     1.2e-16         NO      8.0e-04
+      //
+      // The step is equally wrong at every scale; the check fires only where
+      // the constants leave sub-ULP noise in the residual. That is correct for
+      // what it measures -- whether J*dx reproduces R -- and it is why this is
+      // a relative-residual check and not a conditioning check. A model that
+      // needs the latter has to ask for it separately.
       //
       // Neither survives -ffast-math: reassociation folds J*dx - R to zero and
       // -ffinite-math-only makes allFinite() return true for inf. Nothing in

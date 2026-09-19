@@ -298,6 +298,12 @@ TEST(VectorNewton, SingularJacobianReportsFailure) {
 /// What the guard must do is not merely report failure -- an unguarded solve
 /// also ends up not converged, by exhausting max_iter. It must decline to APPLY
 /// the step.
+///
+/// Read this as covering the RESIDUAL check, not ill-conditioning. The same
+/// system at scale 1e3 has the same cond and the same 8e-4 forward error in its
+/// step, and the guard does not fire there, because 1.001*1000 is exactly
+/// representable and the sub-ULP residual noise disappears. See the table in
+/// vector_newton.h. The constants here are load-bearing for that reason.
 TEST(VectorNewton, ANearSingularJacobianStopsWithoutMovingTheIterate) {
   scalar_fixture f(system_mode::near_singular, 1.0, 1.001);
   f.solver->solve();
@@ -1124,7 +1130,8 @@ TEST(VectorNewtonJson, ReadsZeroBlocksAndKeepsTheRowColumnOrder) {
          "verify_zero_blocks": true,
          "zero_blocks": )") + blocks + R"(},
         {"type": "scalar_system_2", "name": "sys", "solver_name": "solver",
-         "mode": 3, "a": 5.0, "b": 10.0}
+         "mode": )" + std::to_string(static_cast<int>(system_mode::decoupled)) + R"(,
+         "a": 5.0, "b": 10.0}
       ]
     })");
     for (const auto& m : doc["materials"]) create_from_json(ctx, m);
@@ -1140,6 +1147,9 @@ TEST(VectorNewtonJson, ReadsZeroBlocksAndKeepsTheRowColumnOrder) {
     ASSERT_NE(solver, nullptr);
     EXPECT_NO_THROW(solver->solve())
         << "a true zero_blocks claim from a document must be accepted";
+    EXPECT_TRUE(solver->converged())
+        << "not throwing is not enough -- a solver that bailed immediately "
+           "would also pass";
   }
   {  // dR_y/dx is 1: the same pair, transposed, must be caught
     ctx_type ctx;
@@ -1179,8 +1189,20 @@ TEST(VectorNewtonJson, RejectsAZeroBlocksEntryThatIsNotAPair) {
       ADD_FAILURE() << "accepted a malformed zero_blocks entry: " << blocks;
     } catch (const std::exception& e) {
       const std::string msg = e.what();
+      // Weak on its own: json_reader_registry wraps EVERY reader failure as
+      // "failed to read parameter 'zero_blocks'", so this passes for an
+      // nlohmann type error too. The assertion below is the one with teeth.
       EXPECT_NE(msg.find("zero_blocks"), std::string::npos)
           << "the error must name the parameter: " << msg;
+      // Deliberate coupling to the word "pair": it is the only token the
+      // parse-time check emits that the solver's name check does not, so it is
+      // what distinguishes them. Rewording the converter's message will break
+      // this -- that is the cost of the discrimination, not an oversight.
+      //
+      // The check also prevents undefined behaviour, not just a worse message:
+      // without it, names[1] on a one-element entry is an out-of-bounds vector
+      // read, and removing it makes the ["x"] and [[]] cases abort the binary
+      // with heap corruption rather than fail cleanly.
       EXPECT_NE(msg.find("pair"), std::string::npos)
           << "rejected by the solver's name check rather than at parse time, "
              "so the message points at the wrong problem: " << msg;
