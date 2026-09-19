@@ -938,6 +938,96 @@ TEST(VectorNewtonJson, ConfigMatchesHandWiredSetup) {
   EXPECT_NEAR(ctx.get<T>("solver", "y"), 3.0, 1e-12);
 }
 
+/// zero_blocks through the JSON reader, which the C++ tests above cannot reach.
+///
+/// parameter_handler::insert() takes a ready-made std::vector<block_ref> and
+/// bypasses the converter entirely, so every existing zero_blocks test proves
+/// nothing about the reader registered in json_parameter_converter.h. A deck is
+/// the only way a user supplies this.
+///
+/// The pair's ORDER is what is pinned, not merely that it parses. In the
+/// 'decoupled' system dR_x/dy is identically zero while dR_y/dx is 1, so
+/// ["x","y"] is a true claim and ["y","x"] is a false one. A converter that
+/// transposed the pair, or dropped it, would pass a test that only checked the
+/// honest case.
+TEST(VectorNewtonJson, ReadsZeroBlocksAndKeepsTheRowColumnOrder) {
+  register_default_materials<policy>();
+  material_factory<policy>::instance()
+      .template register_type<scalar_system_2>("scalar_system_2");
+
+  auto build = [](ctx_type& ctx, const char* blocks) {
+    const auto doc = nlohmann::json::parse(std::string(R"({
+      "materials": [
+        {"type": "vector_newton", "name": "solver", "function": "sys",
+         "unknowns": [{"name": "x", "kind": "scalar"},
+                      {"name": "y", "kind": "scalar"}],
+         "verify_zero_blocks": true,
+         "zero_blocks": )") + blocks + R"(},
+        {"type": "scalar_system_2", "name": "sys", "solver_name": "solver",
+         "mode": 3, "a": 5.0, "b": 10.0}
+      ]
+    })");
+    for (const auto& m : doc["materials"]) create_from_json(ctx, m);
+    ctx.finalize();
+    // verify_zero_blocks runs inside solve(), so drive the solver directly
+    // rather than through the graph.
+    return dynamic_cast<solver_type*>(ctx.find("solver"));
+  };
+
+  {  // dR_x/dy IS zero in the decoupled system: the claim holds
+    ctx_type ctx;
+    auto* solver = build(ctx, R"([["x", "y"]])");
+    ASSERT_NE(solver, nullptr);
+    EXPECT_NO_THROW(solver->solve())
+        << "a true zero_blocks claim from a document must be accepted";
+  }
+  {  // dR_y/dx is 1: the same pair, transposed, must be caught
+    ctx_type ctx;
+    auto* solver = build(ctx, R"([["y", "x"]])");
+    ASSERT_NE(solver, nullptr);
+    EXPECT_THROW(solver->solve(), std::runtime_error)
+        << "either the reader dropped the entry or it transposed the pair";
+  }
+}
+
+/// The converter's own error path: each entry must be a [row, column] PAIR.
+///
+/// Asserting only that the message mentions "zero_blocks" is not enough. The
+/// solver validates the entries too, and rejects a malformed pair that the
+/// converter let through -- its message names zero_blocks as well, so such a
+/// test passes with the converter's check deleted. The distinguishing word is
+/// "pair": only the parse-time check can say that, because by the time the
+/// solver sees it the entry is already a well-formed two-element block_ref with
+/// a nonsense name in it.
+///
+/// The difference matters for the message a user gets: "each entry must be a
+/// [row, column] pair" points at the deck line, "names an unknown that is not
+/// declared" points at the wrong thing entirely.
+TEST(VectorNewtonJson, RejectsAZeroBlocksEntryThatIsNotAPair) {
+  register_default_materials<policy>();
+
+  for (const char* blocks : {R"([["x"]])", R"([["x", "y", "z"]])", R"([[]])"}) {
+    const auto json = nlohmann::json::parse(
+        std::string(R"({"type": "vector_newton", "name": "solver",
+                        "function": "sys",
+                        "unknowns": [{"name": "x", "kind": "scalar"},
+                                     {"name": "y", "kind": "scalar"}],
+                        "zero_blocks": )") + blocks + "}");
+    ctx_type ctx;
+    try {
+      create_from_json(ctx, json);
+      ADD_FAILURE() << "accepted a malformed zero_blocks entry: " << blocks;
+    } catch (const std::exception& e) {
+      const std::string msg = e.what();
+      EXPECT_NE(msg.find("zero_blocks"), std::string::npos)
+          << "the error must name the parameter: " << msg;
+      EXPECT_NE(msg.find("pair"), std::string::npos)
+          << "rejected by the solver's name check rather than at parse time, "
+             "so the message points at the wrong problem: " << msg;
+    }
+  }
+}
+
 TEST(VectorNewtonJson, RejectsUnrecognisedKind) {
   register_default_materials<policy>();
 
