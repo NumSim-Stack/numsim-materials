@@ -132,7 +132,12 @@ public:
         .template add<is_required>();
     para.template insert<value_type>("tolerance")
         .template add<set_default>(value_type{1e-10});
-    // Backward-error tolerance for the linear solve; guards a singular Jacobian.
+    // Relative-residual tolerance for the linear solve; guards a singular
+    // jacobian. NOT a backward error in the textbook sense: that is normalized
+    // by |J|*|dx|, and partialPivLu is backward-stable, so the normalized form
+    // sits at ~1e-17 even at cond 1e15 and would never fire. This compares
+    // |J*dx - R| against lin_tol*|R|, which is what actually detects a solve
+    // that did not solve the system.
     para.template insert<value_type>("linear_tolerance")
         .template add<set_default>(value_type{1e-8});
     para.template insert<int>("max_iter").template add<set_default>(50);
@@ -216,9 +221,23 @@ public:
       m_lu.compute(m_J);
       m_dx = m_lu.solve(m_R);
 
-      // Guard a singular / rank-deficient Jacobian. A backward-error check is
-      // cheaper than rank-revealing pivoting every iteration and catches the
-      // same failures; finiteness alone would not.
+      // Guard a singular / rank-deficient Jacobian. Two checks, and each
+      // catches what the other cannot.
+      //
+      // allFinite first, and the order matters: once dx is inf, back_err is
+      // NaN, and NaN > tol is FALSE under IEEE comparison. The backward-error
+      // check would silently pass an infinite step. They are independent
+      // because of comparison semantics, not merely because of magnitudes.
+      //
+      // Conversely a nearly singular jacobian yields a FINITE dx that does not
+      // solve the system -- cond ~4e13 gives |dx| ~ 1e10 with a relative
+      // residual of 5.5e-07 -- which allFinite cannot see. The boundary between
+      // the two is not a condition number but fl(1 + eps) == 1.0 making the
+      // pivot exactly zero.
+      //
+      // Neither survives -ffast-math: reassociation folds J*dx - R to zero and
+      // -ffinite-math-only makes allFinite() return true for inf. Nothing in
+      // this project enables it; do not.
       if (!m_dx.allFinite()) return;
       const auto rn = m_R.template lpNorm<Eigen::Infinity>();
       const auto back_err =
