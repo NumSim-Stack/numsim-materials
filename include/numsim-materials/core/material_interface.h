@@ -43,14 +43,31 @@ public:
 
   const std::string& name() const noexcept { return m_name; }
 
+  /// Read a parameter, or say which one and whose.
+  ///
+  /// A type mismatch used to surface as a bare std::bad_any_cast: no
+  /// parameter name, no material, no type, and not even a class the caller
+  /// would think to catch. Writing 1 where 1.0 was expected -- an int for a
+  /// double, which JSON and C++ both make easy -- produced "bad any_cast" and
+  /// nothing else, at construction time, before the material had a chance to
+  /// say anything about itself. set_parameter() already did this; get, which
+  /// every material calls several times, did not.
   template <typename T>
   const T& get_parameter(std::string const& key) const {
-    return m_parameter_handler.template get<T>(key);
+    try {
+      return m_parameter_handler.template get<T>(key);
+    } catch (const std::bad_any_cast&) {
+      throw_parameter_type_error(key);
+    }
   }
 
   template <typename T>
   const T& get_parameter(std::string&& key) const {
-    return m_parameter_handler.template get<T>(std::forward<std::string>(key));
+    try {
+      return m_parameter_handler.template get<T>(std::string(key));
+    } catch (const std::bad_any_cast&) {
+      throw_parameter_type_error(key);
+    }
   }
 
   /// Overwrite a parameter in place so references bound by get_parameter() stay
@@ -83,6 +100,16 @@ public:
           "material_interface::set_parameter('" + key +
           "'): the requested type does not match the stored one");
     }
+  }
+
+  /// Shared by both get_parameter overloads. Not a template, so the message
+  /// text exists once rather than per instantiated parameter type.
+  [[noreturn]] void throw_parameter_type_error(const std::string& key) const {
+    throw std::invalid_argument(
+        "material '" + m_name + "': parameter '" + key +
+        "' was supplied with a different type than this material reads it as. "
+        "A whole number written without a decimal point is the usual cause: "
+        "write 1.0, not 1, where a real number is expected.");
   }
 
   const auto& get_property_registry() const { return m_property_handler; }
