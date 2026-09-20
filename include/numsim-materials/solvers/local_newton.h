@@ -56,7 +56,7 @@ public:
   /// being available -- unlike a converged() queried separately, which a caller
   /// can forget and which goes stale between solves.
   template <typename Eval>
-  result solve(Eval&& eval, value_type x0 = value_type{}) const {
+  [[nodiscard]] result solve(Eval&& eval, value_type x0 = value_type{}) const {
     return m_solver.solve(std::forward<Eval>(eval), x0);
   }
 

@@ -24,7 +24,8 @@ jobs:
           -DCMAKE_CXX_COMPILER=g++-14 \
           -DNUMSIM_BUILD_TESTS=ON \
           -DNUMSIM_BUILD_EXAMPLES=OFF \
-          -DENABLE_PLOTTING=OFF
+          -DENABLE_PLOTTING=OFF \
+          -DCMAKE_CXX_FLAGS="-Wall -Wextra -Wshadow -Wreorder -Werror=shadow -Werror=reorder -Werror=unused-local-typedefs"
 
     - name: Build
       run: cmake --build build -j$(nproc)

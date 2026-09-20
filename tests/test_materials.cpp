@@ -207,7 +207,6 @@ namespace nm_be = numsim::materials;
 /// that should reach 1.0 sat at 0.01 for 30 steps. That mode is local_newton
 /// now, chosen by naming a type rather than by omitting a parameter.
 TEST(BackwardEulerSetup, RequiresAFunctionToSolve) {
-  using policy = nm_be::material_policy_default;
   nm_be::material_context<policy> ctx;
   policy::ParameterHandler p;
   p.insert<std::string>("name", "solver");
@@ -220,7 +219,6 @@ TEST(BackwardEulerSetup, RequiresAFunctionToSolve) {
 /// A function material that does not publish residual/jacobian is caught at
 /// finalize, by name.
 TEST(BackwardEulerSetup, RejectsAFunctionWithoutResidualOrJacobian) {
-  using policy = nm_be::material_policy_default;
   using T2 = policy::value_type;
   nm_be::material_context<policy> ctx;
   policy::ParameterHandler p;
@@ -315,7 +313,6 @@ TEST(NewtonScalar, AVanishingJacobianStopsWithoutConverging) {
 }
 
 TEST(LocalNewtonSolver, SolvesAndReportsConvergence) {
-  using policy = nm_be::material_policy_default;
   using T2 = policy::value_type;
   nm_be::material_context<policy> ctx;
   policy::ParameterHandler p;
@@ -346,7 +343,6 @@ namespace nm_w = numsim::materials;
 /// not exist -- sending them to look for a material that was sitting right
 /// there in the document.
 TEST(WireMaterials, WrongTypeIsNotReportedAsMissing) {
-  using policy = nm_w::material_policy_default;
   using T2 = policy::value_type;
   nm_w::material_context<policy> ctx;
   policy::ParameterHandler p;
@@ -411,7 +407,6 @@ TEST(WireMaterials, WrongTypeIsNotReportedAsMissing) {
 /// is then referenced. The wiring must report it as absent. Before the fix it
 /// resolved to the destroyed object and was reported as merely the wrong type.
 TEST(WireMaterials, AFailedConstructionLeavesNoMaterialBehind) {
-  using policy = nm_w::material_policy_default;
   using T2 = policy::value_type;
   nm_w::material_context<policy> ctx;
   policy::ParameterHandler p;
@@ -455,7 +450,6 @@ TEST(WireMaterials, AFailedConstructionLeavesNoMaterialBehind) {
 }
 
 TEST(WireMaterials, MissingIsStillReportedAsMissing) {
-  using policy = nm_w::material_policy_default;
   using T2 = policy::value_type;
   nm_w::material_context<policy> ctx;
   policy::ParameterHandler p;
