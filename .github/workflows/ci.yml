@@ -31,3 +31,49 @@ jobs:
 
     - name: Test
       run: cd build && ctest --output-on-failure
+
+  # The installed package is a separate product from the source tree, and only
+  # a real install-then-consume can check it. It used to configure fine and
+  # then fail to compile, because the fetched tmech headers were never
+  # installed; it also used to drop GoogleTest into the consumer's prefix.
+  consume-installed-package:
+    runs-on: ubuntu-24.04
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y g++-14 cmake
+
+    - name: Configure and install to a scratch prefix
+      run: |
+        cmake -B build \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_CXX_COMPILER=g++-14 \
+          -DNUMSIM_BUILD_TESTS=OFF \
+          -DNUMSIM_BUILD_EXAMPLES=OFF \
+          -DENABLE_PLOTTING=OFF \
+          -DCMAKE_INSTALL_PREFIX="$PWD/prefix"
+        cmake --build build -j$(nproc)
+        cmake --install build
+
+    - name: The install must not carry our test dependencies
+      run: |
+        if find prefix -name 'libgtest*' -o -name 'libgmock*' -o -name 'gtest' -o -name 'gmock' | grep -q .; then
+          echo "GoogleTest was installed into the consumer's prefix:"
+          find prefix -name 'libgtest*' -o -name 'libgmock*' -o -name 'gtest' -o -name 'gmock'
+          exit 1
+        fi
+
+    # Configured against the prefix only -- no path back into the source tree,
+    # so anything the install failed to provide is a hard error here.
+    - name: Build a consumer against the installed package
+      run: |
+        cmake -S tests/package -B build-consumer \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_CXX_COMPILER=g++-14 \
+          -DCMAKE_PREFIX_PATH="$PWD/prefix"
+        cmake --build build-consumer -j$(nproc)
+        ./build-consumer/consumer
