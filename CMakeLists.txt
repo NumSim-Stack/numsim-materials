@@ -183,6 +183,35 @@ install(TARGETS ${PROJECT_NAME}
   EXPORT ${PROJECT_NAME}Targets
 )
 
+# Ship the header-only dependencies we FETCHED, so the installed package
+# actually compiles.
+#
+# Our headers include <tmech/tmech.h> and <nlohmann/json.hpp> directly. When
+# those are fetched, their include paths live under the build tree and reach
+# the target only through $<BUILD_INTERFACE:>, so the installed package carried
+# no path to them at all. The consumer was left to supply its own -- and for
+# tmech that quietly fails: find_package(tmech) succeeds against ANY installed
+# version, including one predating the Mandel adaptor in
+# solvers/unknown_layout.h, and the build dies with "'mandel' is not a member
+# of 'tmech'". A version check would be the alternative, but tmech's config
+# exposes no version to check against.
+#
+# Installed into our own include prefix, which the target already exports via
+# $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>, so no extra path is needed.
+# A consumer that prefers its own copy turns this off and supplies both.
+option(NUMSIM_INSTALL_BUNDLED_DEPS
+       "Install the fetched header-only dependencies alongside our headers" ON)
+if(NUMSIM_INSTALL_BUNDLED_DEPS)
+  if(TARGET tmech AND tmech_SOURCE_DIR)
+    install(DIRECTORY "${tmech_SOURCE_DIR}/include/tmech"
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+  endif()
+  if(NOT nlohmann_json_FOUND AND nlohmann_json_SOURCE_DIR)
+    install(DIRECTORY "${nlohmann_json_SOURCE_DIR}/include/nlohmann"
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+  endif()
+endif()
+
 include(CMakePackageConfigHelpers)
 write_basic_package_version_file(
   "${CMAKE_BINARY_DIR}/${PROJECT_NAME}ConfigVersion.cmake"
@@ -231,6 +260,12 @@ if(NUMSIM_BUILD_TESTS AND BUILD_TESTING)
     GIT_TAG v1.15.2
   )
   set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+  # GoogleTest defines its own install rules and defaults them ON, so a plain
+  # `cmake --install` dropped libgtest/libgmock, their headers and their CMake
+  # package config into the CONSUMER's prefix -- a test dependency of ours
+  # becoming part of what we ship. Same treatment tmech and nlohmann get above:
+  # take the target, leave the install rules.
+  set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
   FetchContent_MakeAvailable(googletest)
   add_subdirectory(tests)
 endif()
