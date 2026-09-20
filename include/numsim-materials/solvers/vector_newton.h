@@ -161,7 +161,7 @@ public:
   /// that those values sit in graph properties, which downstream materials will
   /// read whether or not anyone consulted converged() — so a caller that cares
   /// must check it and react, as the plasticity return maps do by throwing.
-  void update() override { solve(); }
+  void update() { solve(); }
 
   void solve() {
     m_converged = false;

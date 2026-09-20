@@ -70,7 +70,7 @@ public:
     m_backend = std::move(backend);
   }
 
-  void update() override {
+  void update() {
     if (!m_backend) return;
 
     // Initialize series on first call

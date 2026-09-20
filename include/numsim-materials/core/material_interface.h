@@ -39,7 +39,20 @@ public:
         m_name(m_parameter_handler.template get<std::string>("name")) {}
 
   virtual ~material_interface() = default;
-  virtual void update() {}
+
+  // There is deliberately NO virtual update() here.
+  //
+  // It was vestigial from before the property engine: nothing ever called it.
+  // Work happens only through callbacks bound to a property, either by passing
+  // a member pointer to add_output() or by assigning traits().update directly.
+  // But the obvious way to write a material is
+  //
+  //     void update() override { m_out = ...; }
+  //
+  // which compiled, ran nothing, and left the property at its initial value
+  // with no diagnostic -- documented in exactly one inline comment, in
+  // weighted_sum.h. Removing the virtual turns that into a compile error on
+  // the `override`, which is the spelling a newcomer reaches for.
 
   const std::string& name() const noexcept { return m_name; }
 
