@@ -121,7 +121,7 @@ if(nlohmann_json_FOUND)
 else()
   get_target_property(_njson_inc nlohmann_json INTERFACE_INCLUDE_DIRECTORIES)
   if(_njson_inc)
-    target_include_directories(${PROJECT_NAME} INTERFACE ${_njson_inc})
+    target_include_directories(${PROJECT_NAME} SYSTEM INTERFACE ${_njson_inc})
   endif()
 endif()
 
@@ -130,7 +130,7 @@ endif()
 if(TARGET tmech)
   get_target_property(_tmech_inc tmech INTERFACE_INCLUDE_DIRECTORIES)
   if(_tmech_inc)
-    target_include_directories(${PROJECT_NAME} INTERFACE ${_tmech_inc})
+    target_include_directories(${PROJECT_NAME} SYSTEM INTERFACE ${_tmech_inc})
   endif()
 elseif(tmech_FOUND)
   target_link_libraries(${PROJECT_NAME} INTERFACE tmech::tmech)
@@ -148,7 +148,7 @@ elseif(eigen_SOURCE_DIR)
   # generate time ("prefixed in the build directory"). A consumer of the
   # INSTALLED package supplies its own Eigen, exactly as it does for tmech.
   target_include_directories(${PROJECT_NAME}
-    INTERFACE $<BUILD_INTERFACE:${eigen_SOURCE_DIR}>)
+    SYSTEM INTERFACE $<BUILD_INTERFACE:${eigen_SOURCE_DIR}>)
 endif()
 
 # Force C++23 globally — numsim-core headers use <print>/std::println

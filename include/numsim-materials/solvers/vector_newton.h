@@ -229,7 +229,7 @@ public:
     }
   }
 
-  bool converged() const noexcept { return m_converged; }
+  [[nodiscard]] bool converged() const noexcept { return m_converged; }
 
   /// Size of the flat system.
   std::size_t size() const noexcept { return m_N; }

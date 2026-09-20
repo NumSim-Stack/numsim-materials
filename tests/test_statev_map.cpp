@@ -144,12 +144,12 @@ private:
 };
 
 /// Isotropic (hence minor-symmetric) rank-4 tensor.
-tmech::tensor<T, 3, 4> isotropic4(T K, T G) {
+tmech::tensor<T, 3, 4> isotropic4(T bulk, T shear) {
   const auto I = tmech::eye<T, 3, 2>();
   const auto IIsym = (tmech::otimesu(I, I) + tmech::otimesl(I, I)) * 0.5;
   const auto IIvol = tmech::otimes(I, I) / 3.0;
   tmech::tensor<T, 3, 4> C;
-  C = 3.0 * K * IIvol + 2.0 * G * (IIsym - IIvol);
+  C = 3.0 * bulk * IIvol + 2.0 * shear * (IIsym - IIvol);
   return C;
 }
 

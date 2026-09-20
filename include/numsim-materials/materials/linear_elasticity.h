@@ -75,9 +75,11 @@ private:
   tensor4 &m_C;
 
   /// Parameters
+  /// m_eps_name first: m_eps is wired from it, and members initialize in
+  /// DECLARATION order regardless of how the initializer list is written.
+  const std::string &m_eps_name;
   const value_type &m_K;
   const value_type &m_G;
-  const std::string &m_eps_name;
 
   /// Consumed properties
   const input_property<tensor2, property_traits> &m_eps;
