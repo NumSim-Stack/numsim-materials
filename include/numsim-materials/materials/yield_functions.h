@@ -64,7 +64,7 @@ struct j2_yield_function {
   /// Takes sig_dev (not N) to match the DP interface and avoid
   /// needing to reconstruct s from N.
   tensor4 flow_normal_stress_derivative(const tensor2& sig_dev, T sig_eq) const {
-    const tensor4 IIdev{plasticity_detail::make_IIdev<T, Dim>()};
+    const auto& IIdev = plasticity_detail::cached_IIdev<T, Dim>();
     const tensor2 N{T{1.5} * sig_dev / sig_eq};
     return (T{1.5} * IIdev - tmech::otimes(N, N)) / sig_eq;
   }
