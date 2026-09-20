@@ -65,7 +65,7 @@ public:
   /// identical from outside.
   [[nodiscard]] bool converged() const noexcept { return m_converged; }
 
-  void update() override {
+  void update() {
     // The seed is nonzero because a jacobian evaluated at exactly zero is
     // singular for the rate laws this drives.
     const auto r = m_solver.solve(
