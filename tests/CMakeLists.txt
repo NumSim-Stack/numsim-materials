@@ -10,6 +10,7 @@ macro(add_numsim_test TARGET_NAME)
 endmacro()
 
 add_numsim_test(test_property_graph test_property_graph.cpp)
+add_numsim_test(test_model_validation test_model_validation.cpp)
 add_numsim_test(test_materials test_materials.cpp)
 add_numsim_test(test_damage test_damage.cpp)
 add_numsim_test(test_property_recorder test_property_recorder.cpp)

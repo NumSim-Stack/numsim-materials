@@ -1,6 +1,8 @@
 #ifndef TENSOR_COMPONENT_STEPPER_H
 #define TENSOR_COMPONENT_STEPPER_H
 
+#include <stdexcept>
+#include <string>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_base.h"
 
@@ -35,7 +37,9 @@ public:
         m_tensor(base::template add_output<tensor>("strain", &tensor_component_stepper::update)),
         m_inc(base::template get_parameter<value_type>("increment")),
         m_indices(base::template get_parameter<indices>("indices"))
-  {}
+  {
+    validate_indices();
+  }
 
   /**
    * @brief Defines the parameters required by this class.
@@ -68,6 +72,30 @@ public:
   }
 
 private:
+  /// "indices" addresses a tensor component directly, so a deck typo used to
+  /// land in update() as an out-of-bounds subscript: [9,9] on a 3x3 is a read
+  /// and a write past the end of the tensor (ASan: heap-buffer-overflow), and
+  /// too few entries read m_indices[1] past the end of the vector itself.
+  /// Neither is checked by tmech, so this is the only place it can be caught.
+  /// Checked once here rather than in update(), which runs per increment.
+  void validate_indices() const {
+    if (m_indices.size() != Rank)
+      throw std::invalid_argument(
+          "tensor_component_stepper ('" + this->name() + "'): \"indices\" has " +
+          std::to_string(m_indices.size()) + " entr" +
+          (m_indices.size() == 1 ? "y" : "ies") + ", but a rank-" +
+          std::to_string(Rank) + " tensor needs exactly " +
+          std::to_string(Rank) + ".");
+
+    for (std::size_t i = 0; i < m_indices.size(); ++i)
+      if (m_indices[i] >= Dim)
+        throw std::invalid_argument(
+            "tensor_component_stepper ('" + this->name() + "'): \"indices\"[" +
+            std::to_string(i) + "] is " + std::to_string(m_indices[i]) +
+            ", which is out of range for a " + std::to_string(Dim) + "D tensor "
+            "(valid: 0.." + std::to_string(Dim - 1) + ").");
+  }
+
   /// Produced properties
   tensor &m_tensor;
 

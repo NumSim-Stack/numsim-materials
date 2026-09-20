@@ -86,8 +86,19 @@ public:
     m_engine.update_property(material, property, exclude);
   }
 
-  void commit() { m_engine.commit(); }
-  void revert() { m_engine.revert(); }
+  /// Advance / roll back history. The driver owns these calls -- materials and
+  /// solvers never make them. Both need the same finalize() gate their siblings
+  /// have: the engine's history list is built by finalize(), so on an
+  /// unfinalized context they used to be silent no-ops rather than errors.
+  void commit() {
+    check_finalized("commit");
+    m_engine.commit();
+  }
+
+  void revert() {
+    check_finalized("revert");
+    m_engine.revert();
+  }
 
   // --- Checkpoint / Restart ---
 

@@ -45,7 +45,14 @@ public:
   void update_property(const std::string& material, const std::string& property,
                        const std::unordered_set<const property_base*>& exclude = {}) {
     auto* target = find_in_graph(material, property);
-    if (!target) return;
+    // Returning quietly here made a typo indistinguishable from a property that
+    // legitimately never changes: the driver asks for an update, gets no error,
+    // and reads a stale value for the rest of the analysis.
+    if (!target)
+      throw std::runtime_error(
+          "update_property(): property '" + material + "::" + property +
+          "' is not in the graph. Check the material and property names, and "
+          "that the material publishes this property.");
     update_property(target, exclude);
   }
 
