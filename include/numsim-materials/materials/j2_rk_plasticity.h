@@ -162,6 +162,7 @@ public:
         // Implicit stage: Newton on F = 0
         const auto aii = m_diag[i];
         m_dlambda[i] = value_type{0};
+        bool stage_converged = false;
 
         for (int iter = 0; iter < m_max_iter; ++iter) {
           tensor2 eps_p_i{eps_p_acc + aii * m_dlambda[i] * ts.eval.N};
@@ -174,12 +175,30 @@ public:
 
           if (std::abs(se.F) < m_tol) {
             m_N_stage[i] = se.N;
+            stage_converged = true;
             break;
           }
 
           const auto dF_i = aii * m_yf.jacobian(m_yf.effective_modulus(m_G), m_dH.get());
           m_dlambda[i] -= se.F / dF_i;
         }
+
+        // m_N_stage[i] is only written on the converged path above, and
+        // m_N_stage is a member: a stage that ran out of iterations used to
+        // leave the PREVIOUS call's flow direction in place, which the stage
+        // accumulation and the final update then used as if it belonged to
+        // this step. That is state leaking from one material point into the
+        // next, and it breaks the stateless-apart-from-history contract the
+        // UMAT layer relies on -- with no indication that anything failed.
+        //
+        // Throwing matches j2_plasticity and drucker_prager_plasticity, whose
+        // return maps both throw rather than return an unconverged state.
+        if (!stage_converged)
+          throw std::runtime_error(
+              "j2_rk_plasticity ('" + this->name() + "'): implicit stage " +
+              std::to_string(i) + " of " + std::to_string(s) +
+              " failed to converge in " + std::to_string(m_max_iter) +
+              " iterations (tolerance " + std::to_string(m_tol) + ")");
       }
     }
 

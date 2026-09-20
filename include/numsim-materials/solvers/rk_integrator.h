@@ -94,12 +94,24 @@ public:
     else                     compute_fully_implicit();
   }
 
+  /// Did the last compute() reach the tolerance?
+  ///
+  /// Same contract as local_newton and vector_newton: the solver reports,
+  /// the caller decides. Without this there was no way to find out -- an
+  /// implicit stage that ran out of iterations wrote its unconverged stage
+  /// value into the state update and said nothing, and a caller that cares
+  /// (as the plasticity return maps do, by throwing) had nothing to check.
+  ///
+  /// An explicit tableau never iterates, so it is always converged.
+  [[nodiscard]] bool converged() const noexcept { return m_converged; }
+
 private:
   void compute_explicit() {
     const auto& tab = m_tableau;
     const int s = tab.stages();
     const auto y_n = m_state.old_value();
     m_k.setZero();
+    m_converged = true;  // no iteration to fail
 
     for (int i = 0; i < s; ++i) {
       auto y_trial = y_n + m_h * tab.a.row(i).head(i).dot(m_k.head(i));
@@ -116,6 +128,7 @@ private:
     const int s = tab.stages();
     const auto y_n = m_state.old_value();
     m_k.setZero();
+    m_converged = true;
 
     for (int i = 0; i < s; ++i) {
       auto explicit_sum = tab.a.row(i).head(i).dot(m_k.head(i));
@@ -127,16 +140,20 @@ private:
       } else {
         m_k[i] = value_type{0};
         const auto aii = m_diag[i];
+        bool stage_converged = false;
         for (int iter = 0; iter < m_max_iter; ++iter) {
           m_state.new_value() = y_n + m_h * (explicit_sum + aii * m_k[i]);
           m_rate.update_source();
 
           auto residual = m_k[i] - m_rate.get();
-          if (std::abs(residual) < m_tol) break;
+          if (std::abs(residual) < m_tol) { stage_converged = true; break; }
 
           auto jacobian = value_type{1} - m_h * aii * m_drate->get();
           m_k[i] -= residual / jacobian;
         }
+        // One failed stage makes the whole step unconverged: its stage value
+        // still enters the final b-weighted update below.
+        if (!stage_converged) m_converged = false;
       }
     }
 
@@ -148,6 +165,7 @@ private:
     const int s = tab.stages();
     const auto y_n = m_state.old_value();
     m_k.setZero();
+    m_converged = false;
 
     for (int iter = 0; iter < m_max_iter; ++iter) {
       for (int i = 0; i < s; ++i) {
@@ -157,7 +175,7 @@ private:
         m_df[i] = m_drate->get();
       }
 
-      if (m_R.lpNorm<Eigen::Infinity>() < m_tol) break;
+      if (m_R.lpNorm<Eigen::Infinity>() < m_tol) { m_converged = true; break; }
 
       m_J = Eigen::MatrixXd::Identity(s, s) - m_h * m_df.asDiagonal() * tab.a;
       m_k -= m_J.partialPivLu().solve(m_R);
@@ -184,6 +202,7 @@ private:
   // Pre-computed tableau properties
   bool m_is_explicit;
   bool m_is_dirk;
+  bool m_converged = true;
   std::vector<double> m_diag;
   std::vector<bool> m_stage_implicit;
 };

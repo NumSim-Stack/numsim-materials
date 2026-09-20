@@ -15,6 +15,7 @@ add_numsim_test(test_damage test_damage.cpp)
 add_numsim_test(test_property_recorder test_property_recorder.cpp)
 add_numsim_test(test_j2_plasticity test_j2_plasticity.cpp)
 add_numsim_test(test_rk_integrator test_rk_integrator.cpp)
+add_numsim_test(test_rk_convergence test_rk_convergence.cpp)
 add_numsim_test(test_drucker_prager test_drucker_prager.cpp)
 add_numsim_test(test_unknown_layout test_unknown_layout.cpp)
 add_numsim_test(test_vector_newton test_vector_newton.cpp)
@@ -31,8 +32,12 @@ add_numsim_test(test_json_model test_json_model.cpp)
 add_numsim_test(test_props_scalar test_props_scalar.cpp)
 add_numsim_test(test_material_registry test_material_registry.cpp)
 add_numsim_test(test_material_conformance test_material_conformance.cpp)
+# Solvers are materials too and reach the factory the same way, but the scan
+# used to cover materials/ only -- which is how rk_integrator shipped
+# unregistered and unnoticed.
 target_compile_definitions(test_material_conformance PRIVATE
-  NUMSIM_MATERIALS_INCLUDE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../include/numsim-materials/materials")
+  NUMSIM_MATERIALS_INCLUDE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../include/numsim-materials/materials"
+  NUMSIM_SOLVERS_INCLUDE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../include/numsim-materials/solvers")
 add_numsim_test(test_uncovered_materials test_uncovered_materials.cpp)
 add_numsim_test(test_weighted_sum test_weighted_sum.cpp)
 target_link_libraries(test_umat_interface PRIVATE Threads::Threads)
