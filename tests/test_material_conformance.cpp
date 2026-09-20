@@ -35,12 +35,12 @@ const std::set<std::string> kNotForJson = {
     "tensor_component_stepper",
 };
 
-/// Header stems under materials/ that declare a class deriving material_base.
-std::set<std::string> material_headers() {
+/// Header stems under one directory that declare a class deriving material_base.
+std::set<std::string> material_headers_in(const char* directory) {
   namespace fs = std::filesystem;
   std::set<std::string> out;
-  const fs::path dir{NUMSIM_MATERIALS_INCLUDE_DIR};
-  EXPECT_TRUE(fs::exists(dir)) << "materials directory not found: " << dir;
+  const fs::path dir{directory};
+  EXPECT_TRUE(fs::exists(dir)) << "directory not found: " << dir;
   for (const auto& e : fs::directory_iterator(dir)) {
     if (e.path().extension() != ".h") continue;
     std::ifstream in(e.path());
@@ -50,6 +50,13 @@ std::set<std::string> material_headers() {
     if (src.find("public material_base") == std::string::npos) continue;
     out.insert(e.path().stem().string());
   }
+  return out;
+}
+
+/// Everything that derives material_base: materials/ and solvers/ (solvers are created and named the same way).
+std::set<std::string> material_headers() {
+  auto out{material_headers_in(NUMSIM_MATERIALS_INCLUDE_DIR)};
+  out.merge(material_headers_in(NUMSIM_SOLVERS_INCLUDE_DIR));
   return out;
 }
 
@@ -70,6 +77,17 @@ TEST(MaterialConformance, EveryMaterialIsRegisteredOrExplicitlyNotForJson) {
                    "be named in a JSON document. Register it, or add it to "
                    "kNotForJson with the reason.";
   }
+}
+
+// pins the coverage of the scan, not the current outcome: with every solver registered the test above passes
+// either way, which is how rk_integrator shipped unregistered
+TEST(MaterialConformance, TheScanCoversSolversAsWellAsMaterials) {
+  const auto headers = material_headers();
+  for (const char* solver : {"local_newton", "vector_newton", "rk_integrator",
+                             "backward_euler"})
+    EXPECT_TRUE(headers.contains(solver))
+        << solver << " derives material_base but the conformance scan does "
+                     "not see it -- is solvers/ still being scanned?";
 }
 
 /// The opt-out list must not outlive its reason: an entry naming a header that
