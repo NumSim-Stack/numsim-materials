@@ -35,12 +35,11 @@ const std::set<std::string> kNotForJson = {
     "tensor_component_stepper",
 };
 
-/// Header stems under materials/ that declare a class deriving material_base.
-std::set<std::string> material_headers() {
+/// Header stems under one directory that declare a class deriving material_base.
+void collect_material_headers(const char* directory, std::set<std::string>& out) {
   namespace fs = std::filesystem;
-  std::set<std::string> out;
-  const fs::path dir{NUMSIM_MATERIALS_INCLUDE_DIR};
-  EXPECT_TRUE(fs::exists(dir)) << "materials directory not found: " << dir;
+  const fs::path dir{directory};
+  EXPECT_TRUE(fs::exists(dir)) << "directory not found: " << dir;
   for (const auto& e : fs::directory_iterator(dir)) {
     if (e.path().extension() != ".h") continue;
     std::ifstream in(e.path());
@@ -50,6 +49,18 @@ std::set<std::string> material_headers() {
     if (src.find("public material_base") == std::string::npos) continue;
     out.insert(e.path().stem().string());
   }
+}
+
+/// Everything in the tree that derives material_base.
+///
+/// Solvers are materials -- they derive the same base, are created the same
+/// way and are named from a document the same way -- but this scan used to
+/// cover materials/ only. That is how rk_integrator shipped unregistered
+/// without any test noticing.
+std::set<std::string> material_headers() {
+  std::set<std::string> out;
+  collect_material_headers(NUMSIM_MATERIALS_INCLUDE_DIR, out);
+  collect_material_headers(NUMSIM_SOLVERS_INCLUDE_DIR, out);
   return out;
 }
 
@@ -70,6 +81,22 @@ TEST(MaterialConformance, EveryMaterialIsRegisteredOrExplicitlyNotForJson) {
                    "be named in a JSON document. Register it, or add it to "
                    "kNotForJson with the reason.";
   }
+}
+
+/// The scan must actually reach solvers/, not just materials/.
+///
+/// Without this, removing the solvers directory from the scan breaks nothing:
+/// every solver happens to be registered today, so the registration test above
+/// passes either way. That is exactly the state the tree was in when
+/// rk_integrator shipped unregistered -- the guard was absent and no test
+/// could tell. This pins the coverage rather than the current outcome.
+TEST(MaterialConformance, TheScanCoversSolversAsWellAsMaterials) {
+  const auto headers = material_headers();
+  for (const char* solver : {"local_newton", "vector_newton", "rk_integrator",
+                             "backward_euler"})
+    EXPECT_TRUE(headers.contains(solver))
+        << solver << " derives material_base but the conformance scan does "
+                     "not see it -- is solvers/ still being scanned?";
 }
 
 /// The opt-out list must not outlive its reason: an entry naming a header that
