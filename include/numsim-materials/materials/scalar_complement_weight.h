@@ -29,7 +29,7 @@ public:
     return para;
   }
 
-  void update() override {
+  void update() {
     m_value = value_type{1} - m_input.new_value();
   }
 

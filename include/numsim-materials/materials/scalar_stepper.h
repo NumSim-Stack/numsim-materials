@@ -26,7 +26,7 @@ public:
     return param;
   }
 
-  void update() override {
+  void update() {
     m_his.new_value() += m_inc;
   }
 

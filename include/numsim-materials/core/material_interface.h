@@ -19,9 +19,8 @@
 
 namespace numsim::materials {
 
-/// Virtual base for all materials in the framework.
-/// Provides property registration, typed input wiring, material references,
-/// and the update() entry point.
+/// Virtual base for all materials: property registration, typed input wiring and material references;
+/// work happens in the callbacks bound to properties, there is no virtual update() to override.
 template <typename Traits>
 class material_interface {
 public:
@@ -39,7 +38,6 @@ public:
         m_name(m_parameter_handler.template get<std::string>("name")) {}
 
   virtual ~material_interface() = default;
-  virtual void update() {}
 
   const std::string& name() const noexcept { return m_name; }
 
