@@ -157,7 +157,7 @@ struct drucker_prager_yield_function {
   /// Takes sig_dev directly (not N) to avoid cancellation error from
   /// reconstructing s = (N - β/3·I)·2q when q is small.
   tensor4 flow_normal_stress_derivative(const tensor2& sig_dev, T sqrt_j2) const {
-    const tensor4 IIdev{plasticity_detail::make_IIdev<T, Dim>()};
+    const auto& IIdev = plasticity_detail::cached_IIdev<T, Dim>();
     const auto j2 = sqrt_j2 * sqrt_j2;
     return (IIdev - tmech::otimes(sig_dev, sig_dev) / (T{2} * j2)) / (T{2} * sqrt_j2);
   }
