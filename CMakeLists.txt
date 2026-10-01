@@ -38,7 +38,7 @@ include(NumSimWarnings)
 
 set(NUMSIM_MATERIALS_NUMSIM_CORE_TAG "df03895422e7f6bfe59634fb4accc6ed6c523e24" CACHE STRING
     "numsim-core version (tag or commit) to fetch")
-set(NUMSIM_MATERIALS_TMECH_TAG "7267e01897158076effe006ba6877d11b2a3172b" CACHE STRING
+set(NUMSIM_MATERIALS_TMECH_TAG "v1.2.0" CACHE STRING
     "tmech version (tag or commit) to fetch")
 
 numsim_dependency(numsim-core
