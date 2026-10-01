@@ -3,7 +3,7 @@
 
 #include <any>
 #include <functional>
-#include <print>
+#include <numsim-core/print.h>
 #include <stdexcept>
 #include <string>
 #include <typeindex>
@@ -234,7 +234,7 @@ void json_to_parameters(
 
   adapter::for_each_key(json, [&](const std::string& key) {
     if (key != "type" && !schema_keys.contains(key))
-      std::println(stderr, "  warning: unknown parameter '{}' in JSON (not in schema)", key);
+      numsim_core::println(stderr, "  warning: unknown parameter '{}' in JSON (not in schema)", key);
   });
 
   // Read + insert + validate in one call

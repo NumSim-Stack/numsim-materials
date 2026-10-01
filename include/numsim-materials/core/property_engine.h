@@ -2,7 +2,7 @@
 #define PROPERTY_ENGINE_H
 
 #include <algorithm>
-#include <print>
+#include <numsim-core/print.h>
 #include <queue>
 #include <stdexcept>
 #include <string>
@@ -122,10 +122,10 @@ public:
   }
 
   void dump() const {
-    std::println(stderr, "=== Property execution order ({} properties) ===",
+    numsim_core::println(stderr, "=== Property execution order ({} properties) ===",
                  m_property_execution_order.size());
     for (auto* prop : m_property_execution_order)
-      std::println(stderr, "  {}::{}{}", prop->traits().id.owner, prop->traits().id.name,
+      numsim_core::println(stderr, "  {}::{}{}", prop->traits().id.owner, prop->traits().id.name,
                    prop->traits().update ? "" : " (no callback)");
   }
 

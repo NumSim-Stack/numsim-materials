@@ -1,5 +1,5 @@
 #include <gtest/gtest.h>
-#include <print>
+#include <numsim-core/print.h>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/materials/tensor_component_stepper.h"

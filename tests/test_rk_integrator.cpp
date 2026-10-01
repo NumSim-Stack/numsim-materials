@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 #include <cmath>
-#include <print>
+#include <numsim-core/print.h>
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/core/history_property.h"
 #include "numsim-materials/solvers/butcher_tableau.h"
@@ -110,7 +110,7 @@ TEST(ExplicitRK, ForwardEulerOrder1) {
   auto err_10 = std::abs(run_decay<RK>(10, tab) - exact);
   auto err_20 = std::abs(run_decay<RK>(20, tab) - exact);
   auto ratio = err_10 / err_20;
-  std::println("  Forward Euler: err_10={:.6e} err_20={:.6e} ratio={:.2f} (expect ~2)",
+  numsim_core::println("  Forward Euler: err_10={:.6e} err_20={:.6e} ratio={:.2f} (expect ~2)",
                err_10, err_20, ratio);
   EXPECT_NEAR(ratio, 2.0, 0.3) << "Order 1: halving h should halve error";
 }
@@ -120,7 +120,7 @@ TEST(ExplicitRK, RK4Order4) {
   auto err_10 = std::abs(run_decay<RK>(10, tab) - exact);
   auto err_20 = std::abs(run_decay<RK>(20, tab) - exact);
   auto ratio = err_10 / err_20;
-  std::println("  RK4: err_10={:.6e} err_20={:.6e} ratio={:.2f} (expect ~16)",
+  numsim_core::println("  RK4: err_10={:.6e} err_20={:.6e} ratio={:.2f} (expect ~16)",
                err_10, err_20, ratio);
   EXPECT_NEAR(ratio, 16.0, 2.0) << "Order 4: halving h should reduce error by 16x";
 }
@@ -145,7 +145,7 @@ TEST(DIRK, ImplicitMidpointOrder2) {
   auto err_10 = std::abs(run_decay<RK>(10, tab) - exact);
   auto err_20 = std::abs(run_decay<RK>(20, tab) - exact);
   auto ratio = err_10 / err_20;
-  std::println("  Implicit midpoint: err_10={:.6e} err_20={:.6e} ratio={:.2f} (expect ~4)",
+  numsim_core::println("  Implicit midpoint: err_10={:.6e} err_20={:.6e} ratio={:.2f} (expect ~4)",
                err_10, err_20, ratio);
   EXPECT_NEAR(ratio, 4.0, 1.0) << "Order 2: halving h should reduce error by 4x";
 }
@@ -155,7 +155,7 @@ TEST(DIRK, CrankNicolsonOrder2) {
   auto err_10 = std::abs(run_decay<RK>(10, tab) - exact);
   auto err_20 = std::abs(run_decay<RK>(20, tab) - exact);
   auto ratio = err_10 / err_20;
-  std::println("  Crank-Nicolson: err_10={:.6e} err_20={:.6e} ratio={:.2f} (expect ~4)",
+  numsim_core::println("  Crank-Nicolson: err_10={:.6e} err_20={:.6e} ratio={:.2f} (expect ~4)",
                err_10, err_20, ratio);
   EXPECT_NEAR(ratio, 4.0, 1.0) << "Order 2";
 }
@@ -168,7 +168,7 @@ TEST(ImplicitRK, GaussLegendreOrder4) {
   auto err_10 = std::abs(run_decay<RK>(10, tab) - exact);
   auto err_20 = std::abs(run_decay<RK>(20, tab) - exact);
   auto ratio = err_10 / err_20;
-  std::println("  Gauss-Legendre: err_10={:.6e} err_20={:.6e} ratio={:.2f} (expect ~16)",
+  numsim_core::println("  Gauss-Legendre: err_10={:.6e} err_20={:.6e} ratio={:.2f} (expect ~16)",
                err_10, err_20, ratio);
   EXPECT_NEAR(ratio, 16.0, 3.0) << "Order 4: 2-stage Gauss-Legendre";
 }
@@ -260,7 +260,7 @@ T converged_cure() {
 
 TEST(CuringRK, ExplicitRK4MatchesTheRefinedSolution) {
   const auto z = run_curing<RK>(reference_time / 10, "rk4", T{10});
-  std::println("  RK4 (t=200, h=10): z = {:.8f}  ref = {:.8f}",
+  numsim_core::println("  RK4 (t=200, h=10): z = {:.8f}  ref = {:.8f}",
                z, converged_cure());
   EXPECT_NEAR(z, converged_cure(), 1.5e-2);   // measured 6.7e-3
 }
@@ -268,14 +268,14 @@ TEST(CuringRK, ExplicitRK4MatchesTheRefinedSolution) {
 TEST(CuringRK, DIRKImplicitMidpointMatchesTheRefinedSolution) {
   // Smaller step for implicit — stiff initial phase needs h < 1/df_dy
   const auto z = run_curing<RK>(reference_time, "implicit_midpoint", T{1});
-  std::println("  Implicit midpoint (t=200, h=1): z = {:.8f}  ref = {:.8f}",
+  numsim_core::println("  Implicit midpoint (t=200, h=1): z = {:.8f}  ref = {:.8f}",
                z, converged_cure());
   EXPECT_NEAR(z, converged_cure(), 2e-3);     // measured 8.5e-4
 }
 
 TEST(CuringRK, FullyImplicitGaussLegendreMatchesTheRefinedSolution) {
   const auto z = run_curing<RK>(reference_time, "gauss_legendre_4", T{1});
-  std::println("  Gauss-Legendre (t=200, h=1): z = {:.8f}  ref = {:.8f}",
+  numsim_core::println("  Gauss-Legendre (t=200, h=1): z = {:.8f}  ref = {:.8f}",
                z, converged_cure());
   EXPECT_NEAR(z, converged_cure(), 5e-5);     // measured 9.1e-6
 }
