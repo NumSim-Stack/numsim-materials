@@ -109,8 +109,9 @@ if(TARGET Eigen3::Eigen)
   target_link_libraries(${PROJECT_NAME} INTERFACE Eigen3::Eigen)
   list(APPEND NUMSIM_MATERIALS_EXPORTED_DEPS Eigen3)
 elseif(eigen_SOURCE_DIR)
+  # SYSTEM: Eigen's own warnings must not trip consumers' -Werror builds
   target_include_directories(${PROJECT_NAME}
-    INTERFACE $<BUILD_INTERFACE:${eigen_SOURCE_DIR}>)
+    SYSTEM INTERFACE $<BUILD_INTERFACE:${eigen_SOURCE_DIR}>)
 endif()
 
 
