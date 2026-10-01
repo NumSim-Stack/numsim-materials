@@ -51,24 +51,6 @@ else()
   FetchContent_MakeAvailable(tmech)
 endif()
 
-# --- Dependencies (tl::expected, fallback for std::expected) ---
-# core/expected.h uses std::expected when the consuming compiler's standard
-# library exposes it and tl::expected otherwise (Clang 18 + libstdc++ 13). The
-# fallback is always made available so the installed package does not bake in
-# this compiler's feature set.
-find_package(tl-expected 1.0 QUIET)
-if(NOT tl-expected_FOUND)
-  set(EXPECTED_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-  set(EXPECTED_BUILD_PACKAGE OFF CACHE BOOL "" FORCE)
-  FetchContent_Declare(
-    tl-expected
-    GIT_REPOSITORY https://github.com/TartanLlama/expected
-    GIT_TAG v1.3.1
-    GIT_SHALLOW TRUE
-  )
-  FetchContent_MakeAvailable(tl-expected)
-endif()
-
 # --- Dependencies (nlohmann/json for the configuration layer) ---
 # Fetched rather than left optional. Model configuration is meant to be JSON
 # driven, so a build without it is missing the primary way to define a material,
@@ -125,8 +107,6 @@ target_link_libraries(${PROJECT_NAME} INTERFACE numsim-core)
 # generated Config re-finds each one; without that, find_package() fails with
 # "the following imported targets are referenced, but are missing".
 set(NUMSIM_MATERIALS_EXPORTED_DEPS numsim-core)
-target_link_libraries(${PROJECT_NAME} INTERFACE tl::expected)
-list(APPEND NUMSIM_MATERIALS_EXPORTED_DEPS tl-expected)
 
 # nlohmann/json is header-only, so it gets tmech's treatment: when it is FETCHED
 # rather than found installed, linking the target pulls it into the install
