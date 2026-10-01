@@ -1,7 +1,5 @@
 find_package(Threads REQUIRED)
 
-# numsim_add_test (numsim-cmake): the executable plus an ASan+UBSan variant,
-# both registered with ctest.
 macro(add_numsim_test TARGET_NAME)
   numsim_add_test(${TARGET_NAME} SOURCES ${ARGN}
     LINK numsim-materials::numsim-materials Threads::Threads)

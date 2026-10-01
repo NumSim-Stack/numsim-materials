@@ -18,7 +18,6 @@ public:
     try {
       const auto& registry = material.get_property_registry();
 
-      // (std::ranges::to needs libstdc++ 14; a loop keeps the GCC 13 baseline)
       auto extract = [](const auto& props) {
         std::vector<const property_traits*> traits;
         for (const property_base* p : props) traits.push_back(&(p->traits()));

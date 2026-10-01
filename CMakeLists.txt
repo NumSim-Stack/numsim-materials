@@ -10,7 +10,6 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# --- Options (prefixed: generic names leak between projects) ---------------
 if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
   set(NUMSIM_MATERIALS_IS_TOP_LEVEL ON)
 else()
@@ -33,18 +32,14 @@ option(NUMSIM_MATERIALS_BUILD_EXAMPLES  "Build the numsim-materials examples"   
 option(NUMSIM_MATERIALS_ENABLE_PLOTTING "Qt6 + QCustomPlot live plotting"       OFF)
 option(NUMSIM_MATERIALS_INSTALL         "Install the library and its CMake package" ON)
 
-# --- Dependencies ------------------------------------------------------------
-# One convention (numsim-cmake): an existing target, FETCHCONTENT_SOURCE_DIR_*,
-# a sibling checkout, an installed package, or a fetch of the pinned version.
-# The pins are cache variables so that a consumer can move them.
 include(cmake/numsim_bootstrap.cmake)
 include(NumSimDependency)
 include(NumSimWarnings)
 
 set(NUMSIM_MATERIALS_NUMSIM_CORE_TAG "df03895422e7f6bfe59634fb4accc6ed6c523e24" CACHE STRING
-    "numsim-core version (tag or commit) to fetch")   # TODO: v1.0.0 once tagged
+    "numsim-core version (tag or commit) to fetch")
 set(NUMSIM_MATERIALS_TMECH_TAG "7267e01897158076effe006ba6877d11b2a3172b" CACHE STRING
-    "tmech version (tag or commit) to fetch")          # TODO: v1.2.0 once tagged
+    "tmech version (tag or commit) to fetch")
 
 numsim_dependency(numsim-core
   TARGET numsim-core::numsim-core
@@ -55,19 +50,15 @@ numsim_dependency(numsim-core
   OPTIONS NUMSIM_CORE_BUILD_TESTS=OFF NUMSIM_CORE_BUILD_EXAMPLES=OFF
           NUMSIM_CORE_INSTALL=${NUMSIM_MATERIALS_INSTALL})
 
-# tmech >= 1.2 (Mandel adaptor, fixed version file). An older installed tmech
-# cannot satisfy the version requirement, so it is never picked up by accident.
 numsim_dependency(tmech
   TARGET tmech::tmech
   GIT_REPOSITORY https://github.com/petlenz/tmech.git
   GIT_TAG        ${NUMSIM_MATERIALS_TMECH_TAG}
   SIBLING        tmech
   FIND_PACKAGE_ARGS 1.2 CONFIG
-  # a fetched tmech must be exported too when we install (our target links it)
   OPTIONS TMECH_BUILD_TESTS=OFF TMECH_BUILD_EXAMPLES=OFF TMECH_BUILD_BENCHMARK=OFF
           TMECH_INSTALL_LIBRARY=${NUMSIM_MATERIALS_INSTALL})
 
-# nlohmann/json: the configuration layer is JSON driven, so it is required.
 numsim_dependency(nlohmann_json
   TARGET nlohmann_json::nlohmann_json
   GIT_REPOSITORY https://github.com/nlohmann/json.git
@@ -75,8 +66,6 @@ numsim_dependency(nlohmann_json
   FIND_PACKAGE_ARGS 3.11 CONFIG
   OPTIONS JSON_BuildTests=OFF JSON_Install=ON)
 
-# Eigen: header-only, taken from an installed copy or the 3.4.0 headers
-# (Eigen's own CMake is not configured: it changes global settings).
 find_package(Eigen3 3.4 QUIET)
 if(NOT TARGET Eigen3::Eigen)
   FetchContent_Declare(
@@ -109,7 +98,6 @@ if(TARGET Eigen3::Eigen)
   target_link_libraries(${PROJECT_NAME} INTERFACE Eigen3::Eigen)
   list(APPEND NUMSIM_MATERIALS_EXPORTED_DEPS Eigen3)
 elseif(eigen_SOURCE_DIR)
-  # SYSTEM: Eigen's own warnings must not trip consumers' -Werror builds
   target_include_directories(${PROJECT_NAME}
     SYSTEM INTERFACE $<BUILD_INTERFACE:${eigen_SOURCE_DIR}>)
 endif()
@@ -174,7 +162,7 @@ install(
 # declares BUILD_TESTING, the switch consumers expect to reach. Only at top
 # level -- embedded in a superproject, that project owns the dashboard targets
 # and its BUILD_TESTING choice should reach us rather than be re-declared.
-endif() # NUMSIM_MATERIALS_INSTALL
+endif()
 
 if(NUMSIM_MATERIALS_BUILD_TESTS)
   enable_testing()

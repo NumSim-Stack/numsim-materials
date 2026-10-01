@@ -11,8 +11,6 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The NumSim stack's baseline is C++23 with std::expected:
-        # GCC >= 13 or Clang >= 19 (libstdc++ hides <expected> from Clang 18).
         cxx: [g++-13, g++-14, clang++-19]
 
     steps:
