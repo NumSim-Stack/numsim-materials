@@ -23,7 +23,6 @@ material_interface<Traits>& create_from_json(
     material_context<Traits>& ctx,
     const JsonType& json)
 {
-  using input_controller = typename Traits::InputParameterController;
   using parameter_handler = typename Traits::ParameterHandler;
   using adapter = json_adapter<JsonType>;
   using factory_type = typename object_store<Traits>::factory_type;

@@ -163,16 +163,23 @@ cmake --build build -j$(nproc)
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `NUMSIM_BUILD_TESTS` | ON | Build GTest unit tests |
-| `NUMSIM_BUILD_EXAMPLES` | ON | Build examples |
-| `ENABLE_PLOTTING` | OFF | Qt6 + QCustomPlot live plotting |
-| `NUMSIM_USE_SYSTEM_TMECH` | OFF | Use an installed tmech instead of fetching it |
+| `NUMSIM_MATERIALS_BUILD_TESTS` | ON if top level | GTest suite; every test also runs under ASan+UBSan (`NUMSIM_SANITIZER_TESTS`) |
+| `NUMSIM_MATERIALS_BUILD_EXAMPLES` | ON if top level | Build examples |
+| `NUMSIM_MATERIALS_ENABLE_PLOTTING` | OFF | Qt6 + QCustomPlot live plotting |
+| `NUMSIM_MATERIALS_INSTALL` | ON | Install the library and its CMake package |
+| `NUMSIM_MATERIALS_NUMSIM_CORE_TAG`, `NUMSIM_MATERIALS_TMECH_TAG` | pinned | numsim-core / tmech versions to fetch |
+| `NUMSIM_PREFER_SIBLINGS`, `NUMSIM_DEVEL_DIR` | ON, `..` | use sibling checkouts of dependencies when present |
+
+The old names (`NUMSIM_BUILD_TESTS`, `ENABLE_PLOTTING`, …) are still honoured with a deprecation warning.
+Dependencies are resolved by [numsim-cmake](https://github.com/NumSim-Stack/numsim-cmake)'s
+`numsim_dependency`: existing target → `FETCHCONTENT_SOURCE_DIR_<NAME>` → sibling checkout →
+installed package (tmech must be ≥ 1.2) → fetch of the pinned version.
 | `NUMSIM_INSTALL_BUNDLED_DEPS` | ON | Install the fetched header-only dependencies alongside ours |
 
 ### Run tests
 
 ```bash
-cmake -B build -DNUMSIM_BUILD_TESTS=ON -DCMAKE_CXX_COMPILER=g++-14
+cmake -B build -DNUMSIM_MATERIALS_BUILD_TESTS=ON
 cmake --build build
 cd build && ctest --output-on-failure
 ```
@@ -198,12 +205,11 @@ adaptor used by `solvers/unknown_layout.h`.
 
 ## Dependencies
 
-- C++23 (GCC 14+ or Clang 18+)
-- [numsim-core](https://github.com/NumSim-Stack/numsim-core) — fetched automatically via CMake
-- [tmech](https://github.com/petlenz/tmech) — tensor library; fetched automatically via CMake
-  (set `NUMSIM_USE_SYSTEM_TMECH=ON` to use an installed copy instead, or
-  `-DFETCHCONTENT_SOURCE_DIR_TMECH=/path/to/tmech` for a local checkout)
-- [nlohmann/json](https://github.com/nlohmann/json) — for JSON configuration (optional)
+- C++23 with `std::expected`: GCC ≥ 13 or Clang ≥ 19 (the NumSim toolchain baseline)
+- [numsim-core](https://github.com/NumSim-Stack/numsim-core) — sibling checkout, installed, or fetched at the pinned version
+- [tmech](https://github.com/petlenz/tmech) ≥ 1.2 — tensor library; sibling checkout, installed, or fetched
+  (`-DFETCHCONTENT_SOURCE_DIR_TMECH=/path/to/tmech` for another local checkout)
+- [nlohmann/json](https://github.com/nlohmann/json) ≥ 3.11 — JSON configuration (installed or fetched)
 - Eigen — dense linear algebra for `vector_newton`
 - Qt6 + QCustomPlot — for live plotting (optional)
 

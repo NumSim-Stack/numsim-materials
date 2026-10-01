@@ -70,9 +70,10 @@ TEST(UmatConversionOrdering, CanonicalSlotsAreAbaqusStandard) {
     // Every other component must be zero.
     for (int a = 0; a < 3; ++a)
       for (int b = 0; b < 3; ++b)
-        if (!((a == i && b == j) || (a == j && b == i)))
+        if (!((a == i && b == j) || (a == j && b == i))) {
           EXPECT_NEAR(sig(a, b), 0.0, tol)
               << "slot " << s << " leaked into (" << a << "," << b << ")";
+        }
   }
 }
 

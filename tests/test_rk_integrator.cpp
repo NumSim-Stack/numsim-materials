@@ -69,7 +69,7 @@ T run_decay(int N, const std::string& tableau, T lambda = 1.0) {
   p.insert<std::string>("function", "decay");
   p.insert<T>("step_size", T{1.0} / T(N));
   p.insert<std::string>("tableau", tableau);
-  auto& integ = ctx.create<Integrator>(p);
+  ctx.create<Integrator>(p);
 
   p.clear();
   p.insert<std::string>("name", "decay");

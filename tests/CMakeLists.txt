@@ -1,12 +1,10 @@
 find_package(Threads REQUIRED)
 
-include(GoogleTest)
-
+# numsim_add_test (numsim-cmake): the executable plus an ASan+UBSan variant,
+# both registered with ctest.
 macro(add_numsim_test TARGET_NAME)
-  add_executable(${TARGET_NAME} ${ARGN})
-  target_link_libraries(${TARGET_NAME}
-    PRIVATE numsim-materials::numsim-materials GTest::gtest_main)
-  gtest_discover_tests(${TARGET_NAME})
+  numsim_add_test(${TARGET_NAME} SOURCES ${ARGN}
+    LINK numsim-materials::numsim-materials Threads::Threads)
 endmacro()
 
 add_numsim_test(test_property_graph test_property_graph.cpp)
@@ -31,11 +29,14 @@ add_numsim_test(test_json_model test_json_model.cpp)
 add_numsim_test(test_props_scalar test_props_scalar.cpp)
 add_numsim_test(test_material_registry test_material_registry.cpp)
 add_numsim_test(test_material_conformance test_material_conformance.cpp)
-target_compile_definitions(test_material_conformance PRIVATE
-  NUMSIM_MATERIALS_INCLUDE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../include/numsim-materials/materials")
+foreach(_t test_material_conformance test_material_conformance_asan)
+  if(TARGET ${_t})
+    target_compile_definitions(${_t} PRIVATE
+      NUMSIM_MATERIALS_INCLUDE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../include/numsim-materials/materials")
+  endif()
+endforeach()
 add_numsim_test(test_uncovered_materials test_uncovered_materials.cpp)
 add_numsim_test(test_weighted_sum test_weighted_sum.cpp)
-target_link_libraries(test_umat_interface PRIVATE Threads::Threads)
 
 # Data dumper for plotting (not a test — standalone executable)
 add_executable(plot_data plot_data.cpp)
