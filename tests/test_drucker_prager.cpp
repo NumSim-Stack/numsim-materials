@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 #include <cmath>
 #include <limits>
-#include <print>
+#include <numsim-core/print.h>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/materials/tensor_component_stepper.h"
@@ -221,7 +221,7 @@ TEST_F(DruckerPragerTest, PlasticStrainHasVolumetricComponent) {
     // With beta > 0, plastic strain should have nonzero trace (dilatancy)
     EXPECT_GT(std::abs(trace_eps_p), 1e-10)
         << "DP plastic strain should have volumetric component (beta=" << dp_beta << ")";
-    std::println("  trace(eps_p) = {:.6e}, alpha = {:.6e}", trace_eps_p, alpha);
+    numsim_core::println("  trace(eps_p) = {:.6e}, alpha = {:.6e}", trace_eps_p, alpha);
   }
 }
 
@@ -338,7 +338,7 @@ TEST_F(DPTangentTest, ConsistentTangent) {
     ctx.update();
     auto rel = ctx.get<T>("checker", "rel_error");
     auto alpha = ctx.get<T>("dp", "equivalent_plastic_strain");
-    std::println("  DP step {:2d}: rel={:.2e} alpha={:.4e}", i, rel, alpha);
+    numsim_core::println("  DP step {:2d}: rel={:.2e} alpha={:.4e}", i, rel, alpha);
     if (rel > max_rel_error) max_rel_error = rel;
     ctx.commit();
   }
@@ -413,7 +413,7 @@ T run_dp_max_tangent_error(T increment, int steps) {
 
 TEST(DPConvergence, TangentErrorIsBounded) {
   auto err = run_dp_max_tangent_error(T{0.02}, 15);
-  std::println("  DP tangent error: {:.4e}", err);
+  numsim_core::println("  DP tangent error: {:.4e}", err);
   EXPECT_LT(err, 1e-3) << "DP consistent tangent should match numerical derivative";
 }
 

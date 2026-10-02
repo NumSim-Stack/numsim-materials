@@ -1,11 +1,10 @@
 #ifndef MATERIAL_PROPERTY_INFO_H
 #define MATERIAL_PROPERTY_INFO_H
 
-#include <expected>
 #include <format>
-#include <ranges>
 #include <string>
 #include <vector>
+#include "numsim-materials/core/expected.h"
 #include "numsim-materials/core/property.h"
 #include "numsim-materials/core/material_interface.h"
 
@@ -14,17 +13,15 @@ namespace numsim::materials {
 class material_property_info {
 public:
   template<typename Traits>
-  static std::expected<material_property_info, std::string>
+  static expected<material_property_info, std::string>
   from_material(const material_interface<Traits>& material) noexcept {
     try {
       const auto& registry = material.get_property_registry();
 
       auto extract = [](const auto& props) {
-        return props
-               | std::views::transform([](const property_base* p) {
-                   return &(p->traits());
-                 })
-               | std::ranges::to<std::vector<const property_traits*>>();
+        std::vector<const property_traits*> traits;
+        for (const property_base* p : props) traits.push_back(&(p->traits()));
+        return traits;
       };
 
       return material_property_info{
@@ -32,9 +29,9 @@ public:
           extract(registry.produced_properties())
       };
     } catch (const std::exception& e) {
-      return std::unexpected(std::format("Failed to extract from '{}': {}", material.name(), e.what()));
+      return unexpected(std::format("Failed to extract from '{}': {}", material.name(), e.what()));
     } catch (...) {
-      return std::unexpected(std::format("Unknown error extracting from '{}'", material.name()));
+      return unexpected(std::format("Unknown error extracting from '{}'", material.name()));
     }
   }
 

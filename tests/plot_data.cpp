@@ -1,5 +1,5 @@
 #include <fstream>
-#include <print>
+#include <numsim-core/print.h>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/materials/tensor_component_stepper.h"
@@ -185,12 +185,12 @@ void write_csv(const std::string& path, const run_result& r) {
   std::ofstream f(path);
   f << "step,eps_load,sig_11,sig_22,sig_33,sig_12,pressure,alpha,tangent_rel_error\n";
   for (std::size_t i = 0; i < r.step.size(); ++i) {
-    std::print(f, "{},{:.10e},{:.10e},{:.10e},{:.10e},{:.10e},{:.10e},{:.10e},{:.10e}\n",
+    numsim_core::print(f, "{},{:.10e},{:.10e},{:.10e},{:.10e},{:.10e},{:.10e},{:.10e},{:.10e}\n",
                r.step[i], r.eps_load[i],
                r.sig_11[i], r.sig_22[i], r.sig_33[i], r.sig_12[i],
                r.pressure[i], r.alpha[i], r.tangent_rel_error[i]);
   }
-  std::println("Wrote {}", path);
+  numsim_core::println("Wrote {}", path);
 }
 
 int main() {
@@ -208,7 +208,7 @@ int main() {
   };
 
   for (const auto& lc : cases) {
-    std::println("=== Load case: {} (increment={}) ===", lc.tag, lc.increment);
+    numsim_core::println("=== Load case: {} (increment={}) ===", lc.tag, lc.increment);
 
     auto j2 = run_j2(lc.increment, lc.steps, lc.i, lc.j);
     write_csv("j2_" + lc.tag + ".csv", j2);
