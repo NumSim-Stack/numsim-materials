@@ -36,7 +36,7 @@ include(cmake/numsim_bootstrap.cmake)
 include(NumSimDependency)
 include(NumSimWarnings)
 
-set(NUMSIM_MATERIALS_NUMSIM_CORE_TAG "bf69e4d45e06a29707ea6cc3977c0a10d6109f8c" CACHE STRING
+set(NUMSIM_MATERIALS_NUMSIM_CORE_TAG "0ce6ad74410ff80fb69f5eccad8ba1b8c6a02f24" CACHE STRING
     "numsim-core version (tag or commit) to fetch")
 set(NUMSIM_MATERIALS_TMECH_TAG "v1.2.0" CACHE STRING
     "tmech version (tag or commit) to fetch")
