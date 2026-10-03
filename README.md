@@ -101,15 +101,24 @@ headers document their conventions — tensor ordering, the engineering-shear
 `STATEV` convention, time rebasing and cutback signalling — at the top of the
 file.
 
-Small-strain materials are valid for large rotation with small strain; there is
-no finite-strain formulation yet.
+Small-strain materials are valid for large rotation with small strain. Finite
+strain is available for C++ hosts (FFT homogenisation, for one): an
+`external_deformation_gradient_source` publishes F at t_n and t_{n+1}, the
+hyperelastic models `saint_venant_kirchhoff` and `neo_hooke` publish the first
+Piola-Kirchhoff stress as `stress` and dP/dF as `tangent`, and
+`material_point_evaluator` evaluates them through
+`evaluate_deformation_gradient()` (config `deformation_gradient_source`
+instead of `strain_source`). The UMAT entry points stay small strain.
 
 ## Material catalogue
 
-All 29 types registered by `register_default_materials<policy>()`.
+All 31 types registered by `register_default_materials<policy>()`.
 
 **Elasticity and stress** — `linear_elasticity`, `linear_stress`,
 `isotropic_tangent`, `weighted_sum`
+
+**Hyperelasticity (finite strain)** — `saint_venant_kirchhoff`, `neo_hooke`
+(driven by `external_deformation_gradient_source`)
 
 **Plasticity** — `j2_plasticity`, `j2_rk_plasticity`,
 `drucker_prager_plasticity`, `linear_isotropic_hardening`,
