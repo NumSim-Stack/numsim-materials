@@ -80,6 +80,53 @@ private:
   history_property<tensor2>& m_strain;
 };
 
+/// Host-driven deformation-gradient source for finite-strain models: the
+/// "deformation_gradient" history property, F at t_n and t_{n+1}, written by
+/// bind() like the strain of external_strain_source. Consumers (the
+/// hyperelastic models) publish the first Piola-Kirchhoff stress as "stress"
+/// and dP/dF as "tangent".
+template <typename Traits>
+class external_deformation_gradient_source final
+    : public material_base<external_deformation_gradient_source<Traits>, Traits> {
+public:
+  using base = material_base<external_deformation_gradient_source<Traits>, Traits>;
+  using value_type = typename base::value_type;
+  using input_parameter_controller = typename base::input_parameter_controller;
+  using base::Dim;
+  using tensor2 = tmech::tensor<value_type, Dim, 2>;
+
+  static_assert(Dim == 3, "external_deformation_gradient_source is 3D only");
+
+  template <typename... Args>
+  explicit external_deformation_gradient_source(Args&&... args)
+      : base(std::forward<Args>(args)...),
+        m_F(base::template add_history_output<tensor2>("deformation_gradient")) {
+    m_F.old_value() = tmech::eye<value_type, Dim, 2>();
+    m_F.new_value() = tmech::eye<value_type, Dim, 2>();
+  }
+
+  static input_parameter_controller parameters() { return base::parameters(); }
+
+  void bind(const tensor2& old_F, const tensor2& new_F) {
+    m_F.old_value() = old_F;
+    m_F.new_value() = new_F;
+  }
+
+  /// Bind from two 9-slot buffers in row-major order (F_11 F_12 F_13 F_21 ...).
+  void bind(const value_type* old9, const value_type* new9) {
+    for (std::size_t i = 0; i < Dim; ++i)
+      for (std::size_t j = 0; j < Dim; ++j) {
+        m_F.old_value()(i, j) = old9[Dim * i + j];
+        m_F.new_value()(i, j) = new9[Dim * i + j];
+      }
+  }
+
+  const history_property<tensor2>& deformation_gradient() const noexcept { return m_F; }
+
+private:
+  history_property<tensor2>& m_F;
+};
+
 /// Host-driven scalar source — time, temperature, or any other externally
 /// prescribed scalar. Drop-in for `scalar_stepper`: same "state" property, same
 /// history type, so consumers such as `autocatalytic_reaction` (which forms
