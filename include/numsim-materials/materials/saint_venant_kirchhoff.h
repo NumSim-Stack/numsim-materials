@@ -50,21 +50,17 @@ public:
   }
 
   void update() {
-    const tensor2 F{m_F.get()};
+    const auto& F{m_F.get()};
     const auto I{tmech::eye<value_type, Dim, 2>()};
     const tensor2 E{0.5 * (tmech::trans(F) * F - I)};
     const tensor2 S{tmech::dcontract(m_C, E)};
     m_P = F * S;
-    for (std::size_t i = 0; i < Dim; ++i)
-      for (std::size_t j = 0; j < Dim; ++j)
-        for (std::size_t k = 0; k < Dim; ++k)
-          for (std::size_t l = 0; l < Dim; ++l) {
-            value_type v{i == k ? S(l, j) : value_type(0)};
-            for (std::size_t m = 0; m < Dim; ++m)
-              for (std::size_t b = 0; b < Dim; ++b)
-                v += F(i, m) * m_C(m, j, l, b) * F(k, b);
-            m_A(i, j, k, l) = v;
-          }
+    // d_ik S_lj + F_im C_mjlb F_kb: contract F with the first index of C,
+    // then the last index with F (giving i j l k), and swap the last two
+    const tensor4 FC{tmech::inner_product<tmech::sequence<2>, tmech::sequence<1>>(F, m_C)};
+    m_A = tmech::otimesu(I, tmech::trans(S)) +
+          tmech::basis_change<tmech::sequence<1, 2, 4, 3>>(
+              tmech::inner_product<tmech::sequence<4>, tmech::sequence<2>>(FC, F));
   }
 
 private:

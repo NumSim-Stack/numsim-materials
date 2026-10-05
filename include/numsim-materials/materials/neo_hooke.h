@@ -47,7 +47,7 @@ public:
   }
 
   void update() {
-    const tensor2 F{m_F.get()};
+    const auto& F{m_F.get()};
     const value_type J{tmech::det(F)};
     if (!(J > value_type(0)))
       throw std::domain_error("neo_hooke: det F must be positive");
@@ -55,14 +55,11 @@ public:
     const value_type lnJ{std::log(J)};
     const tensor2 Finv{tmech::inv(F)};
     const tensor2 FinvT{tmech::trans(Finv)};
+    const auto I{tmech::eye<value_type, Dim, 2>()};
     m_P = m_G * (F - FinvT) + lambda * lnJ * FinvT;
-    for (std::size_t i = 0; i < Dim; ++i)
-      for (std::size_t j = 0; j < Dim; ++j)
-        for (std::size_t k = 0; k < Dim; ++k)
-          for (std::size_t l = 0; l < Dim; ++l)
-            m_A(i, j, k, l) = (i == k && j == l ? m_G : value_type(0)) +
-                              (m_G - lambda * lnJ) * Finv(j, k) * Finv(l, i) +
-                              lambda * Finv(j, i) * Finv(l, k);
+    // G d_ik d_jl + (G - lambda ln J) F^-1_jk F^-1_li + lambda F^-1_ji F^-1_lk
+    m_A = m_G * tmech::otimesu(I, I) + (m_G - lambda * lnJ) * tmech::otimesl(FinvT, Finv) +
+          lambda * tmech::otimes(FinvT, FinvT);
   }
 
 private:

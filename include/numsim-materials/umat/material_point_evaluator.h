@@ -289,12 +289,14 @@ public:
   }
 
   /// Write the updated history back. No commit(): the host owns the timestep.
-  /// One graph evaluation of a finite-strain model: F at t_n and t_{n+1},
-  /// first Piola-Kirchhoff stress P and dP/dF out. Like evaluate_canonical,
-  /// it reloads STATEV and does not write it back; pair with store_statev().
+  /// One graph evaluation of a finite-strain model from F at t_n and
+  /// t_{n+1}; the first Piola-Kirchhoff stress and dP/dF are then read
+  /// through stress() and tangent(), references to the graph's properties.
+  /// Like evaluate_canonical, it reloads STATEV and does not write it back;
+  /// pair with store_statev().
   void evaluate_deformation_gradient(const value_type* statev, const tensor2& F_old,
                                      const tensor2& F_new, value_type time,
-                                     value_type dtime, tensor2& P, tensor4& dP_dF) {
+                                     value_type dtime) {
     if (!finite_strain())
       throw fatal_error(
           "material_point_evaluator: evaluate_deformation_gradient needs a "
@@ -307,9 +309,15 @@ public:
     m_F_src->bind(F_old, F_new);
     if (m_time_src) m_time_src->bind(time, time + dtime);
     m_ctx.update();
-    P = *m_stress;
-    dP_dF = *m_tangent;
   }
+
+  /// The stress of the last evaluation (the graph's property, not a copy):
+  /// the first Piola-Kirchhoff stress for a finite-strain model.
+  [[nodiscard]] const tensor2& stress() const noexcept { return *m_stress; }
+
+  /// The tangent of the last evaluation (the graph's property, not a copy):
+  /// dP/dF for a finite-strain model.
+  [[nodiscard]] const tensor4& tangent() const noexcept { return *m_tangent; }
 
   void store_statev(value_type* statev) const { m_statev->pack(statev); }
 

@@ -114,11 +114,8 @@ public:
 
   /// Bind from two 9-slot buffers in row-major order (F_11 F_12 F_13 F_21 ...).
   void bind(const value_type* old9, const value_type* new9) {
-    for (std::size_t i = 0; i < Dim; ++i)
-      for (std::size_t j = 0; j < Dim; ++j) {
-        m_F.old_value()(i, j) = old9[Dim * i + j];
-        m_F.new_value()(i, j) = new9[Dim * i + j];
-      }
+    m_F.old_value() = tmech::adaptor<const value_type, Dim, 2, tmech::full<Dim>>{old9};
+    m_F.new_value() = tmech::adaptor<const value_type, Dim, 2, tmech::full<Dim>>{new9};
   }
 
   const history_property<tensor2>& deformation_gradient() const noexcept { return m_F; }

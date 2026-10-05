@@ -159,9 +159,11 @@ TEST(MaterialPointEvaluator, DeformationGradientPathReturnsPAndItsTangent) {
   EXPECT_TRUE(ev.finite_strain());
   EXPECT_EQ(ev.nstatv(), 0u);  // the source's history is host-owned
   const tensor2 F{test_deformation()};
-  tensor2 P;
-  tensor4 A;
-  ev.evaluate_deformation_gradient(nullptr, tmech::eye<T, 3, 2>(), F, 0.0, 1.0, P, A);
+  ev.evaluate_deformation_gradient(nullptr, tmech::eye<T, 3, 2>(), F, 0.0, 1.0);
+  // stress and tangent are references to the graph's properties, not copies
+  const auto& P = ev.stress();
+  EXPECT_EQ(&P, &ctx.get<tensor2>("model", "stress"));
+  EXPECT_EQ(&ev.tangent(), &ctx.get<tensor4>("model", "tangent"));
   // the same from the graph directly
   ctx_type direct;
   auto& src = add_model<nm::saint_venant_kirchhoff<policy>>(direct);
@@ -200,11 +202,23 @@ TEST(JsonModel, BuildsAFiniteStrainModel) {
   tensor2 F{tmech::eye<T, 3, 2>()};
   F(0, 1) = 0.5;
   F(1, 1) = 1.2;
-  tensor2 P;
-  tensor4 A;
-  ev.evaluate_deformation_gradient(nullptr, tmech::eye<T, 3, 2>(), F, 0.0, 1.0, P, A);
+  ev.evaluate_deformation_gradient(nullptr, tmech::eye<T, 3, 2>(), F, 0.0, 1.0);
+  const auto& P = ev.stress();
   EXPECT_GT(std::abs(P(0, 1)), 0.1);
   EXPECT_NE(P(0, 1), P(1, 0));  // P is not symmetric ...
   const tensor2 PFt{P * tmech::trans(F)};  // ... but P F^T (J sigma) is
   EXPECT_LT(tmech::norm(tensor2{PFt - tmech::trans(PFt)}), 1e-14);
+}
+
+TEST(ExternalDeformationGradientSource, BindsRowMajorBuffers) {
+  ctx_type ctx;
+  auto& src = add_model<nm::neo_hooke<policy>>(ctx);
+  const tensor2 F{test_deformation()};
+  const tensor2 F_old{tmech::eye<T, 3, 2>()};
+  T old9[9], new9[9];
+  tmech::adaptor<T, 3, 2, tmech::full<3>>{old9} = F_old;
+  tmech::adaptor<T, 3, 2, tmech::full<3>>{new9} = F;
+  src.bind(old9, new9);
+  EXPECT_EQ(tmech::norm(tensor2{src.deformation_gradient().new_value() - F}), 0.0);
+  EXPECT_EQ(tmech::norm(tensor2{src.deformation_gradient().old_value() - F_old}), 0.0);
 }
