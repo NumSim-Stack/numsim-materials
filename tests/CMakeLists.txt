@@ -35,6 +35,7 @@ foreach(_t test_material_conformance test_material_conformance_asan)
 endforeach()
 add_numsim_test(test_uncovered_materials test_uncovered_materials.cpp)
 add_numsim_test(test_weighted_sum test_weighted_sum.cpp)
+add_numsim_test(test_finite_strain test_finite_strain.cpp)
 
 # Data dumper for plotting (not a test — standalone executable)
 add_executable(plot_data plot_data.cpp)
