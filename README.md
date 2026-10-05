@@ -103,12 +103,15 @@ file.
 
 Small-strain materials are valid for large rotation with small strain. Finite
 strain is available for C++ hosts (FFT homogenisation, for one): an
-`external_deformation_gradient_source` publishes F at t_n and t_{n+1}, the
+`external_deformation_gradient_source` publishes F at t_n and t_{n+1}
+(`deformation_gradient`) together with `inverse` (F^-1) and `determinant`
+(det F) of the new F, so models share them instead of each inverting F; the
 hyperelastic models `saint_venant_kirchhoff` and `neo_hooke` publish the first
 Piola-Kirchhoff stress as `stress` and dP/dF as `tangent`, and
 `material_point_evaluator` evaluates them through
 `evaluate_deformation_gradient()` (config `deformation_gradient_source`
-instead of `strain_source`). The UMAT entry points stay small strain.
+instead of `strain_source`; `stress()` and `tangent()` are references to
+the graph's properties). The UMAT entry points stay small strain.
 
 ## Material catalogue
 

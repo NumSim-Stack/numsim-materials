@@ -222,3 +222,34 @@ TEST(ExternalDeformationGradientSource, BindsRowMajorBuffers) {
   EXPECT_EQ(tmech::norm(tensor2{src.deformation_gradient().new_value() - F}), 0.0);
   EXPECT_EQ(tmech::norm(tensor2{src.deformation_gradient().old_value() - F_old}), 0.0);
 }
+
+TEST(ExternalDeformationGradientSource, PublishesTheInverseAndTheDeterminant) {
+  ctx_type ctx;
+  auto& src = add_model<nm::neo_hooke<policy>>(ctx);
+  const auto& F_inv = ctx.get<tensor2>("F", "inverse");
+  const auto& J = ctx.get<T>("F", "determinant");
+  // the initial state is the identity
+  EXPECT_EQ(J, 1.0);
+  EXPECT_EQ(tmech::norm(tensor2{F_inv - tmech::eye<T, 3, 2>()}), 0.0);
+  // both bind() forms keep them in step with the new deformation gradient
+  const tensor2 F{test_deformation()};
+  src.bind(tmech::eye<T, 3, 2>(), F);
+  EXPECT_DOUBLE_EQ(J, tmech::det(F));
+  EXPECT_LT(tmech::norm(tensor2{F_inv * F - tmech::eye<T, 3, 2>()}), 1e-15);
+  const tensor2 F2{tmech::trans(F)};
+  T old9[9], new9[9];
+  tmech::adaptor<T, 3, 2, tmech::full<3>>{old9} = F;
+  tmech::adaptor<T, 3, 2, tmech::full<3>>{new9} = F2;
+  src.bind(old9, new9);
+  EXPECT_DOUBLE_EQ(J, tmech::det(F2));
+  EXPECT_LT(tmech::norm(tensor2{F_inv * F2 - tmech::eye<T, 3, 2>()}), 1e-15);
+}
+
+TEST(ExternalDeformationGradientSource, InverseAndDeterminantAreNotHistory) {
+  // plain properties of the current F: they add nothing to STATEV
+  ctx_type ctx;
+  add_model<nm::neo_hooke<policy>>(ctx);
+  u::material_point_evaluator<policy> ev{
+      ctx, {.strain_source = {}, .stress_source = "model", .deformation_gradient_source = "F"}};
+  EXPECT_EQ(ev.nstatv(), 0u);
+}
