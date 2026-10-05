@@ -44,8 +44,7 @@ public:
   using context_type = material_context<Traits>;
 
   struct config {
-    /// Name of the external_strain_source material (small strain), or empty
-    /// when the model is driven by a deformation_gradient_source instead.
+    /// external_strain_source (small strain); empty for finite strain.
     std::string strain_source;
     /// Material producing the stress the host wants back.
     std::string stress_source;
@@ -68,11 +67,7 @@ public:
     /// APPENDED — a field inserted mid-struct would silently re-bind the
     /// trailing arguments of an existing aggregate initialiser.
     std::optional<std::string> tangent_source{};
-    /// Name of the external_deformation_gradient_source material for a
-    /// finite-strain model (hyperelasticity): "stress" is then the first
-    /// Piola-Kirchhoff stress and "tangent" dP/dF. Exactly one of
-    /// strain_source and deformation_gradient_source is set. APPENDED, see
-    /// tangent_source.
+    /// external_deformation_gradient_source (finite strain). APPENDED, see tangent_source.
     std::string deformation_gradient_source{};
   };
 
@@ -289,11 +284,7 @@ public:
   }
 
   /// Write the updated history back. No commit(): the host owns the timestep.
-  /// One graph evaluation of a finite-strain model from F at t_n and
-  /// t_{n+1}; the first Piola-Kirchhoff stress and dP/dF are then read
-  /// through stress() and tangent(), references to the graph's properties.
-  /// Like evaluate_canonical, it reloads STATEV and does not write it back;
-  /// pair with store_statev().
+  /// Finite-strain evaluation; results via stress() and tangent(). Pair with store_statev().
   void evaluate_deformation_gradient(const value_type* statev, const tensor2& F_old,
                                      const tensor2& F_new, value_type time,
                                      value_type dtime) {
@@ -311,12 +302,10 @@ public:
     m_ctx.update();
   }
 
-  /// The stress of the last evaluation (the graph's property, not a copy):
-  /// the first Piola-Kirchhoff stress for a finite-strain model.
+  /// Stress of the last evaluation (P for finite strain).
   [[nodiscard]] const tensor2& stress() const noexcept { return *m_stress; }
 
-  /// The tangent of the last evaluation (the graph's property, not a copy):
-  /// dP/dF for a finite-strain model.
+  /// Tangent of the last evaluation (dP/dF for finite strain).
   [[nodiscard]] const tensor4& tangent() const noexcept { return *m_tangent; }
 
   void store_statev(value_type* statev) const { m_statev->pack(statev); }

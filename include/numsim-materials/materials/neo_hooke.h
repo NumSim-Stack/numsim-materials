@@ -7,18 +7,8 @@
 
 namespace numsim::materials {
 
-/// Compressible neo-Hookean hyperelasticity with the strain energy
-///   W = G / 2 (tr(F^T F) - 3) - G ln J + lambda / 2 (ln J)^2,
-/// lambda = K - 2 G / 3, J = det F, which reduces to isotropic linear
-/// elasticity (K, G) at small strain.
-///
-/// Consumes "deformation_gradient", its "inverse" and its "determinant" from
-/// the material named by "deformation_gradient_source" (computed once there)
-/// and publishes the first Piola-Kirchhoff
-/// stress P = G (F - F^-T) + lambda ln J F^-T as "stress" and
-///   dP_ij / dF_kl = G d_ik d_jl + (G - lambda ln J) F^-1_jk F^-1_li
-///                 + lambda F^-1_ji F^-1_lk
-/// as "tangent".
+/// Compressible neo-Hooke: W = G/2 (tr(F^T F) - 3) - G ln J + lambda/2 (ln J)^2.
+/// "stress": P, "tangent": dP/dF.
 template <typename Traits>
 class neo_hooke : public material_base<neo_hooke<Traits>, Traits> {
 public:
@@ -60,7 +50,6 @@ public:
     const auto FinvT{tmech::trans(Finv)};
     const auto I{tmech::eye<value_type, Dim, 2>()};
     m_P = m_G * (F - FinvT) + lambda * lnJ * FinvT;
-    // G d_ik d_jl + (G - lambda ln J) F^-1_jk F^-1_li + lambda F^-1_ji F^-1_lk
     m_A = m_G * tmech::otimesu(I, I) + (m_G - lambda * lnJ) * tmech::otimesl(FinvT, Finv) +
           lambda * tmech::otimes(FinvT, FinvT);
   }

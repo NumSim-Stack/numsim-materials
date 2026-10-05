@@ -6,15 +6,8 @@
 
 namespace numsim::materials {
 
-/// Saint Venant-Kirchhoff hyperelasticity: the linear isotropic law
-/// S = C : E in the Green-Lagrange strain E = (F^T F - I) / 2, with
-/// C = K I (x) I + 2 G (I_s - I (x) I / 3).
-///
-/// Consumes the "deformation_gradient" history of the material named by
-/// "deformation_gradient_source" (external_deformation_gradient_source) and
-/// publishes the first Piola-Kirchhoff stress P = F S as "stress" and its
-/// derivative dP_ij / dF_kl = d_ik S_lj + F_im C_mjlb F_kb as "tangent" (a
-/// rank-4 tensor without minor symmetries).
+/// Saint Venant-Kirchhoff: S = C : E, E = (F^T F - I) / 2.
+/// "stress": P = F S, "tangent": dP/dF.
 template <typename Traits>
 class saint_venant_kirchhoff
     : public material_base<saint_venant_kirchhoff<Traits>, Traits> {
@@ -55,8 +48,7 @@ public:
     const tensor2 E{0.5 * (tmech::trans(F) * F - I)};
     const tensor2 S{tmech::dcontract(m_C, E)};
     m_P = F * S;
-    // d_ik S_lj + F_im C_mjlb F_kb: contract F with the first index of C,
-    // then the last index with F (giving i j l k), and swap the last two
+    // d_ik S_lj + F_im C_mjlb F_kb
     const tensor4 FC{tmech::inner_product<tmech::sequence<2>, tmech::sequence<1>>(F, m_C)};
     m_A = tmech::otimesu(I, tmech::trans(S)) +
           tmech::basis_change<tmech::sequence<1, 2, 4, 3>>(

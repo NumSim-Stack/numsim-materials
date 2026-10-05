@@ -82,15 +82,8 @@ private:
   history_property<tensor2>& m_strain;
 };
 
-/// Host-driven deformation-gradient source for finite-strain models: the
-/// "deformation_gradient" history property, F at t_n and t_{n+1}, written by
-/// bind() like the strain of external_strain_source. With it, bind() also
-/// publishes "inverse" (F^-1) and "determinant" (J = det F) of the new F, so
-/// consumers share them instead of each inverting F. They are plain
-/// properties of the current state, not history, and add nothing to STATEV.
-/// For det F = 0 the inverse is NaN; consumers check J. Consumers (the
-/// hyperelastic models) publish the first Piola-Kirchhoff stress as "stress"
-/// and dP/dF as "tangent".
+/// Host-driven deformation gradient: "deformation_gradient" (history), plus
+/// "inverse" and "determinant" of the new F (not history).
 template <typename Traits>
 class external_deformation_gradient_source final
     : public material_base<external_deformation_gradient_source<Traits>, Traits> {
@@ -122,7 +115,7 @@ public:
     derive();
   }
 
-  /// Bind from two 9-slot buffers in row-major order (F_11 F_12 F_13 F_21 ...).
+  /// Row-major 9-slot buffers.
   void bind(const value_type* old9, const value_type* new9) {
     m_F.old_value() = tmech::adaptor<const value_type, Dim, 2, tmech::full<Dim>>{old9};
     m_F.new_value() = tmech::adaptor<const value_type, Dim, 2, tmech::full<Dim>>{new9};
@@ -134,7 +127,6 @@ public:
   value_type determinant() const noexcept { return m_J; }
 
 private:
-  /// Inverse and determinant of the new F.
   void derive() {
     const auto& F{m_F.new_value()};
     m_J = tmech::det(F);
