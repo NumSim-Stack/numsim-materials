@@ -11,6 +11,8 @@
 #include "numsim-materials/solvers/backward_euler.h"
 #include "numsim-materials/umat/external_state_source.h"
 #include "numsim-materials/umat/material_point_evaluator.h"
+#include "numsim-materials/core/stress_like.h"
+#include "numsim-materials/umat/statev_map.h"
 #include "numsim-materials/solvers/local_newton.h"
 #include "numsim-materials/materials/j2_plasticity.h"
 
@@ -781,3 +783,53 @@ TEST(MaterialPointEvaluator, PreStressedStartDoesNotProduceNegativeDissipation) 
 }
 
 }  // namespace
+
+namespace {
+
+/// Probe with a stress-like and a strain-like tensor history.
+template <typename Traits>
+class history_kind_probe final : public nm::material_base<history_kind_probe<Traits>, Traits> {
+public:
+  using base = nm::material_base<history_kind_probe<Traits>, Traits>;
+  using value_type = typename base::value_type;
+  using input_parameter_controller = typename base::input_parameter_controller;
+
+  template <typename... Args>
+  explicit history_kind_probe(Args&&... args)
+      : base(std::forward<Args>(args)...),
+        back_stress(base::template add_history_output<nm::stress_like<value_type>>("back_stress")),
+        plastic_strain(base::template add_history_output<tmech::tensor<value_type, 3, 2>>("plastic_strain")) {}
+
+  static input_parameter_controller parameters() { return base::parameters(); }
+
+  numsim_core::history_property<nm::stress_like<value_type>, numsim_core::property_traits>& back_stress;
+  numsim_core::history_property<tmech::tensor<value_type, 3, 2>, numsim_core::property_traits>& plastic_strain;
+};
+
+}  // namespace
+
+TEST(StatevMap, StressLikeHistoryKeepsItsShearComponentsForTheHost) {
+  nm::material_context<policy> ctx;
+  typename policy::ParameterHandler p;
+  p.insert<std::string>("name", "probe");
+  auto& probe = ctx.create<history_kind_probe<policy>>(p);
+  ctx.finalize();
+  u::statev_map<policy> map{ctx, {}};
+  ASSERT_EQ(map.nstatv(), 12u);
+
+  tmech::tensor<T, 3, 2> shear;
+  shear(0, 1) = shear(1, 0) = 0.1;
+  probe.back_stress.new_value() = shear;
+  probe.plastic_strain.new_value() = shear;
+  std::vector<T> statev(map.nstatv(), 0.0);
+  map.pack(statev.data());
+  // slots sorted by name: back_stress (stress, Abaqus 12 slot = sigma_12), plastic_strain (engineering gamma_12)
+  EXPECT_DOUBLE_EQ(statev[3], 0.1);
+  EXPECT_DOUBLE_EQ(statev[6 + 3], 0.2);
+
+  probe.back_stress.new_value() = tmech::tensor<T, 3, 2>{};
+  map.unpack(statev.data());
+  EXPECT_EQ(tmech::norm(tmech::tensor<T, 3, 2>{probe.back_stress.old_value() - shear}), 0.0);
+  EXPECT_EQ(tmech::norm(tmech::tensor<T, 3, 2>{probe.plastic_strain.old_value() - shear}), 0.0);
+  EXPECT_NE(map.describe()[0].find("[stress]"), std::string::npos) << map.describe()[0];
+}
