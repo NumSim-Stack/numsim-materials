@@ -23,7 +23,7 @@ public:
   using control = load_control<value_type>;
 
   struct options {
-    value_type tolerance{1e-10}; ///< on |P:(sigma - sigma*)| relative to |sigma|
+    value_type tolerance{1e-10}; ///< on |P:(sigma - sigma*)| relative to max(|sigma|, |P:sigma*|, |C| |eps - eps_n|)
     int max_iter{25};
     value_type fd_step{1e-7};    ///< strain perturbation of tangent_error()
   };
@@ -56,7 +56,10 @@ public:
       evaluate(res.start, res.strain, time, dt, res.stress, res.tangent);
       tensor2 const r{tmech::dcontract(P, tensor2{res.stress - stress})};
       res.residuals.push_back(tmech::norm(r));
-      if (res.residuals.back() <= m_opts.tolerance * std::max(tmech::norm(res.stress), tmech::norm(tensor2{tmech::dcontract(P, stress)}))) {
+      // the step's own stress scale keeps a zero crossing of a hypoelastic stress convergible
+      auto const scale{std::max({tmech::norm(res.stress), tmech::norm(tensor2{tmech::dcontract(P, stress)}),
+                                 tmech::norm(res.tangent) * tmech::norm(tensor2{res.strain - res.start.strain})})};
+      if (res.residuals.back() <= m_opts.tolerance * scale) {
         res.converged = true;
         break;
       }

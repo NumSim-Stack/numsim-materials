@@ -22,7 +22,7 @@ public:
   using control = deformation_control<value_type>;
 
   struct options {
-    value_type tolerance{1e-10}; ///< on |M:(P - P*)| relative to |P|
+    value_type tolerance{1e-10}; ///< on |M:(P - P*)| relative to max(|P|, |M:P*|, |A| |F - F_n|)
     int max_iter{25};
     value_type fd_step{1e-7};    ///< perturbation of F in tangent_error()
   };
@@ -55,7 +55,9 @@ public:
       evaluate(res.start, res.F, time, dt, res.stress, res.tangent);
       tensor2 const r{tmech::dcontract(M, tensor2{res.stress - P})};
       res.residuals.push_back(tmech::norm(r));
-      if (res.residuals.back() <= m_opts.tolerance * std::max(tmech::norm(res.stress), tmech::norm(tensor2{tmech::dcontract(M, P)}))) {
+      auto const scale{std::max({tmech::norm(res.stress), tmech::norm(tensor2{tmech::dcontract(M, P)}),
+                                 tmech::norm(res.tangent) * tmech::norm(tensor2{res.F - res.start.F})})};
+      if (res.residuals.back() <= m_opts.tolerance * scale) {
         res.converged = true;
         break;
       }
