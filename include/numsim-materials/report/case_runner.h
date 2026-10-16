@@ -9,7 +9,7 @@
 #include <vector>
 
 #include <nlohmann/json.hpp>
-#include "numsim-materials/report/load_driver.h"
+#include "numsim-materials/umat/material_point_driver.h"
 #include "numsim-materials/report/property_columns.h"
 #include "numsim-materials/report/report_json.h"
 #include "numsim-materials/umat/json_model.h"
@@ -21,7 +21,7 @@ template <typename Traits>
 struct step_record {
   using value_type = typename Traits::value_type;
   load_step<value_type> step;
-  typename load_driver<Traits>::step_result result;
+  typename umat::material_point_driver<Traits>::step_result result;
   std::vector<value_type> columns;
   value_type tangent_error{std::numeric_limits<value_type>::quiet_NaN()};
 };
@@ -73,16 +73,16 @@ private:
 template <typename Traits, typename Sink>
   requires step_sink<Sink, Traits>
 bool run_case(nlohmann::json const &doc, load_case<typename Traits::value_type> const &c, Sink &sink,
-              typename load_driver<Traits>::options opts = {}) {
+              typename umat::material_point_driver<Traits>::options opts = {}) {
   using T = typename Traits::value_type;
-  using tensor2 = typename load_driver<Traits>::tensor2;
+  using tensor2 = typename umat::material_point_driver<Traits>::tensor2;
   material_point<Traits> point(doc);
-  load_driver<Traits> driver{point.evaluator_ref(), opts};
+  umat::material_point_driver<Traits> driver{point.evaluator_ref(), opts};
   property_columns<Traits> const columns{point.context(), point.wiring(doc)};
   sink.begin(columns.names());
 
   auto const unloaded{c.path.unloaded()};
-  auto const initial{driver.step(tensor2{}, tensor2{}, load_control<T>::strain(), 0, 0)};
+  auto const initial{driver.step(tensor2{}, tensor2{}, umat::load_control<T>::strain(), 0, 0)};
   sink.record({unloaded, initial, columns.values()});
 
   for (auto const &s : c.path.steps()) {

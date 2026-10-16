@@ -3,6 +3,7 @@
 
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_base.h"
+#include "numsim-materials/core/tensor_identities.h"
 
 namespace numsim::materials {
 
@@ -62,11 +63,7 @@ public:
   }
 
   void update_tangent(){
-    const auto I{tmech::eye<value_type, Dim, 2>()};
-    const auto IIsym{(tmech::otimesu(I,I) + (tmech::otimesl(I,I)))*0.5};
-    const auto IIvol{tmech::otimes(I, I)/Dim};
-    const auto IIdev{IIsym - IIvol};
-    m_C = 3*m_K*IIvol + 2*m_G*IIdev;
+    m_C = 3*m_K*vol_projector<value_type, Dim>() + 2*m_G*dev_projector<value_type, Dim>();
   }
 
 private:

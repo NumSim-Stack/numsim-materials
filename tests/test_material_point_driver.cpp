@@ -9,22 +9,21 @@
 #include "numsim-materials/solvers/local_newton.h"
 #include "numsim-materials/umat/external_state_source.h"
 #include "numsim-materials/umat/material_point_evaluator.h"
-#include "numsim-materials/report/load_driver.h"
+#include "numsim-materials/umat/material_point_driver.h"
 
 namespace {
 
 namespace nm = numsim::materials;
 namespace u = numsim::materials::umat;
-namespace r = numsim::materials::report;
 
 using policy = nm::material_policy_default;
 using T = policy::value_type;
 using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
 using evaluator = u::material_point_evaluator<policy>;
-using driver = r::load_driver<policy>;
+using driver = u::material_point_driver<policy>;
 using tensor2 = driver::tensor2;
-using control = r::load_control<T>;
+using control = u::load_control<T>;
 
 constexpr T K{166.67};
 constexpr T G{76.92};
@@ -89,7 +88,7 @@ tensor2 axial(T value) {
   return v;
 }
 
-TEST(LoadDriver, StrainControlNeedsNoIteration) {
+TEST(MaterialPointDriver, StrainControlNeedsNoIteration) {
   ctx_type ctx;
   build_elastic(ctx);
   evaluator ev(ctx, config_for("elastic"));
@@ -101,7 +100,7 @@ TEST(LoadDriver, StrainControlNeedsNoIteration) {
   EXPECT_NEAR(res.stress(1, 1), (K - 2 * G / 3) * 1e-3, 1e-12);
 }
 
-TEST(LoadDriver, UniaxialStressOfLinearElasticityConvergesInOneCorrection) {
+TEST(MaterialPointDriver, UniaxialStressOfLinearElasticityConvergesInOneCorrection) {
   ctx_type ctx;
   build_elastic(ctx);
   evaluator ev(ctx, config_for("elastic"));
@@ -115,7 +114,7 @@ TEST(LoadDriver, UniaxialStressOfLinearElasticityConvergesInOneCorrection) {
   EXPECT_NEAR(tmech::norm(tensor2{res.stress - axial(res.stress(0, 0))}), 0, 1e-10);
 }
 
-TEST(LoadDriver, UniaxialStressOfJ2FollowsTheBilinearCurve) {
+TEST(MaterialPointDriver, UniaxialStressOfJ2FollowsTheBilinearCurve) {
   ctx_type ctx;
   build_j2(ctx);
   evaluator ev(ctx, config_for("j2"));
@@ -132,7 +131,7 @@ TEST(LoadDriver, UniaxialStressOfJ2FollowsTheBilinearCurve) {
 }
 
 // Linear hardening is linear once yielded; exponential hardening is not.
-TEST(LoadDriver, J2UniaxialStressConvergesQuadratically) {
+TEST(MaterialPointDriver, J2UniaxialStressConvergesQuadratically) {
   ctx_type ctx;
   build_j2(ctx, true);
   evaluator ev(ctx, config_for("j2"));
@@ -144,7 +143,7 @@ TEST(LoadDriver, J2UniaxialStressConvergesQuadratically) {
     EXPECT_LT(res.residuals[k], 10 * res.residuals[k - 1] * res.residuals[k - 1] / res.residuals[0]) << k;
 }
 
-TEST(LoadDriver, ElasticUnloadingAfterYieldHasSlopeE) {
+TEST(MaterialPointDriver, ElasticUnloadingAfterYieldHasSlopeE) {
   ctx_type ctx;
   build_j2(ctx);
   evaluator ev(ctx, config_for("j2"));
@@ -154,7 +153,7 @@ TEST(LoadDriver, ElasticUnloadingAfterYieldHasSlopeE) {
   EXPECT_NEAR(loaded.stress(0, 0) - unloaded.stress(0, 0), E * 1e-3, 1e-8);
 }
 
-TEST(LoadDriver, ReportsTheTangentErrorAgainstFiniteDifferences) {
+TEST(MaterialPointDriver, ReportsTheTangentErrorAgainstFiniteDifferences) {
   ctx_type ctx;
   build_j2(ctx);
   evaluator ev(ctx, config_for("j2"));
@@ -164,7 +163,7 @@ TEST(LoadDriver, ReportsTheTangentErrorAgainstFiniteDifferences) {
 }
 
 // Shear stress control: gamma_12 prescribed, everything else stress free.
-TEST(LoadDriver, ShearSlotUnderStressControlGivesPureShear) {
+TEST(MaterialPointDriver, ShearSlotUnderStressControlGivesPureShear) {
   ctx_type ctx;
   build_elastic(ctx);
   evaluator ev(ctx, config_for("elastic"));
@@ -178,7 +177,7 @@ TEST(LoadDriver, ShearSlotUnderStressControlGivesPureShear) {
 }
 
 // The check uses the start state stored in the result, not the driver's latest state.
-TEST(LoadDriver, TangentErrorOfAnEarlierStepIsUnaffectedByLaterSteps) {
+TEST(MaterialPointDriver, TangentErrorOfAnEarlierStepIsUnaffectedByLaterSteps) {
   ctx_type ctx;
   build_j2(ctx, true);
   evaluator ev(ctx, config_for("j2"));

@@ -3,7 +3,7 @@
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <tmech/tmech.h>
-#include "numsim-materials/report/load_driver.h"
+#include "numsim-materials/umat/material_point_driver.h"
 #include "numsim-materials/report/property_columns.h"
 #include "numsim-materials/report/report_spec.h"
 #include "numsim-materials/umat/json_model.h"
@@ -17,7 +17,7 @@ using policy = nm::material_policy_default;
 using T = policy::value_type;
 using ctx_type = nm::material_context<policy>;
 using evaluator = nm::umat::material_point_evaluator<policy>;
-using driver = r::load_driver<policy>;
+using driver = nm::umat::material_point_driver<policy>;
 using columns = r::property_columns<policy>;
 using json = nlohmann::json;
 
@@ -47,7 +47,7 @@ struct j2_point {
     d = std::make_unique<driver>(*ev);
     driver::tensor2 eps;
     eps(0, 0) = 5e-3;
-    res = d->step(eps, driver::tensor2{}, r::load_control<T>::uniaxial_stress(), 0, 1);
+    res = d->step(eps, driver::tensor2{}, nm::umat::load_control<T>::uniaxial_stress(), 0, 1);
   }
 };
 

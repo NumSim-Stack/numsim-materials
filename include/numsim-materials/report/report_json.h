@@ -9,12 +9,14 @@
 #include <vector>
 
 #include <nlohmann/json.hpp>
-#include "numsim-materials/report/load_control.h"
+#include "numsim-materials/core/tensor_identities.h"
 #include "numsim-materials/report/load_path.h"
-#include "numsim-materials/report/symmetric_basis.h"
+#include "numsim-materials/umat/load_control.h"
 
 /// Parsing of report documents into value types; nothing here runs a material.
 namespace numsim::materials::report {
+
+using umat::load_control;
 
 template <typename T>
 struct load_case {

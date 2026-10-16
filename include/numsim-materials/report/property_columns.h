@@ -14,7 +14,8 @@
 #include "numsim-materials/core/history_property.h"
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/core/property.h"
-#include "numsim-materials/report/symmetric_basis.h"
+#include "numsim-materials/core/property_value.h"
+#include "numsim-materials/core/tensor_identities.h"
 
 /// Report columns wired to graph properties: "material::property" or "material::property[i,j,...]" (1-based).
 namespace numsim::materials::report {
@@ -43,16 +44,6 @@ public:
   }
 
 private:
-  /// Value of a plain or history property (its new value), or nullptr.
-  template <typename T>
-  static T const *value_of(property_base *p) {
-    if (auto const *typed{dynamic_cast<property<T> const *>(p)})
-      return &typed->get();
-    if (auto const *hist{dynamic_cast<history_property<T, property_traits> const *>(p)})
-      return &hist->new_value();
-    return nullptr;
-  }
-
   void add(material_context<Traits> &ctx, std::string const &name, std::string const &source) {
     auto const sep{source.find("::")};
     auto const open{source.find('[')};
@@ -66,19 +57,19 @@ private:
       throw std::invalid_argument("column '" + name + "': no property '" + material + "::" + prop + "'");
     auto const idx{indices(name, bracketed ? source.substr(open + 1, source.size() - open - 2) : std::string{})};
 
-    if (auto const *s{value_of<value_type>(p)}) {
+    if (auto const *s{property_value<value_type>(p)}) {
       require(name, idx.empty(), "a scalar takes no component");
       push(name, [s] { return *s; });
-    } else if (auto const *t2{value_of<tensor2>(p)}) {
+    } else if (auto const *t2{property_value<tensor2>(p)}) {
       if (idx.empty()) {
-        for (std::size_t a{0}; a < components.size(); ++a)
-          push(name + "_" + std::string{components[a]},
-               [t2, i = component_indices[a].first, j = component_indices[a].second] { return (*t2)(i, j); });
+        for (std::size_t a{0}; a < voigt_components.size(); ++a)
+          push(name + "_" + std::string{voigt_components[a]},
+               [t2, i = voigt_indices[a].first, j = voigt_indices[a].second] { return (*t2)(i, j); });
       } else {
         require(name, idx.size() == 2, "a rank-2 tensor takes two indices");
         push(name, [t2, i = idx[0], j = idx[1]] { return (*t2)(i, j); });
       }
-    } else if (auto const *t4{value_of<tensor4>(p)}) {
+    } else if (auto const *t4{property_value<tensor4>(p)}) {
       require(name, idx.size() == 4, "a rank-4 tensor takes four indices");
       push(name, [t4, idx] { return (*t4)(idx[0], idx[1], idx[2], idx[3]); });
     } else {

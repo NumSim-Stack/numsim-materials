@@ -12,6 +12,7 @@
 
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_context.h"
+#include "numsim-materials/core/property_value.h"
 #include "numsim-materials/materials/props_scalar.h"
 #include "numsim-materials/umat/errors.h"
 #include "numsim-materials/umat/external_state_source.h"
@@ -425,12 +426,8 @@ private:
     if (!prop)
       throw fatal_error("material_point_evaluator: property '" + material +
                         "::" + property + "' not found");
-    if (auto* typed =
-            dynamic_cast<const numsim_core::property<T, property_traits>*>(prop))
-      return &typed->get();
-    if (auto* hist = dynamic_cast<
-            const numsim_core::history_property<T, property_traits>*>(prop))
-      return &hist->new_value();
+    if (auto const* value = property_value<T>(prop))
+      return value;
     throw fatal_error("material_point_evaluator: property '" + material +
                       "::" + property + "' has an unexpected type");
   }
