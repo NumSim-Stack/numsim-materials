@@ -160,6 +160,31 @@ template <typename T>
   return detail::from_integrals(nu, sq, I, Iij);
 }
 
+/// Depolarisation tensor (the rank-2 Eshelby tensor of conductivity) of an ellipsoid with
+/// semi-axes a1, a2, a3 along x1, x2, x3; one axis may be infinite. Trace 1.
+template <typename T>
+[[nodiscard]] tmech::tensor<T, 3, 2> depolarisation(T a1, T a2, T a3) {
+  std::array<T, 3> const a{a1, a2, a3};
+  auto const infinite{detail::infinite_axis(a, "eshelby::depolarisation")};
+  tmech::tensor<T, 3, 2> N;
+  if (infinite) { // elliptic cylinder: N_i = a_j / (a_i + a_j) in the plane
+    std::size_t const i{(*infinite + 1) % 3}, j{(*infinite + 2) % 3};
+    N(i, i) = a[j] / (a[i] + a[j]);
+    N(j, j) = a[i] / (a[i] + a[j]);
+    return N;
+  }
+  std::array<T, 3> const sq{a1 * a1, a2 * a2, a3 * a3};
+  for (std::size_t i{0}; i < 3; ++i) // R_J(x, y, z, z) = R_D(x, y, z)
+    N(i, i) = a1 * a2 * a3 / 3 * boost::math::ellint_rd(sq[(i + 1) % 3], sq[(i + 2) % 3], sq[i]);
+  return N;
+}
+
+/// Circular cylinder along the unit vector `direction`: (I - d (x) d) / 2.
+template <typename T>
+[[nodiscard]] tmech::tensor<T, 3, 2> depolarisation_cylinder(tmech::tensor<T, 3, 1> const &direction) noexcept {
+  return tmech::tensor<T, 3, 2>{(tmech::eye<T, 3, 2>() - tmech::otimes(direction, direction)) / 2};
+}
+
 } // namespace numsim::materials::eshelby
 
 #endif // NUMSIM_MATERIALS_CORE_ESHELBY_H
