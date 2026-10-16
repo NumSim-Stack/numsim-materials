@@ -36,6 +36,7 @@
 #include "numsim-materials/materials/mean_field_tangent.h"
 #include "numsim-materials/materials/short_fibre_composite.h"
 #include "numsim-materials/materials/incremental_linear_elasticity.h"
+#include "numsim-materials/materials/thermal_eigenstrain.h"
 #include "numsim-materials/materials/neo_hooke.h"
 #include "numsim-materials/materials/saint_venant_kirchhoff.h"
 #include "numsim-materials/materials/linear_stress.h"
@@ -118,6 +119,7 @@ void register_default_materials() {
   factory.template register_type<rule_of_mixture<Traits>>("rule_of_mixture");
   factory.template register_type<phase<Traits>>("phase");
   factory.template register_type<incremental_linear_elasticity<Traits>>("incremental_linear_elasticity");
+  factory.template register_type<thermal_eigenstrain<Traits>>("thermal_eigenstrain");
   factory.template register_type<saint_venant_kirchhoff<Traits>>("saint_venant_kirchhoff");
   factory.template register_type<neo_hooke<Traits>>("neo_hooke");
   factory.template register_type<constant_scalar<Traits>>("constant_scalar");

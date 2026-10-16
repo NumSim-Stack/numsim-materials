@@ -37,7 +37,8 @@ public:
         m_K(base::template get_parameter<value_type>("K")),
         m_G(base::template get_parameter<value_type>("G")),
         m_eps_name(base::template get_parameter<std::string>("strain_producer_name")),
-        m_eps(base::template add_input<tensor2>(m_eps_name, base::template get_parameter<std::string>("strain_property"), EdgeKind::Global))
+        m_eps(base::template add_input<tensor2>(m_eps_name, base::template get_parameter<std::string>("strain_property"), EdgeKind::Global)),
+        m_eigenstrain(eigenstrain_input())
   {
     update_tangent();
   }
@@ -56,11 +57,16 @@ public:
     required<value_type>(para, "G");
     required<std::string>(para, "strain_producer_name");
     optional<std::string>(para, "strain_property", std::string{"strain"});
+    optional<std::string>(para, "eigenstrain_source", std::string{});
     return para;
   }
 
+  /// sigma = C : (eps - eps_eig) with the optional eigenstrain (thermal, chemical).
   void update_stress(){
-    m_sig = tmech::dcontract(m_C, m_eps.get());
+    if (m_eigenstrain)
+      m_sig = tmech::dcontract(m_C, tensor2{m_eps.get() - m_eigenstrain->get()});
+    else
+      m_sig = tmech::dcontract(m_C, m_eps.get());
   }
 
   void update_tangent(){
@@ -68,6 +74,11 @@ public:
   }
 
 private:
+  const input_property<tensor2, property_traits>* eigenstrain_input() {
+    auto const &source{base::template get_parameter<std::string>("eigenstrain_source")};
+    return source.empty() ? nullptr : &base::template add_input<tensor2>(source, "eigenstrain", EdgeKind::Global);
+  }
+
   /// Produced properties
   tensor2 &m_sig;
   tensor4 &m_C;
@@ -79,6 +90,7 @@ private:
 
   /// Consumed properties
   const input_property<tensor2, property_traits> &m_eps;
+  const input_property<tensor2, property_traits>* m_eigenstrain; ///< null without an eigenstrain_source
 };
 
 }
