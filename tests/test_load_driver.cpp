@@ -24,6 +24,7 @@ using param_type = policy::ParameterHandler;
 using evaluator = u::material_point_evaluator<policy>;
 using driver = r::load_driver<policy>;
 using tensor2 = driver::tensor2;
+using control = r::load_control<T>;
 
 constexpr T K{166.67};
 constexpr T G{76.92};
@@ -93,7 +94,7 @@ TEST(LoadDriver, StrainControlNeedsNoIteration) {
   build_elastic(ctx);
   evaluator ev(ctx, config_for("elastic"));
   driver d(ev);
-  auto const res{d.step(axial(1e-3), tensor2{}, r::control::strain, 0, 1)};
+  auto const res{d.step(axial(1e-3), tensor2{}, control::strain(), 0, 1)};
   EXPECT_TRUE(res.converged);
   EXPECT_EQ(res.residuals.size(), 1u);
   EXPECT_NEAR(res.stress(0, 0), (K + 4 * G / 3) * 1e-3, 1e-12);
@@ -105,7 +106,7 @@ TEST(LoadDriver, UniaxialStressOfLinearElasticityConvergesInOneCorrection) {
   build_elastic(ctx);
   evaluator ev(ctx, config_for("elastic"));
   driver d(ev);
-  auto const res{d.step(axial(1e-3), tensor2{}, r::control::uniaxial_stress, 0, 1)};
+  auto const res{d.step(axial(1e-3), tensor2{}, control::uniaxial_stress(), 0, 1)};
   ASSERT_TRUE(res.converged);
   EXPECT_EQ(res.residuals.size(), 2u);
   EXPECT_NEAR(res.stress(0, 0), E * 1e-3, 1e-10);
@@ -121,7 +122,7 @@ TEST(LoadDriver, UniaxialStressOfJ2FollowsTheBilinearCurve) {
   driver d(ev);
   driver::step_result res;
   for (int n{1}; n <= 20; ++n) {
-    res = d.step(axial(n * 5e-4), tensor2{}, r::control::uniaxial_stress, 0, 1);
+    res = d.step(axial(n * 5e-4), tensor2{}, control::uniaxial_stress(), 0, 1);
     ASSERT_TRUE(res.converged) << n;
   }
   T const eps{20 * 5e-4};
@@ -136,7 +137,7 @@ TEST(LoadDriver, J2UniaxialStressConvergesQuadratically) {
   build_j2(ctx, true);
   evaluator ev(ctx, config_for("j2"));
   driver d(ev);
-  auto const res{d.step(axial(5e-3), tensor2{}, r::control::uniaxial_stress, 0, 1)};
+  auto const res{d.step(axial(5e-3), tensor2{}, control::uniaxial_stress(), 0, 1)};
   ASSERT_TRUE(res.converged);
   ASSERT_GE(res.residuals.size(), 3u);
   for (std::size_t k{2}; k + 1 < res.residuals.size(); ++k)
@@ -148,8 +149,8 @@ TEST(LoadDriver, ElasticUnloadingAfterYieldHasSlopeE) {
   build_j2(ctx);
   evaluator ev(ctx, config_for("j2"));
   driver d(ev);
-  auto const loaded{d.step(axial(5e-3), tensor2{}, r::control::uniaxial_stress, 0, 1)};
-  auto const unloaded{d.step(axial(4e-3), tensor2{}, r::control::uniaxial_stress, 1, 1)};
+  auto const loaded{d.step(axial(5e-3), tensor2{}, control::uniaxial_stress(), 0, 1)};
+  auto const unloaded{d.step(axial(4e-3), tensor2{}, control::uniaxial_stress(), 1, 1)};
   EXPECT_NEAR(loaded.stress(0, 0) - unloaded.stress(0, 0), E * 1e-3, 1e-8);
 }
 
@@ -158,7 +159,7 @@ TEST(LoadDriver, ReportsTheTangentErrorAgainstFiniteDifferences) {
   build_j2(ctx);
   evaluator ev(ctx, config_for("j2"));
   driver d(ev);
-  auto const res{d.step(axial(5e-3), tensor2{}, r::control::uniaxial_stress, 0, 1)};
+  auto const res{d.step(axial(5e-3), tensor2{}, control::uniaxial_stress(), 0, 1)};
   EXPECT_LT(d.tangent_error(res), 1e-5);
 }
 
@@ -170,10 +171,23 @@ TEST(LoadDriver, ShearSlotUnderStressControlGivesPureShear) {
   driver d(ev);
   tensor2 eps;
   eps(0, 1) = eps(1, 0) = 1e-3;
-  auto const res{d.step(eps, tensor2{}, r::control_mask{true, true, true, false, true, true}, 0, 1)};
+  auto const res{d.step(eps, tensor2{}, control::mixed({"11", "22", "33", "13", "23"}), 0, 1)};
   ASSERT_TRUE(res.converged);
   EXPECT_NEAR(res.stress(0, 1), 2 * G * 1e-3, 1e-10);
   EXPECT_NEAR(tmech::norm(tensor2{res.strain - eps}), 0, 1e-14);
+}
+
+// The check uses the start state stored in the result, not the driver's latest state.
+TEST(LoadDriver, TangentErrorOfAnEarlierStepIsUnaffectedByLaterSteps) {
+  ctx_type ctx;
+  build_j2(ctx, true);
+  evaluator ev(ctx, config_for("j2"));
+  driver d(ev);
+  auto const first{d.step(axial(4e-3), tensor2{}, control::uniaxial_stress(), 0, 1)};
+  auto const before{d.tangent_error(first)};
+  (void)d.step(axial(8e-3), tensor2{}, control::uniaxial_stress(), 1, 1);
+  EXPECT_DOUBLE_EQ(d.tangent_error(first), before);
+  EXPECT_LT(before, 1e-5);
 }
 
 } // namespace

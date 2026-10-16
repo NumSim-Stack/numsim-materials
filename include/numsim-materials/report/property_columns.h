@@ -14,6 +14,7 @@
 #include "numsim-materials/core/history_property.h"
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/core/property.h"
+#include "numsim-materials/report/symmetric_basis.h"
 
 /// Report columns wired to graph properties: "material::property" or "material::property[i,j,...]" (1-based).
 namespace numsim::materials::report {
@@ -70,9 +71,9 @@ private:
       push(name, [s] { return *s; });
     } else if (auto const *t2{value_of<tensor2>(p)}) {
       if (idx.empty()) {
-        constexpr std::array<std::pair<std::size_t, std::size_t>, 6> ij{{{0, 0}, {1, 1}, {2, 2}, {0, 1}, {0, 2}, {1, 2}}};
-        for (auto const &[i, j] : ij)
-          push(name + "_" + std::to_string(i + 1) + std::to_string(j + 1), [t2, i, j] { return (*t2)(i, j); });
+        for (std::size_t a{0}; a < components.size(); ++a)
+          push(name + "_" + std::string{components[a]},
+               [t2, i = component_indices[a].first, j = component_indices[a].second] { return (*t2)(i, j); });
       } else {
         require(name, idx.size() == 2, "a rank-2 tensor takes two indices");
         push(name, [t2, i = idx[0], j = idx[1]] { return (*t2)(i, j); });

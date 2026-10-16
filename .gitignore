@@ -25,3 +25,4 @@ third_party/qcustomplot/qcp.tar.gz
 *.png
 *.user*
 !docs/materials/*/figures/*.png
+__pycache__/

@@ -43,6 +43,7 @@ add_numsim_test(test_weighted_sum test_weighted_sum.cpp)
 add_numsim_test(test_finite_strain test_finite_strain.cpp)
 add_numsim_test(test_load_driver test_load_driver.cpp)
 add_numsim_test(test_report test_report.cpp)
+add_numsim_test(test_report_case test_report_case.cpp)
 
 # Data dumper for plotting (not a test — standalone executable)
 add_executable(plot_data plot_data.cpp)

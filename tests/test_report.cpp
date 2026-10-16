@@ -47,7 +47,7 @@ struct j2_point {
     d = std::make_unique<driver>(*ev);
     driver::tensor2 eps;
     eps(0, 0) = 5e-3;
-    res = d->step(eps, driver::tensor2{}, r::control::uniaxial_stress, 0, 1);
+    res = d->step(eps, driver::tensor2{}, r::load_control<T>::uniaxial_stress(), 0, 1);
   }
 };
 
