@@ -1,0 +1,21 @@
+{
+  "material": "j2_plasticity",
+  "model": {
+    "materials": [
+      {"type": "external_strain_source", "name": "strain"},
+      {"type": "local_newton", "name": "solver"},
+      {"type": "linear_isotropic_hardening", "name": "hardening", "source": "j2", "K": 1000.0},
+      {"type": "j2_plasticity", "name": "j2", "strain_source": "strain", "solver_source": "solver",
+       "hardening_source": "hardening", "K": 166666.67, "G": 76923.08, "sigma_0": 250.0}
+    ]
+  },
+  "strain_source": "strain",
+  "stress_source": "j2",
+  "cases": [
+    {"name": "uniaxial_strain", "control": "strain", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 0.01, -0.01, 0.01], "steps": 50},
+    {"name": "uniaxial_stress", "control": "uniaxial_stress", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 0.01, -0.01, 0.01], "steps": 50},
+    {"name": "simple_shear", "control": "strain", "direction": [0, 0, 0, 1, 0, 0], "path": [0, 0.02, -0.02, 0.02], "steps": 50},
+    {"name": "equibiaxial_strain", "control": "strain", "direction": [1, 1, 0, 0, 0, 0], "path": [0, 0.01, -0.01], "steps": 50},
+    {"name": "hydrostatic_strain", "control": "strain", "direction": [1, 1, 1, 0, 0, 0], "path": [0, 0.005, -0.005], "steps": 50}
+  ]
+}
