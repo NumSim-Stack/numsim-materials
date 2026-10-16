@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <cmath>
 #include <string>
 #include <vector>
@@ -105,9 +106,12 @@ TEST(ReportJson, ParsesThePointAndTheColumns) {
   EXPECT_EQ(*cfg.tangent_source, "t");
   auto const cols{r::parse_columns(doc)};
   ASSERT_EQ(cols.size(), 3u);
-  EXPECT_EQ(cols[0], (std::pair<std::string, std::string>{"strain", "s::strain"}));
-  EXPECT_EQ(cols[1], (std::pair<std::string, std::string>{"stress", "m::stress"}));
-  EXPECT_EQ(cols[2], (std::pair<std::string, std::string>{"kappa", "m::kappa"}));
+  EXPECT_EQ(cols[0].name, "strain");
+  EXPECT_EQ(cols[0].source, "s::strain");
+  EXPECT_FALSE(cols[0].full);
+  EXPECT_EQ(cols[1].source, "m::stress");
+  EXPECT_EQ(cols[2].name, "kappa");
+  EXPECT_EQ(cols[2].source, "m::kappa");
 }
 
 TEST(ReportJson, ParsesRefinementStudies) {
@@ -158,6 +162,48 @@ json elastic_report() {
     "record": {"sig": "elastic::stress[1,1]"}})");
 }
 
+json neo_hooke_report() {
+  return json::parse(R"({
+    "model": {"materials": [
+      {"type": "external_deformation_gradient_source", "name": "F"},
+      {"type": "neo_hooke", "name": "model", "deformation_gradient_source": "F", "K": 100.0, "G": 50.0}]},
+    "point": {"deformation_gradient_source": "F", "stress_source": "model"}})");
+}
+
+TEST(ReportJson, FiniteStrainPointAndNineComponentTensors) {
+  auto const doc = neo_hooke_report();
+  EXPECT_TRUE(r::is_finite_strain(doc));
+  EXPECT_FALSE(r::is_finite_strain(elastic_report()));
+  auto const cfg{r::parse_point<policy>(doc)};
+  EXPECT_EQ(cfg.deformation_gradient_source, "F");
+  EXPECT_TRUE(cfg.strain_source.empty());
+  auto const t{r::parse_tensor<T>(json::parse("[1, 2, 3, 4, 5, 6, 7, 8, 9]"))};
+  EXPECT_EQ(t(0, 1), 4);
+  EXPECT_EQ(t(1, 0), 7);
+  EXPECT_EQ(t(2, 1), 9);
+  EXPECT_EQ(r::parse_tensor<T>(json::parse("[1, 2, 3, 4, 5, 6]"))(1, 0), 4);
+  EXPECT_THROW(r::parse_tensor<T>(json::parse("[1, 2, 3]")), std::invalid_argument);
+}
+
+TEST(CaseRunner, FiniteStrainRecordsFPCauchyAndJ) {
+  auto const doc = neo_hooke_report();
+  auto const c{r::parse_case<T>(json::parse(R"({"name": "u", "control": "uniaxial_stress",
+    "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], "steps": 2, "scale": 0.1})"))};
+  recording_sink sink;
+  ASSERT_TRUE(r::run_case<policy>(doc, c, sink));
+  auto const col = [&](std::string const &n) {
+    auto const it{std::find(sink.names.begin(), sink.names.end(), n)};
+    EXPECT_NE(it, sink.names.end()) << n;
+    return sink.records.back().columns[static_cast<std::size_t>(it - sink.names.begin())];
+  };
+  EXPECT_DOUBLE_EQ(col("F_11"), 1.1);
+  EXPECT_NEAR(col("P_22"), 0, 1e-8);
+  EXPECT_GT(col("stress_11"), 0); // Cauchy
+  EXPECT_NEAR(col("stress_11"), col("P_11") * col("F_11") / col("J"), 1e-10);
+  EXPECT_LT(col("J"), 1.1);
+  EXPECT_EQ(sink.names.size(), 9u + 9u + 6u + 1u);
+}
+
 TEST(CaseRunner, RecordsTheUnloadedStateAndEveryStep) {
   auto const doc = elastic_report();
   auto const c{r::parse_case<T>(json::parse(R"({"name": "u", "control": "uniaxial_stress",
@@ -170,7 +216,8 @@ TEST(CaseRunner, RecordsTheUnloadedStateAndEveryStep) {
   EXPECT_EQ(sink.names.back(), "sig");
   auto const &last{sink.records.back()};
   EXPECT_TRUE(last.result.converged);
-  EXPECT_DOUBLE_EQ(last.columns.back(), last.result.stress(0, 0));
+  auto const stress_11{static_cast<std::size_t>(std::find(sink.names.begin(), sink.names.end(), "stress_11") - sink.names.begin())};
+  EXPECT_DOUBLE_EQ(last.columns.back(), last.columns[stress_11]); // "sig" is elastic::stress[1,1]
   EXPECT_LT(last.tangent_error, 1e-6);
 }
 
@@ -203,9 +250,12 @@ TEST(CsvSink, WritesHeaderRowsAndResiduals) {
   std::ostringstream csv, its;
   r::csv_sink<policy> sink{csv, its};
   sink.begin({"strain_11", "kappa"});
-  r::step_record<policy> rec{{1, 0, 1, 0.5}, {}, {1e-3, 2.0}, 1e-9};
-  rec.result.converged = true;
+  r::step_record<policy> rec;
+  rec.step = {1, 0, 1, 0.5};
   rec.result.residuals = {1.0, 1e-12};
+  rec.result.converged = true;
+  rec.columns = {1e-3, 2.0};
+  rec.tangent_error = 1e-9;
   sink.record(rec);
   EXPECT_EQ(csv.str(), "step,time,load,iterations,converged,tangent_error,strain_11,kappa\n1,1,0.5,1,1,1.0000000000000001e-09,0.001,2\n");
   EXPECT_EQ(its.str(), "step,iteration,residual\n1,0,1\n1,1,1e-12\n");

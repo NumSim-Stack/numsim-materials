@@ -76,6 +76,39 @@ std::array<tmech::tensor<T, 3, 2>, 6> const &symmetric_basis() {
   return basis;
 }
 
+/// All nine components: the symmetric six first, then 21, 31, 32.
+inline constexpr std::array<std::string_view, 9> full_components{"11", "22", "33", "12", "13", "23", "21", "31", "32"};
+inline constexpr std::array<std::pair<std::size_t, std::size_t>, 9> full_indices{
+    {{0, 0}, {1, 1}, {2, 2}, {0, 1}, {0, 2}, {1, 2}, {1, 0}, {2, 0}, {2, 1}}};
+
+inline std::size_t full_component_index(std::string_view name) {
+  for (std::size_t a{0}; a < full_components.size(); ++a)
+    if (full_components[a] == name)
+      return a;
+  throw std::invalid_argument("unknown component '" + std::string{name} + "' (11, 22, 33, 12, 13, 23, 21, 31, 32)");
+}
+
+/// Basis e_i (x) e_j of all 3D rank-2 tensors, in full_components order.
+template <typename T>
+std::array<tmech::tensor<T, 3, 2>, 9> const &full_basis() {
+  static auto const basis = [] {
+    std::array<tmech::tensor<T, 3, 2>, 9> b;
+    for (std::size_t a{0}; a < 9; ++a)
+      b[a](full_indices[a].first, full_indices[a].second) = T{1};
+    return b;
+  }();
+  return basis;
+}
+
+/// Tensor from its nine components in full_components order.
+template <typename T>
+tmech::tensor<T, 3, 2> general_tensor(std::span<T const, 9> v) {
+  tmech::tensor<T, 3, 2> t;
+  for (std::size_t a{0}; a < 9; ++a)
+    t(full_indices[a].first, full_indices[a].second) = v[a];
+  return t;
+}
+
 /// Symmetric tensor from its components in Abaqus order (tensor, not engineering, shears).
 template <typename T>
 tmech::tensor<T, 3, 2> symmetric_tensor(std::span<T const, 6> v) {

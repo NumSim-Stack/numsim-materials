@@ -29,7 +29,13 @@ public:
 
   property_columns(material_context<Traits> &ctx, std::vector<std::pair<std::string, std::string>> const &wiring) {
     for (auto const &[name, source] : wiring)
-      add(ctx, name, source);
+      add(ctx, name, source, false);
+  }
+
+  template <typename Spec>
+  property_columns(material_context<Traits> &ctx, std::vector<Spec> const &wiring) {
+    for (auto const &c : wiring)
+      add(ctx, c.name, c.source, c.full);
   }
 
   [[nodiscard]] std::vector<std::string> const &names() const noexcept { return m_names; }
@@ -44,7 +50,8 @@ public:
   }
 
 private:
-  void add(material_context<Traits> &ctx, std::string const &name, std::string const &source) {
+  /// `full`: a rank-2 tensor without component gives nine columns instead of the symmetric six.
+  void add(material_context<Traits> &ctx, std::string const &name, std::string const &source, bool full) {
     auto const sep{source.find("::")};
     auto const open{source.find('[')};
     bool const bracketed{open != std::string::npos};
@@ -62,9 +69,9 @@ private:
       push(name, [s] { return *s; });
     } else if (auto const *t2{property_value<tensor2>(p)}) {
       if (idx.empty()) {
-        for (std::size_t a{0}; a < voigt_components.size(); ++a)
-          push(name + "_" + std::string{voigt_components[a]},
-               [t2, i = voigt_indices[a].first, j = voigt_indices[a].second] { return (*t2)(i, j); });
+        for (std::size_t a{0}; a < (full ? full_components.size() : voigt_components.size()); ++a)
+          push(name + "_" + std::string{full_components[a]},
+               [t2, i = full_indices[a].first, j = full_indices[a].second] { return (*t2)(i, j); });
       } else {
         require(name, idx.size() == 2, "a rank-2 tensor takes two indices");
         push(name, [t2, i = idx[0], j = idx[1]] { return (*t2)(i, j); });
