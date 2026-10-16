@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <cmath>
 #include <string>
 #include <vector>
 #include <nlohmann/json.hpp>
@@ -91,6 +92,8 @@ TEST(ReportJson, ParsesALoadCase) {
   tensor2 const free{tmech::dcontract(c.control.stress_projector(), tmech::eye<T, 3, 2>())};
   EXPECT_DOUBLE_EQ(free(1, 1), 1);
   EXPECT_DOUBLE_EQ(free(0, 0), 0);
+  EXPECT_EQ(c.tangent_every, 1);
+  EXPECT_EQ(r::parse_case<T>(json::parse(R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], "tangent_every": 0})")).tangent_every, 0);
   EXPECT_THROW(r::parse_case<T>(json::parse(R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0]})")), std::exception);
   EXPECT_THROW(r::parse_case<T>(json::parse(R"({"name": "u", "control": "x", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1]})")),
                std::invalid_argument);
@@ -126,6 +129,17 @@ TEST(CaseRunner, RecordsTheUnloadedStateAndEveryStep) {
   EXPECT_TRUE(last.result.converged);
   EXPECT_DOUBLE_EQ(last.columns.back(), last.result.stress(0, 0));
   EXPECT_LT(last.tangent_error, 1e-6);
+}
+
+TEST(CaseRunner, ChecksTheTangentOnlyEveryNthStep) {
+  auto const doc = elastic_report();
+  auto const c{r::parse_case<T>(json::parse(R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1],
+    "steps": 4, "scale": 1e-3, "tangent_every": 2})"))};
+  recording_sink sink;
+  ASSERT_TRUE(r::run_case<policy>(doc, c, sink));
+  ASSERT_EQ(sink.records.size(), 5u);
+  for (std::size_t i{1}; i <= 4; ++i)
+    EXPECT_EQ(std::isfinite(sink.records[i].tangent_error), i % 2 == 0) << i;
 }
 
 TEST(CaseRunner, StopsAtAStepThatDoesNotConverge) {

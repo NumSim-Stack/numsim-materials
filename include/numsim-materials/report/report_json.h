@@ -26,6 +26,7 @@ struct load_case {
   tmech::tensor<T, 3, 2> direction; ///< strain per unit load
   tmech::tensor<T, 3, 2> stress;    ///< stress target per unit load
   load_path<T> path;
+  int tangent_every{1};             ///< finite-difference tangent check every n-th step; 0 = never
 };
 
 template <typename T>
@@ -55,7 +56,8 @@ template <typename T>
 load_case<T> parse_case(nlohmann::json const &c) {
   return {c.at("name").get<std::string>(), parse_control<T>(c), parse_symmetric<T>(c.at("direction")),
           c.contains("stress") ? parse_symmetric<T>(c["stress"]) : tmech::tensor<T, 3, 2>{},
-          load_path<T>{c.at("path").get<std::vector<T>>(), c.value("steps", 50), c.value("scale", T{1}), c.value("dt", T{1})}};
+          load_path<T>{c.at("path").get<std::vector<T>>(), c.value("steps", 50), c.value("scale", T{1}), c.value("dt", T{1})},
+          c.value("tangent_every", 1)};
 }
 
 /// "point": the evaluator configuration (strain_source, stress_source, optional tangent_source, time_source).

@@ -33,6 +33,11 @@ class SectionTest(unittest.TestCase):
         self.assertEqual(out.count("<td>c</td>"), 1)
         self.assertIn("FAIL (b)", out)
 
+    def test_check_plots_follow_the_table(self):
+        out = h.check_section([CheckResult("c", "a", 0.0, 1.0)], [("c", b"\x89PNG")])
+        self.assertLess(out.index("<table>"), out.index("<img"))
+        self.assertIn("<h3>c</h3>", out)
+
     def test_index_links_every_report(self):
         page = h.index_page([h.ReportSummary("a", 3, 3, True), h.ReportSummary("b", 1, 2, False)])
         self.assertIn('href="a.html"', page)

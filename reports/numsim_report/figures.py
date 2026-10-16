@@ -101,3 +101,44 @@ def render_figure(expr: Expressions, figure: dict) -> bytes:
 
 def render_figures(expr: Expressions) -> list[bytes]:
     return [render_figure(expr, figure) for figure in expr.spec.get("figures", [])]
+
+
+def render_check_figure(expr: Expressions, check: dict) -> bytes:
+    """Value and expected over x (default: step) per case, and the error of the check on a log scale."""
+    plot = check["plot"] if isinstance(check["plot"], dict) else {}
+    x_expr = plot.get("x", "step")
+    relative = check.get("relative", False)
+    fig, (left, right) = plt.subplots(1, 2, figsize=(10, 3.6))
+    try:
+        for n, case in enumerate(expr.case_names(check)):
+            x = np.broadcast_to(np.asarray(expr(x_expr, case), float), expr.cases[case].columns["step"].shape)
+            value = np.broadcast_to(np.asarray(expr(check["value"], case), float), x.shape)
+            expected = np.broadcast_to(np.asarray(expr(check.get("expected", 0), case), float), x.shape)
+            prefix = f"{case}: " if len(expr.case_names(check)) > 1 else ""
+            left.plot(x[1:], value[1:], label=prefix + "value")
+            left.plot(x[1:], expected[1:], "k--", lw=1, label="expected" if n == 0 else None)
+            error = np.abs(value - expected)[1:]
+            if relative:
+                error = error / max(float(np.max(np.abs(expected[1:]), initial=0.0)), 1e-300)
+            right.semilogy(x[1:], np.maximum(error, 1e-18), label=case)
+        left.set(xlabel=plot.get("xlabel", pretty_label(x_expr)), ylabel=plot.get("ylabel", ""), title=check["name"])
+        left.ticklabel_format(style="sci", scilimits=(-2, 4), useMathText=True)
+        right.axhline(float(check["tolerance"]) or 1e-18, color="#b00020", lw=1, ls=":", label="tolerance")
+        right.set(xlabel=left.get_xlabel(), ylabel="|value − expected| / max|expected|" if relative else "|value − expected|",
+                  title="relative error" if relative else "error")
+        for ax in (left, right):
+            ax.grid(alpha=0.3)
+            if ax.get_legend_handles_labels()[0]:
+                ax.legend(fontsize=7)
+        fig.tight_layout()
+        png = io.BytesIO()
+        fig.savefig(png, format="png", dpi=100)
+        return png.getvalue()
+    finally:
+        plt.close(fig)
+
+
+def render_check_figures(expr: Expressions) -> list[tuple[str, bytes]]:
+    """(check name, PNG) for every check with "plot" that applies to at least one case."""
+    return [(c["name"], render_check_figure(expr, c)) for c in expr.spec.get("checks", [])
+            if c.get("plot") and expr.case_names(c)]

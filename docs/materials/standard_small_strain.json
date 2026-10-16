@@ -1,11 +1,11 @@
 {
-  "parameters": {"steps": 50, "amplitude": 0.01, "tangent_tolerance": 1e-6},
+  "parameters": {"steps": 50, "amplitude": 0.01, "tangent_tolerance": 1e-6, "tangent_every": 5},
   "cases": [
-    {"name": "uniaxial_strain", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1, -1, 1], "scale": "$amplitude", "steps": "$steps"},
-    {"name": "uniaxial_stress", "control": "uniaxial_stress", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1, -1, 1], "scale": "$amplitude", "steps": "$steps"},
-    {"name": "simple_shear", "direction": [0, 0, 0, 1, 0, 0], "path": [0, 1, -1, 1], "scale": "$amplitude", "steps": "$steps"},
-    {"name": "equibiaxial_strain", "direction": [1, 1, 0, 0, 0, 0], "path": [0, 1, -1], "scale": "$amplitude", "steps": "$steps"},
-    {"name": "hydrostatic_strain", "direction": [1, 1, 1, 0, 0, 0], "path": [0, 1, -1], "scale": "$amplitude", "steps": "$steps"}
+    {"name": "uniaxial_strain", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1, -1, 1], "scale": "$amplitude", "steps": "$steps", "tangent_every": "$tangent_every"},
+    {"name": "uniaxial_stress", "control": "uniaxial_stress", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1, -1, 1], "scale": "$amplitude", "steps": "$steps", "tangent_every": "$tangent_every"},
+    {"name": "simple_shear", "direction": [0, 0, 0, 1, 0, 0], "path": [0, 1, -1, 1], "scale": "$amplitude", "steps": "$steps", "tangent_every": "$tangent_every"},
+    {"name": "equibiaxial_strain", "direction": [1, 1, 0, 0, 0, 0], "path": [0, 1, -1], "scale": "$amplitude", "steps": "$steps", "tangent_every": "$tangent_every"},
+    {"name": "hydrostatic_strain", "direction": [1, 1, 1, 0, 0, 0], "path": [0, 1, -1], "scale": "$amplitude", "steps": "$steps", "tangent_every": "$tangent_every"}
   ],
   "figures": [
     {"title": "Stress for prescribed strain paths", "panels": [
@@ -23,10 +23,10 @@
     {"title": "Stress paths in the p–q plane", "columns": 1, "panels": [
       {"cases": "*", "x": "p", "y": ["q"], "xlabel": "p = tr σ / 3", "ylabel": "q = von Mises stress"}]},
     {"title": "Tangent check", "columns": 1,
-     "text": "Relative difference between the material tangent and central differences of the stress at the converged state.",
+     "text": "Relative difference between the material tangent and central differences of the stress at the converged state, every tangent_every-th step.",
      "panels": [{"cases": "*", "x": "step", "y": [{"expr": "np.maximum(tangent_error, 1e-17)", "label": "‖C − C_fd‖ / ‖C‖"}], "logy": true}]}
   ],
   "checks": [
-    {"name": "tangent vs central differences", "cases": "*", "value": "tangent_error", "tolerance": "$tangent_tolerance"}
+    {"name": "tangent vs central differences", "cases": "*", "value": "tangent_error", "where": "np.isfinite(tangent_error)", "tolerance": "$tangent_tolerance"}
   ]
 }

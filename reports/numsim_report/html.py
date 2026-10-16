@@ -106,7 +106,7 @@ def load_case_section(run: RunOutput) -> str:
         ["case", "control", "steps", "iterations (max / mean)", "max tangent error", "converged"], rows, [2, 3, 4])
 
 
-def check_section(checks: list[CheckResult]) -> str:
+def check_section(checks: list[CheckResult], plots: list[tuple[str, bytes]] = ()) -> str:
     if not checks:
         return ""
     rows = []
@@ -116,7 +116,10 @@ def check_section(checks: list[CheckResult]) -> str:
         failed = [c.case for c in group if not c.passed]
         rows.append([name, len(group), f"{worst.error:.1e} ({worst.case})", f"{worst.tolerance:.0e}",
                      verdict(not failed, None if not failed else f"FAIL ({', '.join(failed)})")])
-    return "<h2>Checks</h2>" + table(["check", "cases", "max error (case)", "tolerance", "result"], rows, [1, 2, 3])
+    out = "<h2>Checks</h2>" + table(["check", "cases", "max error (case)", "tolerance", "result"], rows, [1, 2, 3])
+    for name, png in plots:
+        out += f'<h3>{esc(name)}</h3><figure><img alt="{esc(name)}" src="{data_uri(png)}"></figure>'
+    return out
 
 
 def figure_section(spec: dict, figures: list[bytes]) -> str:
@@ -140,12 +143,12 @@ def revision(folder: pathlib.Path) -> str:
 
 
 def report_page(run: RunOutput, expr: Expressions, checks: list[CheckResult], figures: list[bytes],
-                folder: pathlib.Path) -> str:
+                folder: pathlib.Path, check_plots: list[tuple[str, bytes]] = ()) -> str:
     passed = sum(c.passed for c in checks)
     meta = (f"{passed}/{len(checks)} checks passed · {'all steps converged' if run.converged else 'a case did not converge'}"
             f" · {esc(revision(folder))} · {datetime.date.today().isoformat()}")
     body = (f'<div class="meta">{meta}</div>' + parameter_section(run, expr) + load_case_section(run)
-            + check_section(checks) + figure_section(run.spec, figures) + graph_section(run))
+            + check_section(checks, check_plots) + figure_section(run.spec, figures) + graph_section(run))
     return page(run.spec.get("title", folder.name), body)
 
 

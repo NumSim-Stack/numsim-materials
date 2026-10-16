@@ -10,13 +10,14 @@
     {"type": "j2_plasticity", "name": "j2", "strain_source": "strain", "solver_source": "solver",
      "hardening_source": "hardening", "K": "$K", "G": "$G", "sigma_0": "$sigma_0"}]},
   "point": {"strain_source": "strain", "stress_source": "j2"},
-  "record": {"kappa": "j2::equivalent_plastic_strain", "eps_p": "j2::plastic_strain", "R": "hardening::hardening_stress"},
+  "record": {"kappa": "j2::equivalent_plastic_strain", "eps_p": "j2::plastic_strain", "R": "hardening::hardening_stress",
+             "return_map_iterations": "solver::iterations"},
   "cases": [
     {"name": "uniaxial_stress_monotonic", "control": "uniaxial_stress", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], "scale": "$amplitude", "steps": "$steps"}
   ],
   "checks": [
     {"name": "bilinear σ11(ε11)", "case": "uniaxial_stress_monotonic", "value": "stress_11",
-     "expected": "np.where(strain_11 <= sigma_0 / E, E * strain_11, (strain_11 + sigma_0 / H) / (1 / E + 1 / H))", "tolerance": 1e-10, "relative": true},
+     "expected": "np.where(strain_11 <= sigma_0 / E, E * strain_11, (strain_11 + sigma_0 / H) / (1 / E + 1 / H))", "tolerance": 1e-10, "relative": true, "plot": {"x": "strain_11"}},
     {"name": "on or inside the yield surface", "cases": "*", "value": "np.maximum(q - sigma_0 - R, 0)", "tolerance": 1e-8},
     {"name": "plastic incompressibility", "cases": "*", "value": "eps_p_11 + eps_p_22 + eps_p_33", "tolerance": 1e-15},
     {"name": "κ never decreases", "cases": "*", "value": "np.minimum(np.diff(kappa, prepend=0), 0)", "tolerance": 0},
@@ -24,9 +25,13 @@
     {"name": "hydrostatic loading stays elastic", "case": "hydrostatic_strain", "value": "kappa", "tolerance": 0}
   ],
   "figures": [
-    {"title": "Against the closed form", "columns": 1, "panels": [
-      {"title": "monotonic uniaxial stress", "case": "uniaxial_stress_monotonic", "x": "strain_11", "y": ["stress_11"],
-       "reference": [{"y": "np.where(strain_11 <= sigma_0 / E, E * strain_11, (strain_11 + sigma_0 / H) / (1 / E + 1 / H))", "label": "bilinear"}]}]},
+    {"title": "Return map", "columns": 2,
+     "text": "Iterations of the material's own Newton (local_newton) per step; the property keeps its last value through elastic steps, so it is shown only where κ grows.",
+     "panels": [
+      {"title": "return-map iterations, uniaxial stress", "case": "uniaxial_stress", "x": "step",
+       "y": [{"expr": "np.where(np.diff(kappa, prepend=0) > 0, return_map_iterations, 0)", "label": "iterations"}]},
+      {"title": "return-map iterations, simple shear", "case": "simple_shear", "x": "step",
+       "y": [{"expr": "np.where(np.diff(kappa, prepend=0) > 0, return_map_iterations, 0)", "label": "iterations"}]}]},
     {"title": "History variables", "panels": [
       {"title": "equivalent plastic strain", "cases": ["uniaxial_stress", "simple_shear"], "x": "step", "y": ["kappa"]},
       {"title": "plastic strain, uniaxial stress", "case": "uniaxial_stress", "x": "strain_11", "y": ["eps_p_11", "eps_p_22", "eps_p_33"]}]}

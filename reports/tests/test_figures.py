@@ -37,6 +37,16 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(ax.get_ylabel(), "σ₁₁")
         figures.plt.close(fig)
 
+    def test_check_figure_shows_value_expected_and_error(self):
+        spec = {"cases": [{"name": "a"}], "parameters": {"E": 200.0},
+                "checks": [{"name": "hooke", "case": "a", "value": "stress_11", "expected": "E * strain_11",
+                            "tolerance": 1e-9, "relative": True, "plot": {"x": "strain_11"}}]}
+        expr = Expressions(spec, {"a": case("a")})
+        plots = figures.render_check_figures(expr)
+        self.assertEqual([name for name, _ in plots], ["hooke"])
+        self.assertTrue(plots[0][1].startswith(b"\x89PNG"))
+        self.assertEqual(figures.render_check_figures(Expressions({"cases": [], "checks": [{"name": "x", "value": "0", "tolerance": 1}]}, {})), [])
+
     def test_unknown_kind_is_an_error(self):
         expr = Expressions({"cases": [{"name": "a"}]}, {"a": case("a")})
         with self.assertRaises(ValueError):

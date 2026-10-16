@@ -14,10 +14,12 @@ report.json
                "j2::plastic_strain[1,1]" (1-based); columns are ordered by name
   cases        name; control: strain | uniaxial_stress | mixed with stress_components ["22", "33"];
                direction (strain per unit load) and stress (target per unit load) as tensor components
-               [11, 22, 33, 12, 13, 23]; path (load factors), steps per segment, scale, dt
+               [11, 22, 33, 12, 13, 23]; path (load factors), steps per segment, scale, dt;
+               tangent_every: finite-difference tangent check every n-th step (1; 0 = never)
   figures      title, text, columns, panels: kind line (x, y, reference, logy, xlabel, ylabel),
                residuals, iterations; case or cases (list or "*")
-  checks       name, case/cases, value, expected (default 0), tolerance, relative, where
+  checks       name, case/cases, value, expected (default 0), tolerance, relative, where;
+               plot: true or {"x": ...} draws value, expected and the error per case
 
 Expressions are Python over numpy (np), the parameters, the derived values and the columns of the
 case: step, time, load, iterations, converged, tangent_error, strain_11..23 and stress_11..23
@@ -44,11 +46,11 @@ def build(tool: str, folder: pathlib.Path, out: pathlib.Path | None) -> html.Rep
     if not run.converged:
         print(f"{folder.name}: a load case did not converge", file=sys.stderr)
     if out is not None:
-        from .figures import render_figures  # matplotlib only when figures are wanted
+        from .figures import render_check_figures, render_figures  # matplotlib only when figures are wanted
 
         out.mkdir(parents=True, exist_ok=True)
         target = out / f"{folder.name}.html"
-        target.write_text(html.report_page(run, expr, checks, render_figures(expr), folder))
+        target.write_text(html.report_page(run, expr, checks, render_figures(expr), folder, render_check_figures(expr)))
         print(f"{folder.name}: wrote {target}")
     print(f"{folder.name}: {len(checks) - len(failed)}/{len(checks)} checks passed")
     return html.ReportSummary(folder.name, len(checks) - len(failed), len(checks), run.converged)

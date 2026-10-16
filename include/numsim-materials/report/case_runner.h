@@ -54,7 +54,8 @@ bool run_case(nlohmann::json const &doc, load_case<typename Traits::value_type> 
       sink.record(rec);
       return false;
     }
-    rec.tangent_error = driver.tangent_error(rec.result);
+    if (c.tangent_every > 0 && s.index % c.tangent_every == 0)
+      rec.tangent_error = driver.tangent_error(rec.result);
     sink.record(rec);
   }
   return true;
