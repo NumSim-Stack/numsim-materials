@@ -1,0 +1,25 @@
+{
+  "title": "exponential_isotropic_hardening",
+  "include": ["../standard_small_strain.json"],
+  "parameters": {"K": 166666.67, "G": 76923.08, "sigma_0": 250.0, "K_inf": 200.0, "delta": 100.0},
+  "model": {"materials": [
+    {"type": "external_strain_source", "name": "strain"},
+    {"type": "local_newton", "name": "solver"},
+    {"type": "exponential_isotropic_hardening", "name": "hardening", "source": "j2", "K_inf": "$K_inf", "delta": "$delta"},
+    {"type": "j2_plasticity", "name": "j2", "strain_source": "strain", "solver_source": "solver",
+     "hardening_source": "hardening", "K": "$K", "G": "$G", "sigma_0": "$sigma_0"}]},
+  "point": {"strain_source": "strain", "stress_source": "j2"},
+  "record": {"kappa": "j2::equivalent_plastic_strain", "R": "hardening::hardening_stress", "dR": "hardening::hardening_modulus"},
+  "checks": [
+    {"name": "R = K∞ (1 − exp(−δ κ))", "cases": "*", "value": "R", "expected": "K_inf * (1 - np.exp(-delta * kappa))", "tolerance": 1e-12, "relative": true},
+    {"name": "R' = K∞ δ exp(−δ κ)", "cases": "*", "value": "dR", "expected": "K_inf * delta * np.exp(-delta * kappa)", "tolerance": 1e-12, "relative": true},
+    {"name": "on or inside the yield surface", "cases": "*", "value": "np.maximum(q - sigma_0 - R, 0)", "tolerance": 1e-8},
+    {"name": "at most 6 Newton iterations", "case": "uniaxial_stress", "value": "np.maximum(iterations - 6, 0)", "tolerance": 0}
+  ],
+  "figures": [
+    {"title": "Hardening", "file": "hardening.png", "panels": [
+      {"title": "hardening stress", "cases": ["uniaxial_stress", "simple_shear"], "x": "kappa", "y": ["R"],
+       "reference": [{"y": "K_inf * (1 - np.exp(-delta * kappa))", "label": "K∞ (1 − exp(−δ κ))"}]},
+      {"title": "equivalent plastic strain", "cases": ["uniaxial_stress", "simple_shear"], "x": "step", "y": ["kappa"]}]}
+  ]
+}
