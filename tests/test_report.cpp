@@ -86,6 +86,12 @@ TEST(PropertyColumns, WiresPropertiesOfOtherMaterials) {
   EXPECT_NEAR(v[0], H * v[1], 1e-12);
 }
 
+TEST(PropertyColumns, RecordsTheReturnMapIterations) {
+  j2_point p;
+  columns const c(p.ctx, {{"it", "solver::iterations"}});
+  EXPECT_GT(c.values()[0], 0);
+}
+
 TEST(PropertyColumns, RejectsUnknownAndUnsupported) {
   j2_point p;
   EXPECT_THROW(columns(p.ctx, {{"x", "j2::nope"}}), std::invalid_argument);

@@ -39,6 +39,7 @@ public:
   template <typename... Args>
   explicit local_newton(Args&&... args)
       : base(std::forward<Args>(args)...),
+        m_iterations(base::template add_output<value_type>("iterations")),
         m_solver(base::template get_parameter<value_type>("tolerance"),
                  base::template get_parameter<int>("max_iter")) {}
 
@@ -55,12 +56,16 @@ public:
   /// The result carries its own convergence flag, so it cannot be read without
   /// being available -- unlike a converged() queried separately, which a caller
   /// can forget and which goes stale between solves.
+  /// Iterations of the last solve are published as "iterations" (for reports; an elastic step leaves it).
   template <typename Eval>
   result solve(Eval&& eval, value_type x0 = value_type{}) const {
-    return m_solver.solve(std::forward<Eval>(eval), x0);
+    auto const r{m_solver.solve(std::forward<Eval>(eval), x0)};
+    m_iterations = static_cast<value_type>(r.iterations);
+    return r;
   }
 
 private:
+  value_type& m_iterations;
   newton_scalar<value_type> m_solver;
 };
 
