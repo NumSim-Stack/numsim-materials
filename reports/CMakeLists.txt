@@ -9,6 +9,8 @@ if(NUMSIM_MATERIALS_BUILD_TESTS)
     if(NOT _numpy_missing)
       add_test(NAME report_script COMMAND ${Python3_EXECUTABLE} -m unittest discover -q -s tests -t .
                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+      add_test(NAME convert_uvwmaterial_card COMMAND ${Python3_EXECUTABLE} -m unittest discover -q -s tests -t .
+               WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/tools)
       file(GLOB _reports CONFIGURE_DEPENDS ${PROJECT_SOURCE_DIR}/docs/materials/*/report.json)
       foreach(_report IN LISTS _reports)
         get_filename_component(_dir ${_report} DIRECTORY)
