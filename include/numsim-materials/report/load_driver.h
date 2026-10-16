@@ -4,18 +4,18 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <utility>
 #include <cstddef>
+#include <utility>
 #include <vector>
 
 #include <tmech/tmech.h>
 #include "numsim-materials/umat/material_point_evaluator.h"
+#include "numsim-materials/umat/tensor_conversion.h"
 
 /// Mixed strain/stress control of one material point, for reports and checks.
-/// Slots follow Abaqus (11, 22, 33, 12, 13, 23) with engineering shear strains.
 namespace numsim::materials::report {
 
-/// true = the stress of that slot is prescribed, false = its strain.
+/// Per Abaqus slot (11, 22, 33, 12, 13, 23): true = stress prescribed, false = strain.
 using control_mask = std::array<bool, 6>;
 
 namespace control {
@@ -29,48 +29,50 @@ class load_driver {
 public:
   using value_type = typename Traits::value_type;
   using evaluator = umat::material_point_evaluator<Traits>;
-  using vector6 = tmech::tensor<value_type, 6, 1>;
-  using matrix6 = tmech::tensor<value_type, 6, 2>;
+  using tensor2 = tmech::tensor<value_type, 3, 2>;
+  using tensor4 = tmech::tensor<value_type, 3, 4>;
 
   struct options {
-    value_type tolerance{1e-10}; ///< on |P(sigma - sigma*)| relative to |sigma|
+    value_type tolerance{1e-10}; ///< on |P:(sigma - sigma*)| relative to |sigma|
     int max_iter{25};
   };
 
   struct step_result {
-    vector6 strain;
-    vector6 stress;
-    matrix6 tangent;
-    std::vector<value_type> residuals; ///< |P(sigma - sigma*)| before each correction
+    tensor2 strain;
+    tensor2 stress;
+    tensor4 tangent;
+    std::vector<value_type> residuals; ///< |P:(sigma - sigma*)| before each correction
     bool converged{false};
   };
 
   explicit load_driver(evaluator &ev, options opts = {})
       : m_ev(ev), m_opts(opts), m_statev(ev.nstatv()), m_statev_n(ev.nstatv()) {}
 
-  /// Prescribed strain slots come from `strain`, prescribed stress slots from `stress`.
-  step_result step(vector6 const &strain, vector6 const &stress, control_mask const &mask, value_type time,
+  /// Prescribed strain components come from `strain`, prescribed stress components from `stress`.
+  step_result step(tensor2 const &strain, tensor2 const &stress, control_mask const &mask, value_type time,
                    value_type dtime) {
     auto const P{projector(mask)};
-    auto const I{tmech::eye<value_type, 6, 2>()};
+    auto const &Is{sym_identity()};
+    // Iskw makes A regular on the full 9x9 space; residual and correction stay symmetric.
+    tensor4 const Q{Is - P + skew_identity()};
     m_statev_n = m_statev;
     m_strain_n_prev = m_strain_n;
     m_time = time;
     m_dtime = dtime;
 
     step_result res;
-    res.strain = mv(I - P, strain) + mv(P, m_strain_n);
+    res.strain = tmech::dcontract(tensor4{Is - P}, strain) + tmech::dcontract(P, m_strain_n);
     for (int it{0}; it <= m_opts.max_iter; ++it) {
-      evaluate(res.strain, m_statev_n.data(), res.stress, res.tangent);
-      vector6 const r{mv(P, res.stress - stress)};
+      evaluate(res.strain, res.stress, res.tangent);
+      tensor2 const r{tmech::dcontract(P, tensor2{res.stress - stress})};
       res.residuals.push_back(tmech::norm(r));
-      auto const scale{std::max(tmech::norm(res.stress), tmech::norm(mv(P, stress)))};
+      auto const scale{std::max(tmech::norm(res.stress), tmech::norm(tensor2{tmech::dcontract(P, stress)}))};
       if (res.residuals.back() <= m_opts.tolerance * scale) {
         res.converged = true;
         break;
       }
-      matrix6 const A{mm(mm(P, res.tangent), P) + (I - P)};
-      res.strain = tmech::eval(res.strain - solve(A, r));
+      tensor4 const A{tmech::dcontract(tensor4{tmech::dcontract(P, res.tangent)}, P) + Q};
+      res.strain = tmech::eval(res.strain - tmech::dcontract(tensor4{tmech::invf(A)}, r));
     }
     if (res.converged) {
       m_ev.store_statev(m_statev.data());
@@ -79,79 +81,75 @@ public:
     return res;
   }
 
-  /// Relative Frobenius error of the tangent of `res` against central differences of the stress.
+  /// Relative error of the tangent of `res` against central differences of the stress.
   value_type tangent_error(step_result const &res, value_type h = 1e-7) {
-    matrix6 fd;
-    vector6 sp, sm;
-    matrix6 unused;
-    for (std::size_t j{0}; j < 6; ++j) {
-      vector6 e;
-      e(j) = h;
-      evaluate(res.strain + e, m_statev_n.data(), sp, unused);
-      evaluate(res.strain - e, m_statev_n.data(), sm, unused);
-      fd += tmech::otimes(vector6{(sp - sm) / (2 * h)}, vector6{e / h});
+    tensor4 fd;
+    tensor2 sp, sm;
+    tensor4 unused;
+    for (auto const &E : sym_basis()) {
+      evaluate(tensor2{res.strain + h * E}, sp, unused);
+      evaluate(tensor2{res.strain - h * E}, sm, unused);
+      fd += tmech::otimes(tensor2{(sp - sm) / (2 * h)}, E);
     }
-    return tmech::norm(fd - res.tangent) / tmech::norm(res.tangent);
+    return tmech::norm(tensor4{fd - res.tangent}) / tmech::norm(res.tangent);
   }
 
   [[nodiscard]] std::vector<value_type> const &statev() const noexcept { return m_statev; }
 
 private:
-  template <typename A, typename B> static auto mv(A const &a, B const &b) {
-    return vector6{tmech::inner_product<tmech::sequence<2>, tmech::sequence<1>>(a, b)};
-  }
-  template <typename A, typename B> static auto mm(A const &a, B const &b) {
-    return matrix6{tmech::inner_product<tmech::sequence<2>, tmech::sequence<1>>(a, b)};
-  }
-
-  /// Gaussian elimination with partial pivoting (tmech::inv covers 2x2 and 3x3 only).
-  static vector6 solve(matrix6 A, vector6 b) {
-    for (std::size_t k{0}; k < 6; ++k) {
-      std::size_t p{k};
-      for (std::size_t i{k + 1}; i < 6; ++i)
-        if (std::abs(A(i, k)) > std::abs(A(p, k)))
-          p = i;
-      for (std::size_t j{0}; j < 6; ++j)
-        std::swap(A(k, j), A(p, j));
-      std::swap(b(k), b(p));
-      for (std::size_t i{k + 1}; i < 6; ++i) {
-        auto const f{A(i, k) / A(k, k)};
-        for (std::size_t j{k}; j < 6; ++j)
-          A(i, j) -= f * A(k, j);
-        b(i) -= f * b(k);
+  /// Orthonormal basis of symmetric tensors, in Abaqus slot order.
+  static std::array<tensor2, 6> const &sym_basis() {
+    static auto const basis = [] {
+      constexpr std::array<std::pair<std::size_t, std::size_t>, 6> ij{{{0, 0}, {1, 1}, {2, 2}, {0, 1}, {0, 2}, {1, 2}}};
+      std::array<tensor2, 6> b;
+      for (std::size_t a{0}; a < 6; ++a) {
+        auto const [i, j]{ij[a]};
+        b[a](i, j) = b[a](j, i) = i == j ? value_type{1} : value_type{1} / std::sqrt(value_type{2});
       }
-    }
-    vector6 x;
-    for (std::size_t k{6}; k-- > 0;) {
-      auto s{b(k)};
-      for (std::size_t j{k + 1}; j < 6; ++j)
-        s -= A(k, j) * x(j);
-      x(k) = s / A(k, k);
-    }
-    return x;
+      return b;
+    }();
+    return basis;
   }
 
-  static matrix6 projector(control_mask const &mask) {
-    matrix6 P;
-    for (std::size_t i{0}; i < 6; ++i)
-      P(i, i) = mask[i] ? 1 : 0;
+  static tensor4 const &sym_identity() {
+    static tensor4 const Is{[] {
+      auto const I{tmech::eye<value_type, 3, 2>()};
+      return tensor4{(tmech::otimesu(I, I) + tmech::otimesl(I, I)) * value_type{0.5}};
+    }()};
+    return Is;
+  }
+
+  static tensor4 const &skew_identity() {
+    static tensor4 const Iskw{[] {
+      auto const I{tmech::eye<value_type, 3, 2>()};
+      return tensor4{(tmech::otimesu(I, I) - tmech::otimesl(I, I)) * value_type{0.5}};
+    }()};
+    return Iskw;
+  }
+
+  /// Projector onto the stress-controlled components.
+  static tensor4 projector(control_mask const &mask) {
+    tensor4 P;
+    for (std::size_t a{0}; a < 6; ++a)
+      if (mask[a])
+        P += tmech::otimes(sym_basis()[a], sym_basis()[a]);
     return P;
   }
 
-  void evaluate(vector6 const &strain, value_type const *statev, vector6 &stress, matrix6 &tangent) {
-    std::array<value_type, 6> old6, new6, sig6;
-    std::array<value_type, 36> tan36;
-    tmech::adaptor<value_type, 6, 1, tmech::full<6>>(old6.data()) = m_strain_n_prev;
-    tmech::adaptor<value_type, 6, 1, tmech::full<6>>(new6.data()) = strain;
-    m_ev.evaluate_canonical(statev, old6.data(), new6.data(), m_time, m_dtime, sig6.data(), tan36.data());
-    stress = tmech::adaptor<value_type, 6, 1, tmech::full<6>>(sig6.data());
-    tangent = tmech::trans(tmech::adaptor<value_type, 6, 2, tmech::full<6>>(tan36.data())); // column-major
+  void evaluate(tensor2 const &strain, tensor2 &stress, tensor4 &tangent) {
+    value_type old6[umat::canonical_width], new6[umat::canonical_width], sig6[umat::canonical_width];
+    value_type tan36[umat::canonical_width * umat::canonical_width];
+    umat::strain_to_buffer(m_strain_n_prev, old6);
+    umat::strain_to_buffer(strain, new6);
+    m_ev.evaluate_canonical(m_statev_n.data(), old6, new6, m_time, m_dtime, sig6, tan36);
+    stress = umat::stress_from_buffer(sig6);
+    tangent = umat::tangent_from_buffer(tan36);
   }
 
   evaluator &m_ev;
   options m_opts;
   std::vector<value_type> m_statev, m_statev_n;
-  vector6 m_strain_n, m_strain_n_prev;
+  tensor2 m_strain_n, m_strain_n_prev;
   value_type m_time{0}, m_dtime{0};
 };
 

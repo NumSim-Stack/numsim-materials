@@ -23,7 +23,7 @@ using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
 using evaluator = u::material_point_evaluator<policy>;
 using driver = r::load_driver<policy>;
-using vector6 = driver::vector6;
+using tensor2 = driver::tensor2;
 
 constexpr T K{166.67};
 constexpr T G{76.92};
@@ -82,9 +82,9 @@ evaluator::config config_for(std::string stress_source) {
   return cfg;
 }
 
-vector6 axial(T value) {
-  vector6 v;
-  v(0) = value;
+tensor2 axial(T value) {
+  tensor2 v;
+  v(0, 0) = value;
   return v;
 }
 
@@ -93,11 +93,11 @@ TEST(LoadDriver, StrainControlNeedsNoIteration) {
   build_elastic(ctx);
   evaluator ev(ctx, config_for("elastic"));
   driver d(ev);
-  auto const res{d.step(axial(1e-3), vector6{}, r::control::strain, 0, 1)};
+  auto const res{d.step(axial(1e-3), tensor2{}, r::control::strain, 0, 1)};
   EXPECT_TRUE(res.converged);
   EXPECT_EQ(res.residuals.size(), 1u);
-  EXPECT_NEAR(res.stress(0), (K + 4 * G / 3) * 1e-3, 1e-12);
-  EXPECT_NEAR(res.stress(1), (K - 2 * G / 3) * 1e-3, 1e-12);
+  EXPECT_NEAR(res.stress(0, 0), (K + 4 * G / 3) * 1e-3, 1e-12);
+  EXPECT_NEAR(res.stress(1, 1), (K - 2 * G / 3) * 1e-3, 1e-12);
 }
 
 TEST(LoadDriver, UniaxialStressOfLinearElasticityConvergesInOneCorrection) {
@@ -105,14 +105,13 @@ TEST(LoadDriver, UniaxialStressOfLinearElasticityConvergesInOneCorrection) {
   build_elastic(ctx);
   evaluator ev(ctx, config_for("elastic"));
   driver d(ev);
-  auto const res{d.step(axial(1e-3), vector6{}, r::control::uniaxial_stress, 0, 1)};
+  auto const res{d.step(axial(1e-3), tensor2{}, r::control::uniaxial_stress, 0, 1)};
   ASSERT_TRUE(res.converged);
   EXPECT_EQ(res.residuals.size(), 2u);
-  EXPECT_NEAR(res.stress(0), E * 1e-3, 1e-10);
-  EXPECT_NEAR(res.strain(1), -nu * 1e-3, 1e-14);
-  EXPECT_NEAR(res.strain(2), -nu * 1e-3, 1e-14);
-  for (std::size_t i{1}; i < 6; ++i)
-    EXPECT_NEAR(res.stress(i), 0, 1e-10) << i;
+  EXPECT_NEAR(res.stress(0, 0), E * 1e-3, 1e-10);
+  EXPECT_NEAR(res.strain(1, 1), -nu * 1e-3, 1e-14);
+  EXPECT_NEAR(res.strain(2, 2), -nu * 1e-3, 1e-14);
+  EXPECT_NEAR(tmech::norm(tensor2{res.stress - axial(res.stress(0, 0))}), 0, 1e-10);
 }
 
 TEST(LoadDriver, UniaxialStressOfJ2FollowsTheBilinearCurve) {
@@ -122,12 +121,12 @@ TEST(LoadDriver, UniaxialStressOfJ2FollowsTheBilinearCurve) {
   driver d(ev);
   driver::step_result res;
   for (int n{1}; n <= 20; ++n) {
-    res = d.step(axial(n * 5e-4), vector6{}, r::control::uniaxial_stress, 0, 1);
+    res = d.step(axial(n * 5e-4), tensor2{}, r::control::uniaxial_stress, 0, 1);
     ASSERT_TRUE(res.converged) << n;
   }
   T const eps{20 * 5e-4};
-  EXPECT_NEAR(res.stress(0), (eps + sigma_0 / H) / (1 / E + 1 / H), 1e-8);
-  EXPECT_NEAR(res.stress(1), 0, 1e-8);
+  EXPECT_NEAR(res.stress(0, 0), (eps + sigma_0 / H) / (1 / E + 1 / H), 1e-8);
+  EXPECT_NEAR(tmech::norm(tensor2{res.stress - axial(res.stress(0, 0))}), 0, 1e-8);
   EXPECT_LE(res.residuals.size(), 6u);
 }
 
@@ -137,7 +136,7 @@ TEST(LoadDriver, J2UniaxialStressConvergesQuadratically) {
   build_j2(ctx, true);
   evaluator ev(ctx, config_for("j2"));
   driver d(ev);
-  auto const res{d.step(axial(5e-3), vector6{}, r::control::uniaxial_stress, 0, 1)};
+  auto const res{d.step(axial(5e-3), tensor2{}, r::control::uniaxial_stress, 0, 1)};
   ASSERT_TRUE(res.converged);
   ASSERT_GE(res.residuals.size(), 3u);
   for (std::size_t k{2}; k + 1 < res.residuals.size(); ++k)
@@ -149,9 +148,9 @@ TEST(LoadDriver, ElasticUnloadingAfterYieldHasSlopeE) {
   build_j2(ctx);
   evaluator ev(ctx, config_for("j2"));
   driver d(ev);
-  auto const loaded{d.step(axial(5e-3), vector6{}, r::control::uniaxial_stress, 0, 1)};
-  auto const unloaded{d.step(axial(4e-3), vector6{}, r::control::uniaxial_stress, 1, 1)};
-  EXPECT_NEAR(loaded.stress(0) - unloaded.stress(0), E * 1e-3, 1e-8);
+  auto const loaded{d.step(axial(5e-3), tensor2{}, r::control::uniaxial_stress, 0, 1)};
+  auto const unloaded{d.step(axial(4e-3), tensor2{}, r::control::uniaxial_stress, 1, 1)};
+  EXPECT_NEAR(loaded.stress(0, 0) - unloaded.stress(0, 0), E * 1e-3, 1e-8);
 }
 
 TEST(LoadDriver, ReportsTheTangentErrorAgainstFiniteDifferences) {
@@ -159,8 +158,22 @@ TEST(LoadDriver, ReportsTheTangentErrorAgainstFiniteDifferences) {
   build_j2(ctx);
   evaluator ev(ctx, config_for("j2"));
   driver d(ev);
-  auto const res{d.step(axial(5e-3), vector6{}, r::control::uniaxial_stress, 0, 1)};
+  auto const res{d.step(axial(5e-3), tensor2{}, r::control::uniaxial_stress, 0, 1)};
   EXPECT_LT(d.tangent_error(res), 1e-5);
+}
+
+// Shear stress control: gamma_12 prescribed, everything else stress free.
+TEST(LoadDriver, ShearSlotUnderStressControlGivesPureShear) {
+  ctx_type ctx;
+  build_elastic(ctx);
+  evaluator ev(ctx, config_for("elastic"));
+  driver d(ev);
+  tensor2 eps;
+  eps(0, 1) = eps(1, 0) = 1e-3;
+  auto const res{d.step(eps, tensor2{}, r::control_mask{true, true, true, false, true, true}, 0, 1)};
+  ASSERT_TRUE(res.converged);
+  EXPECT_NEAR(res.stress(0, 1), 2 * G * 1e-3, 1e-10);
+  EXPECT_NEAR(tmech::norm(tensor2{res.strain - eps}), 0, 1e-14);
 }
 
 } // namespace

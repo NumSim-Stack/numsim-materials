@@ -39,14 +39,12 @@ r::control_mask control_of(nlohmann::json const &c) {
   throw std::invalid_argument("unknown control '" + kind + "' (strain, uniaxial_stress, mixed)");
 }
 
-driver::vector6 vector_of(nlohmann::json const &j) {
-  auto const v = j.get<std::vector<T>>();
+/// Six Abaqus slots (11, 22, 33, 12, 13, 23); shear strains are engineering strains.
+std::vector<T> slots_of(nlohmann::json const &j) {
+  auto v = j.get<std::vector<T>>();
   if (v.size() != 6)
-    throw std::invalid_argument("expected six Voigt slots (11, 22, 33, 12, 13, 23)");
-  driver::vector6 out;
-  tmech::adaptor<T const, 6, 1, tmech::full<6>> const view(v.data());
-  out = view;
-  return out;
+    throw std::invalid_argument("expected six slots (11, 22, 33, 12, 13, 23)");
+  return v;
 }
 
 /// "0..5  j2::plastic_strain  [engineering shear]" -> j2::plastic_strain[0] ... [5]
@@ -78,8 +76,9 @@ void run_case(nlohmann::json const &doc, nlohmann::json const &c, std::filesyste
 
   auto const name = c.at("name").get<std::string>();
   auto const mask{control_of(c)};
-  auto const direction{vector_of(c.at("direction"))};
-  auto const stress{c.contains("stress") ? vector_of(c["stress"]) : driver::vector6{}};
+  auto const direction{nm::umat::strain_from_buffer(slots_of(c.at("direction")).data())};
+  auto const stress{c.contains("stress") ? nm::umat::stress_from_buffer(slots_of(c["stress"]).data())
+                                         : driver::tensor2{}};
   auto const path = c.at("path").get<std::vector<T>>();
   auto const steps{c.value("steps", 50)};
   auto const dt{c.value("dt", T{1})};
@@ -105,13 +104,16 @@ void run_case(nlohmann::json const &doc, nlohmann::json const &c, std::filesyste
       ++step;
       auto const load{path[seg - 1] + (path[seg] - path[seg - 1]) * T(k) / T(steps)};
       auto const time{(step - 1) * dt};
-      auto const res{d.step(driver::vector6{load * direction}, stress, mask, time, dt)};
+      auto const res{d.step(driver::tensor2{load * direction}, stress, mask, time, dt)};
       auto const err{d.tangent_error(res)};
+      T eps6[6], sig6[6];
+      nm::umat::strain_to_buffer(res.strain, eps6);
+      nm::umat::stress_to_buffer(res.stress, sig6);
       csv << step << "," << time + dt << "," << load;
-      for (std::size_t i{0}; i < 6; ++i)
-        csv << "," << res.strain(i);
-      for (std::size_t i{0}; i < 6; ++i)
-        csv << "," << res.stress(i);
+      for (auto const v : eps6)
+        csv << "," << v;
+      for (auto const v : sig6)
+        csv << "," << v;
       csv << "," << res.residuals.size() - 1 << "," << res.converged << "," << err;
       for (auto const v : d.statev())
         csv << "," << v;
