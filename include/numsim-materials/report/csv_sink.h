@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-#include "numsim-materials/report/case_runner.h"
+#include "numsim-materials/report/step_record.h"
 
 namespace numsim::materials::report {
 

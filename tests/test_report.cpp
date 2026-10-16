@@ -112,6 +112,14 @@ TEST(ReportSpec, RecordsWhereEachParameterIsUsed) {
   EXPECT_EQ(out["parameter_usage"]["unused"], json::array());
 }
 
+TEST(ReportSpec, IncludeCycleThrows) {
+  auto const dir{std::filesystem::temp_directory_path() / "numsim_report_spec_cycle"};
+  std::filesystem::create_directories(dir);
+  std::ofstream{dir / "a.json"} << R"({"include": ["b.json"]})";
+  std::ofstream{dir / "b.json"} << R"({"include": ["a.json"]})";
+  EXPECT_THROW(r::resolve_report(json::parse(R"({"include": ["a.json"]})"), dir.string()), std::invalid_argument);
+}
+
 TEST(ReportSpec, UnknownParameterThrows) {
   auto const spec = json::parse(R"({"parameters": {}, "model": {"K": "$K"}})");
   EXPECT_THROW(r::resolve_report(spec, "."), std::invalid_argument);

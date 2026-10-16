@@ -25,6 +25,7 @@ public:
   struct options {
     value_type tolerance{1e-10}; ///< on |P:(sigma - sigma*)| relative to |sigma|
     int max_iter{25};
+    value_type fd_step{1e-7};    ///< strain perturbation of tangent_error()
   };
 
   /// Converged state at the start of a step.
@@ -70,7 +71,8 @@ public:
   }
 
   /// Relative error of the tangent of `res` against central differences from its start state.
-  value_type tangent_error(step_result const &res, value_type h = 1e-7) {
+  value_type tangent_error(step_result const &res) {
+    auto const h{m_opts.fd_step};
     tensor4 fd, unused;
     tensor2 sp, sm;
     for (auto const &E : materials::symmetric_basis<value_type>()) {

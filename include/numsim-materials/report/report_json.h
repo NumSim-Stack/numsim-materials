@@ -12,6 +12,7 @@
 #include "numsim-materials/core/tensor_identities.h"
 #include "numsim-materials/report/load_path.h"
 #include "numsim-materials/umat/load_control.h"
+#include "numsim-materials/umat/material_point_evaluator.h"
 
 /// Parsing of report documents into value types; nothing here runs a material.
 namespace numsim::materials::report {
@@ -57,9 +58,25 @@ load_case<T> parse_case(nlohmann::json const &c) {
           load_path<T>{c.at("path").get<std::vector<T>>(), c.value("steps", 50), c.value("scale", T{1}), c.value("dt", T{1})}};
 }
 
-/// "record" as (column, "material::property") pairs; nlohmann::json orders them by column name.
-inline std::vector<std::pair<std::string, std::string>> parse_record(nlohmann::json const &doc) {
-  std::vector<std::pair<std::string, std::string>> out;
+/// "point": the evaluator configuration (strain_source, stress_source, optional tangent_source, time_source).
+template <typename Traits>
+typename umat::material_point_evaluator<Traits>::config parse_point(nlohmann::json const &doc) {
+  auto const &p{doc.at("point")};
+  typename umat::material_point_evaluator<Traits>::config cfg;
+  cfg.strain_source = p.at("strain_source").template get<std::string>();
+  cfg.stress_source = p.at("stress_source").template get<std::string>();
+  if (p.contains("tangent_source"))
+    cfg.tangent_source = p["tangent_source"].template get<std::string>();
+  cfg.time_source = p.value("time_source", std::string{});
+  return cfg;
+}
+
+/// Report columns as (column, "material::property") pairs: the point's strain and stress, then
+/// "record" (nlohmann::json orders those by column name).
+inline std::vector<std::pair<std::string, std::string>> parse_columns(nlohmann::json const &doc) {
+  auto const &p{doc.at("point")};
+  std::vector<std::pair<std::string, std::string>> out{{"strain", p.at("strain_source").get<std::string>() + "::strain"},
+                                                       {"stress", p.at("stress_source").get<std::string>() + "::stress"}};
   auto const record = doc.value("record", nlohmann::json::object());
   for (auto const &[name, source] : record.items())
     out.emplace_back(name, source.get<std::string>());

@@ -189,4 +189,14 @@ TEST(MaterialPointDriver, TangentErrorOfAnEarlierStepIsUnaffectedByLaterSteps) {
   EXPECT_LT(before, 1e-5);
 }
 
+// Central differences: a coarser step gives a larger error on a nonlinear path.
+TEST(MaterialPointDriver, FiniteDifferenceStepIsAnOption) {
+  ctx_type ctx;
+  build_j2(ctx, true);
+  evaluator ev(ctx, config_for("j2"));
+  driver fine(ev), coarse(ev, {.fd_step = 1e-3});
+  auto const res{fine.step(axial(5e-3), tensor2{}, control::uniaxial_stress(), 0, 1)};
+  EXPECT_GT(coarse.tangent_error(res), 10 * fine.tangent_error(res));
+}
+
 } // namespace

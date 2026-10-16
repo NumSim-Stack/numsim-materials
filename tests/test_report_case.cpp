@@ -6,6 +6,7 @@
 #include <sstream>
 #include "numsim-materials/report/case_runner.h"
 #include "numsim-materials/report/csv_sink.h"
+#include "numsim-materials/report/step_record.h"
 #include "numsim-materials/report/graph_description.h"
 #include "numsim-materials/umat/load_control.h"
 #include "numsim-materials/report/load_path.h"
@@ -56,6 +57,28 @@ TEST(LoadPath, InterpolatesSegmentsWithScaleAndTime) {
   EXPECT_EQ(loads, (std::vector<T>{0.25, 0.5, 0, -0.5}));
   EXPECT_NEAR(ends.back(), 0.4, 1e-15);
   EXPECT_EQ(path.steps().front().index, 1);
+}
+
+TEST(LoadPath, RejectsStepsOutsideThePath) {
+  r::load_path<T> const path{{0, 1}, 2};
+  EXPECT_THROW((void)path.at(0), std::out_of_range);
+  EXPECT_THROW((void)path.at(3), std::out_of_range);
+  EXPECT_NO_THROW((void)path.at(2));
+}
+
+TEST(ReportJson, ParsesThePointAndTheColumns) {
+  auto const doc = json::parse(R"({"point": {"strain_source": "s", "stress_source": "m", "tangent_source": "t"},
+    "record": {"kappa": "m::kappa"}})");
+  auto const cfg{r::parse_point<policy>(doc)};
+  EXPECT_EQ(cfg.strain_source, "s");
+  EXPECT_EQ(cfg.stress_source, "m");
+  ASSERT_TRUE(cfg.tangent_source.has_value());
+  EXPECT_EQ(*cfg.tangent_source, "t");
+  auto const cols{r::parse_columns(doc)};
+  ASSERT_EQ(cols.size(), 3u);
+  EXPECT_EQ(cols[0], (std::pair<std::string, std::string>{"strain", "s::strain"}));
+  EXPECT_EQ(cols[1], (std::pair<std::string, std::string>{"stress", "m::stress"}));
+  EXPECT_EQ(cols[2], (std::pair<std::string, std::string>{"kappa", "m::kappa"}));
 }
 
 TEST(ReportJson, ParsesALoadCase) {

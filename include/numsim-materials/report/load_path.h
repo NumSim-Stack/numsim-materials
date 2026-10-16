@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <ranges>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace numsim::materials::report {
@@ -31,6 +32,8 @@ public:
   [[nodiscard]] load_step<T> unloaded() const { return {0, 0, 0, m_scale * m_points.front()}; }
 
   [[nodiscard]] load_step<T> at(int index) const {
+    if (index < 1 || index > static_cast<int>(size()))
+      throw std::out_of_range("load path: step " + std::to_string(index) + " of " + std::to_string(size()));
     auto const seg{static_cast<std::size_t>((index - 1) / m_steps)};
     auto const k{T((index - 1) % m_steps + 1) / T(m_steps)};
     return {index, (index - 1) * m_dt, m_dt, m_scale * (m_points[seg] + (m_points[seg + 1] - m_points[seg]) * k)};
