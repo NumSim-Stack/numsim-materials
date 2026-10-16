@@ -16,7 +16,7 @@
     {"name": "p = 3K ε11", "case": "hydrostatic_strain", "value": "p", "expected": "3 * K * strain_11", "tolerance": 1e-10, "relative": true}
   ],
   "figures": [
-    {"title": "Against the closed form", "file": "closed_form.png", "panels": [
+    {"title": "Against the closed form", "panels": [
       {"title": "uniaxial stress", "case": "uniaxial_stress", "x": "strain_11", "y": ["stress_11"], "reference": [{"y": "E * strain_11", "label": "E ε11"}]},
       {"title": "simple shear", "case": "simple_shear", "x": "strain_12", "y": ["stress_12"], "reference": [{"y": "2 * G * strain_12", "label": "2G ε12"}]}]}
   ]

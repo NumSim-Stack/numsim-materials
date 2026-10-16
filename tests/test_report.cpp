@@ -104,6 +104,14 @@ TEST(ReportSpec, SubstitutesParameters) {
   EXPECT_EQ(out["model"]["materials"][0]["src"], "j2");
 }
 
+TEST(ReportSpec, RecordsWhereEachParameterIsUsed) {
+  auto const spec = json::parse(R"({"parameters": {"K": 2.5, "unused": 1},
+    "model": {"materials": [{"type": "x", "name": "m", "K": "$K"}]}, "cases": [{"scale": "$K"}]})");
+  auto const out = r::resolve_report(spec, ".");
+  EXPECT_EQ(out["parameter_usage"]["K"], json::parse(R"(["cases[0].scale", "model.materials[0].K"])"));
+  EXPECT_EQ(out["parameter_usage"]["unused"], json::array());
+}
+
 TEST(ReportSpec, UnknownParameterThrows) {
   auto const spec = json::parse(R"({"parameters": {}, "model": {"K": "$K"}})");
   EXPECT_THROW(r::resolve_report(spec, "."), std::invalid_argument);

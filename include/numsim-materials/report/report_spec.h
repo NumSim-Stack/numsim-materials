@@ -25,7 +25,9 @@ inline void merge_into(nlohmann::json &base, nlohmann::json const &local) {
   }
 }
 
-inline void substitute(nlohmann::json &j, nlohmann::json const &parameters, std::string const &where) {
+/// Replaces "$name" strings; `usage[name]` collects the paths where each parameter went.
+inline void substitute(nlohmann::json &j, nlohmann::json const &parameters, std::string const &where,
+                       nlohmann::json &usage) {
   if (j.is_string()) {
     auto const s = j.get<std::string>();
     if (s.size() > 1 && s.front() == '$') {
@@ -33,13 +35,14 @@ inline void substitute(nlohmann::json &j, nlohmann::json const &parameters, std:
       if (!parameters.contains(key))
         throw std::invalid_argument(where + ": unknown parameter '" + s + "'");
       j = parameters[key];
+      usage[key].push_back(where);
     }
   } else if (j.is_array()) {
     for (std::size_t i{0}; i < j.size(); ++i)
-      substitute(j[i], parameters, where + "[" + std::to_string(i) + "]");
+      substitute(j[i], parameters, where + "[" + std::to_string(i) + "]", usage);
   } else if (j.is_object()) {
     for (auto &[key, value] : j.items())
-      substitute(value, parameters, where + "." + key);
+      substitute(value, parameters, where + "." + key, usage);
   }
 }
 
@@ -61,13 +64,17 @@ inline nlohmann::json load_included(nlohmann::json const &spec, std::filesystem:
 
 } // namespace detail
 
-/// The report document with includes merged and parameters substituted.
+/// The report document with includes merged, parameters substituted and "parameter_usage" added.
 inline nlohmann::json resolve_report(nlohmann::json const &spec, std::filesystem::path const &dir) {
   auto out = detail::load_included(spec, dir);
   auto const parameters = out.value("parameters", nlohmann::json::object());
+  auto usage = nlohmann::json::object();
+  for (auto const &[key, value] : parameters.items())
+    usage[key] = nlohmann::json::array();
   for (auto &[key, value] : out.items())
     if (key != "parameters")
-      detail::substitute(value, parameters, key);
+      detail::substitute(value, parameters, key, usage);
+  out["parameter_usage"] = usage;
   return out;
 }
 

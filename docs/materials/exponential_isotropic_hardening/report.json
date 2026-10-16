@@ -17,7 +17,7 @@
     {"name": "at most 6 Newton iterations", "case": "uniaxial_stress", "value": "np.maximum(iterations - 6, 0)", "tolerance": 0}
   ],
   "figures": [
-    {"title": "Hardening", "file": "hardening.png", "panels": [
+    {"title": "Hardening", "panels": [
       {"title": "hardening stress", "cases": ["uniaxial_stress", "simple_shear"], "x": "kappa", "y": ["R"],
        "reference": [{"y": "K_inf * (1 - np.exp(-delta * kappa))", "label": "K∞ (1 − exp(−δ κ))"}]},
       {"title": "equivalent plastic strain", "cases": ["uniaxial_stress", "simple_shear"], "x": "step", "y": ["kappa"]}]}

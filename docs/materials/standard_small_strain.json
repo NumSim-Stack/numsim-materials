@@ -8,21 +8,21 @@
     {"name": "hydrostatic_strain", "direction": [1, 1, 1, 0, 0, 0], "path": [0, 1, -1], "scale": "$amplitude", "steps": "$steps"}
   ],
   "figures": [
-    {"title": "Stress for prescribed strain paths", "file": "strain_paths.png", "panels": [
+    {"title": "Stress for prescribed strain paths", "panels": [
       {"title": "uniaxial strain", "case": "uniaxial_strain", "x": "strain_11", "y": ["stress_11", "stress_22"]},
       {"title": "simple shear", "case": "simple_shear", "x": "strain_12", "y": ["stress_12"]},
       {"title": "equibiaxial strain", "case": "equibiaxial_strain", "x": "strain_11", "y": ["stress_11", "stress_33"]},
       {"title": "hydrostatic strain", "case": "hydrostatic_strain", "x": "strain_11", "y": ["p"]}]},
-    {"title": "Uniaxial stress (1D) and its Newton iterations", "file": "uniaxial_stress.png",
+    {"title": "Uniaxial stress (1D) and its Newton iterations",
      "text": "Strain 11 is prescribed; the other five strains are solved for zero stress with the material tangent.",
      "panels": [
       {"title": "stress-strain", "case": "uniaxial_stress", "x": "strain_11", "y": ["stress_11"]},
       {"title": "lateral strains", "case": "uniaxial_stress", "x": "strain_11", "y": ["strain_22", "strain_33"]},
       {"title": "residual per step (colour: step)", "case": "uniaxial_stress", "kind": "residuals"},
       {"title": "iterations per step", "case": "uniaxial_stress", "kind": "iterations"}]},
-    {"title": "Stress paths in the p–q plane", "file": "stress_paths.png", "columns": 1, "panels": [
+    {"title": "Stress paths in the p–q plane", "columns": 1, "panels": [
       {"cases": "*", "x": "p", "y": ["q"], "xlabel": "p = tr σ / 3", "ylabel": "q = von Mises stress"}]},
-    {"title": "Tangent check", "file": "tangent_error.png", "columns": 1,
+    {"title": "Tangent check", "columns": 1,
      "text": "Relative difference between the material tangent and central differences of the stress at the converged state.",
      "panels": [{"cases": "*", "x": "step", "y": [{"expr": "np.maximum(tangent_error, 1e-17)", "label": "‖C − C_fd‖ / ‖C‖"}], "logy": true}]}
   ],

@@ -24,10 +24,10 @@
     {"name": "hydrostatic loading stays elastic", "case": "hydrostatic_strain", "value": "kappa", "tolerance": 0}
   ],
   "figures": [
-    {"title": "Against the closed form", "file": "closed_form.png", "columns": 1, "panels": [
+    {"title": "Against the closed form", "columns": 1, "panels": [
       {"title": "monotonic uniaxial stress", "case": "uniaxial_stress_monotonic", "x": "strain_11", "y": ["stress_11"],
        "reference": [{"y": "np.where(strain_11 <= sigma_0 / E, E * strain_11, (strain_11 + sigma_0 / H) / (1 / E + 1 / H))", "label": "bilinear"}]}]},
-    {"title": "History variables", "file": "history.png", "panels": [
+    {"title": "History variables", "panels": [
       {"title": "equivalent plastic strain", "cases": ["uniaxial_stress", "simple_shear"], "x": "step", "y": ["kappa"]},
       {"title": "plastic strain, uniaxial stress", "case": "uniaxial_stress", "x": "strain_11", "y": ["eps_p_11", "eps_p_22", "eps_p_33"]}]}
   ]

@@ -57,23 +57,40 @@ class CheckTest(unittest.TestCase):
         self.assertFalse(r.passed)
 
 
-class MarkdownTest(unittest.TestCase):
-    def test_replaces_only_the_marked_block(self):
-        text = f"# t\n\nhand written\n\n{mr.BEGIN}\nold\n{mr.END}\n\ntail\n"
-        out = mr.replace_results(text, "new")
-        self.assertIn("hand written", out)
-        self.assertIn(f"{mr.BEGIN}\nnew\n{mr.END}", out)
-        self.assertNotIn("old", out)
-        self.assertIn("tail", out)
+class HtmlTest(unittest.TestCase):
+    SPEC = {"parameters": {"K": 2.0, "steps": 5}, "derived": {"E": "3 * K"},
+            "parameter_usage": {"K": ["model.materials[1].K", "cases[0].scale", "checks[0].tolerance"], "steps": []},
+            "model": {"materials": [{"name": "strain"}, {"name": "elastic"}]},
+            "cases": [{"name": "uniaxial_strain"}], "checks": [{"name": "tangent"}]}
 
-    def test_appends_the_block_when_missing(self):
-        self.assertTrue(mr.replace_results("# t\n", "new").endswith(f"{mr.BEGIN}\nnew\n{mr.END}\n"))
+    def test_parameter_rows_name_the_material_and_case(self):
+        rows = mr.parameter_rows(self.SPEC)
+        self.assertEqual(rows[0], ("K", "2.0", ["elastic.K", "uniaxial_strain.scale", "check 'tangent'.tolerance"]))
+        self.assertEqual(rows[1], ("steps", "5", []))
+
+    def test_derived_rows_show_expression_and_value(self):
+        expr = mr.Expressions(self.SPEC, {})
+        self.assertEqual(mr.derived_rows(self.SPEC, expr), [("E", "3 * K", "6")])
+
+    def test_table_escapes_cells(self):
+        html = mr.html_table(["a"], [["<b>&"]])
+        self.assertIn("&lt;b&gt;&amp;", html)
+        self.assertNotIn("<b>&", html)
 
     def test_check_table_groups_by_name(self):
         rows = [mr.CheckResult("c", "a", 1e-9, 1e-6), mr.CheckResult("c", "b", 1e-3, 1e-6)]
-        table = mr.check_table(rows)
-        self.assertEqual(len([l for l in table if l.startswith("| c |")]), 1)
-        self.assertIn("**FAIL** (b)", table[-1])
+        html = mr.check_section(rows)
+        self.assertEqual(html.count("<td>c</td>"), 1)
+        self.assertIn("FAIL (b)", html)
+
+    def test_index_links_every_report(self):
+        page = mr.index_page([("a", 3, 3, True), ("b", 1, 2, False)])
+        self.assertIn('href="a.html"', page)
+        self.assertIn("1/2", page)
+
+    def test_figures_are_embedded(self):
+        uri = mr.data_uri(b"\x89PNG")
+        self.assertTrue(uri.startswith("data:image/png;base64,"))
 
 
 class PanelRegistryTest(unittest.TestCase):
