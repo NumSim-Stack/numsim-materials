@@ -1,0 +1,41 @@
+{
+  "title": "rule_of_mixture",
+  "include": ["../standard_small_strain.json"],
+  "parameters": {"K1": 166666.67, "G1": 76923.08, "K2": 3333.33, "G2": 1153.85, "c1": 0.3},
+  "derived": {
+    "c2": "1 - c1",
+    "K_V": "c1 * K1 + (1 - c1) * K2", "G_V": "c1 * G1 + (1 - c1) * G2",
+    "K_R": "1 / (c1 / K1 + (1 - c1) / K2)", "G_R": "1 / (c1 / G1 + (1 - c1) / G2)",
+    "E_V": "9 * K_V * G_V / (3 * K_V + G_V)", "E_R": "9 * K_R * G_R / (3 * K_R + G_R)",
+    "E_H": "9 * (K_V + K_R) / 2 * (G_V + G_R) / 2 / (3 * (K_V + K_R) / 2 + (G_V + G_R) / 2)"
+  },
+  "model": {"materials": [
+    {"type": "external_strain_source", "name": "strain"},
+    {"type": "constant_scalar", "name": "K_stiff", "value": "$K1"}, {"type": "constant_scalar", "name": "G_stiff", "value": "$G1"},
+    {"type": "constant_scalar", "name": "K_soft", "value": "$K2"}, {"type": "constant_scalar", "name": "G_soft", "value": "$G2"},
+    {"type": "isotropic_tangent", "name": "C_stiff", "K_source": "K_stiff", "G_source": "G_stiff"},
+    {"type": "isotropic_tangent", "name": "C_soft", "K_source": "K_soft", "G_source": "G_soft"},
+    {"type": "constant_scalar", "name": "c_stiff", "value": "$c1"},
+    {"type": "constant_scalar", "name": "c_soft", "value": 0.7},
+    {"type": "phase", "name": "stiff", "tangent_source": "C_stiff", "fraction_source": "c_stiff"},
+    {"type": "phase", "name": "soft", "tangent_source": "C_soft", "fraction_source": "c_soft"},
+    {"type": "rule_of_mixture", "name": "voigt", "phases": ["stiff", "soft"], "kernel": "voigt"},
+    {"type": "rule_of_mixture", "name": "reuss", "phases": ["stiff", "soft"], "kernel": "reuss"},
+    {"type": "rule_of_mixture", "name": "hill", "phases": ["stiff", "soft"], "kernel": "hill"},
+    {"type": "linear_stress", "name": "voigt_stress", "tangent_source": "voigt", "strain_source": "strain"},
+    {"type": "linear_stress", "name": "reuss_stress", "tangent_source": "reuss", "strain_source": "strain"},
+    {"type": "linear_stress", "name": "hill_stress", "tangent_source": "hill", "strain_source": "strain"}]},
+  "point": {"strain_source": "strain", "stress_source": "hill_stress", "tangent_source": "hill"},
+  "record": {"sig_voigt": "voigt_stress::stress", "sig_reuss": "reuss_stress::stress", "A_stiff": "hill::concentration_stiff[1,1,1,1]", "A_soft": "hill::concentration_soft[1,1,1,1]"},
+  "checks": [
+    {"name": "Hill: σ11 = E_H ε11 (uniaxial stress)", "case": "uniaxial_stress", "value": "stress_11", "expected": "E_H * strain_11", "tolerance": 1e-10, "relative": true, "plot": {"x": "strain_11"}},
+    {"name": "Voigt: σ11 = (K_V + 4 G_V / 3) ε11 (uniaxial strain)", "case": "uniaxial_strain", "value": "sig_voigt_11", "expected": "(K_V + 4 * G_V / 3) * strain_11", "tolerance": 1e-10, "relative": true},
+    {"name": "Reuss: σ11 = (K_R + 4 G_R / 3) ε11 (uniaxial strain)", "case": "uniaxial_strain", "value": "sig_reuss_11", "expected": "(K_R + 4 * G_R / 3) * strain_11", "tolerance": 1e-10, "relative": true},
+    {"name": "Voigt ≥ Hill ≥ Reuss (|σ| under uniaxial strain)", "case": "uniaxial_strain", "value": "np.maximum(abs(stress_11) - abs(sig_voigt_11), 0) + np.maximum(abs(sig_reuss_11) - abs(stress_11), 0)", "tolerance": 1e-9},
+    {"name": "Hill concentrations average to one", "cases": "*", "value": "c1 * A_stiff + (1 - c1) * A_soft", "expected": 1, "tolerance": 1e-12}
+  ],
+  "figures": [
+    {"title": "The three kernels under uniaxial strain", "columns": 1, "panels": [
+      {"case": "uniaxial_strain", "x": "strain_11", "y": [{"expr": "sig_voigt_11", "label": "Voigt"}, {"expr": "stress_11", "label": "Hill"}, {"expr": "sig_reuss_11", "label": "Reuss"}], "ylabel": "σ₁₁"}]}
+  ]
+}
