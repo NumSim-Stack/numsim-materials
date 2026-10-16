@@ -11,6 +11,14 @@
   "point": {"strain_source": "strain", "stress_source": "j2"},
   "record": {"kappa": "j2::equivalent_plastic_strain", "R": "hardening::hardening_stress", "dR": "hardening::hardening_modulus",
              "return_map_iterations": "solver::iterations"},
+  "cases": [
+    {"name": "uniaxial_stress_monotonic", "control": "uniaxial_stress", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], "scale": "$amplitude", "steps": "$steps", "tangent_every": 0},
+    {"name": "tension_then_shear", "points": [[0, 0, 0, 0, 0, 0], [1, 0, 0, 0, 0, 0], [1, 0, 0, 1, 0, 0]], "scale": "$amplitude", "steps": "$steps", "tangent_every": "$tangent_every"}
+  ],
+  "studies": [
+    {"name": "radial return on a proportional path", "case": "uniaxial_stress_monotonic", "steps": [5, 10, 20, 40, 80], "quantity": "stress_11"},
+    {"name": "backward Euler on a non-proportional path", "case": "tension_then_shear", "steps": [5, 10, 20, 40, 80, 160, 320], "quantity": "stress_12", "min_order": 0.9}
+  ],
   "checks": [
     {"name": "R = K∞ (1 − exp(−δ κ))", "cases": "*", "value": "R", "expected": "K_inf * (1 - np.exp(-delta * kappa))", "tolerance": 1e-12, "relative": true, "plot": {"x": "kappa", "xlabel": "κ"}},
     {"name": "R' = K∞ δ exp(−δ κ)", "cases": "*", "value": "dR", "expected": "K_inf * delta * np.exp(-delta * kappa)", "tolerance": 1e-12, "relative": true},

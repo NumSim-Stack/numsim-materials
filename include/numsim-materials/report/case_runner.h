@@ -48,7 +48,7 @@ bool run_case(nlohmann::json const &doc, load_case<typename Traits::value_type> 
   sink.record({c.path.unloaded(), initial, columns.values()});
 
   for (auto const &s : c.path.steps()) {
-    auto res{driver.step(tensor2{s.load * c.direction}, tensor2{s.load * c.stress}, c.control, s.time, s.dt)};
+    auto res{driver.step(c.strain_at(s), tensor2{s.load * c.stress}, c.control, s.time, s.dt)};
     step_record<Traits> rec{s, std::move(res), columns.values()}; // columns before the tangent check re-evaluates the graph
     if (!rec.result.converged) {
       sink.record(rec);

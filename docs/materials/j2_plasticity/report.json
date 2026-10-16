@@ -13,7 +13,12 @@
   "record": {"kappa": "j2::equivalent_plastic_strain", "eps_p": "j2::plastic_strain", "R": "hardening::hardening_stress",
              "return_map_iterations": "solver::iterations"},
   "cases": [
-    {"name": "uniaxial_stress_monotonic", "control": "uniaxial_stress", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], "scale": "$amplitude", "steps": "$steps"}
+    {"name": "uniaxial_stress_monotonic", "control": "uniaxial_stress", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], "scale": "$amplitude", "steps": "$steps"},
+    {"name": "tension_then_shear", "points": [[0, 0, 0, 0, 0, 0], [1, 0, 0, 0, 0, 0], [1, 0, 0, 1, 0, 0]], "scale": "$amplitude", "steps": "$steps", "tangent_every": "$tangent_every"}
+  ],
+  "studies": [
+    {"name": "radial return on a proportional path", "case": "uniaxial_stress_monotonic", "steps": [5, 10, 20, 40, 80], "quantity": "stress_11"},
+    {"name": "backward Euler on a non-proportional path", "case": "tension_then_shear", "steps": [5, 10, 20, 40, 80, 160, 320], "quantity": "stress_12", "min_order": 0.9}
   ],
   "checks": [
     {"name": "bilinear σ11(ε11)", "case": "uniaxial_stress_monotonic", "value": "stress_11",
@@ -32,6 +37,9 @@
        "y": [{"expr": "np.where(np.diff(kappa, prepend=0) > 0, return_map_iterations, 0)", "label": "iterations"}]},
       {"title": "return-map iterations, simple shear", "case": "simple_shear", "x": "step",
        "y": [{"expr": "np.where(np.diff(kappa, prepend=0) > 0, return_map_iterations, 0)", "label": "iterations"}]}]},
+    {"title": "Non-proportional path: tension, then shear at constant tension", "panels": [
+      {"title": "stress components", "case": "tension_then_shear", "x": "step", "y": ["stress_11", "stress_12", "stress_22"]},
+      {"title": "stress path", "case": "tension_then_shear", "x": "stress_11", "y": ["stress_12"]}]},
     {"title": "History variables", "panels": [
       {"title": "equivalent plastic strain", "cases": ["uniaxial_stress", "simple_shear"], "x": "step", "y": ["kappa"]},
       {"title": "plastic strain, uniaxial stress", "case": "uniaxial_stress", "x": "strain_11", "y": ["eps_p_11", "eps_p_22", "eps_p_33"]}]}

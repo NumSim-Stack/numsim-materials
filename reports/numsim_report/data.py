@@ -7,7 +7,7 @@ import pathlib
 import re
 import subprocess
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -28,6 +28,7 @@ class RunOutput:
     graph: list       # materials with parameters, produced properties and inputs
     cases: dict[str, CaseData]
     converged: bool
+    studies: dict[str, dict[int, CaseData]] = field(default_factory=dict)  # study -> steps -> run
 
 
 class ToolError(RuntimeError):
@@ -63,7 +64,11 @@ def run_tool(tool: str, report: pathlib.Path) -> RunOutput:
         if code == 2:
             raise ToolError(f"{report}: material_report rejected the document")
         spec = json.loads((out / "resolved.json").read_text())
-        cases = {c["name"]: CaseData(c["name"], with_invariants(read_csv(out / f"{c['name']}.csv")),
-                                     read_csv(out / f"{c['name']}_iterations.csv"))
-                 for c in spec["cases"] if (out / f"{c['name']}.csv").exists()}
-        return RunOutput(spec, json.loads((out / "graph.json").read_text()), cases, code == 0)
+        def load(stem: str) -> CaseData | None:
+            if not (out / f"{stem}.csv").exists():
+                return None
+            return CaseData(stem, with_invariants(read_csv(out / f"{stem}.csv")), read_csv(out / f"{stem}_iterations.csv"))
+
+        cases = {c["name"]: d for c in spec["cases"] if (d := load(c["name"]))}
+        studies = {s["name"]: {n: d for n in s["steps"] if (d := load(f"{s['name']}_{n}"))} for s in spec.get("studies", [])}
+        return RunOutput(spec, json.loads((out / "graph.json").read_text()), cases, code == 0, studies)

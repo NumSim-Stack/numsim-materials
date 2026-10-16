@@ -60,6 +60,34 @@ TEST(LoadPath, InterpolatesSegmentsWithScaleAndTime) {
   EXPECT_EQ(path.steps().front().index, 1);
 }
 
+TEST(LoadPath, StepsKnowTheirSegmentAndFraction) {
+  r::load_path<T> const path{{0, 1, 0}, 2};
+  auto const s3{path.at(3)};
+  EXPECT_EQ(s3.segment, 1u);
+  EXPECT_DOUBLE_EQ(s3.fraction, 0.5);
+  EXPECT_DOUBLE_EQ(s3.load, 0.5);
+}
+
+TEST(ReportJson, ParsesANonProportionalCaseFromPoints) {
+  auto const c{r::parse_case<T>(json::parse(R"({"name": "ts", "points": [[0, 0, 0, 0, 0, 0], [1, 0, 0, 0, 0, 0], [1, 0, 0, 1, 0, 0]],
+    "scale": 0.01, "steps": 10})"))};
+  ASSERT_EQ(c.points.size(), 3u);
+  EXPECT_DOUBLE_EQ(c.points[2](0, 0), 0.01);
+  EXPECT_DOUBLE_EQ(c.points[2](0, 1), 0.01);
+  EXPECT_EQ(c.path.size(), 20u);
+  EXPECT_DOUBLE_EQ(c.path.at(15).fraction, 0.5);
+  EXPECT_DOUBLE_EQ(c.strain_at(c.path.at(15))(0, 1), 0.005);
+  EXPECT_DOUBLE_EQ(c.strain_at(c.path.at(15))(0, 0), 0.01);
+  EXPECT_THROW(r::parse_case<T>(json::parse(R"({"name": "x", "points": [[0, 0, 0, 0, 0, 0]], "path": [0, 1]})")), std::invalid_argument);
+}
+
+TEST(ReportJson, ADirectionWithAPathExpandsToPoints) {
+  auto const c{r::parse_case<T>(json::parse(R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1, -1], "scale": 0.01, "steps": 4})"))};
+  ASSERT_EQ(c.points.size(), 3u);
+  EXPECT_DOUBLE_EQ(c.points[2](0, 0), -0.01);
+  EXPECT_DOUBLE_EQ(c.strain_at(c.path.at(6))(0, 0), 0.0);
+}
+
 TEST(LoadPath, RejectsStepsOutsideThePath) {
   r::load_path<T> const path{{0, 1}, 2};
   EXPECT_THROW((void)path.at(0), std::out_of_range);
@@ -82,13 +110,28 @@ TEST(ReportJson, ParsesThePointAndTheColumns) {
   EXPECT_EQ(cols[2], (std::pair<std::string, std::string>{"kappa", "m::kappa"}));
 }
 
+TEST(ReportJson, ParsesRefinementStudies) {
+  auto const doc = json::parse(R"({"cases": [{"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], "steps": 50}],
+    "studies": [{"name": "s", "case": "u", "steps": [10, 20]}]})");
+  auto const studies{r::parse_studies(doc)};
+  ASSERT_EQ(studies.size(), 1u);
+  EXPECT_EQ(studies[0].name, "s");
+  EXPECT_EQ(studies[0].steps, (std::vector<int>{10, 20}));
+  auto const c{r::parse_case<T>(r::with_steps(studies[0].case_spec, 20))};
+  EXPECT_EQ(c.path.size(), 20u);
+  EXPECT_EQ(c.name, "u");
+  EXPECT_TRUE(r::parse_studies(json::parse(R"({"cases": []})")).empty());
+  EXPECT_THROW(r::parse_studies(json::parse(R"({"cases": [], "studies": [{"name": "s", "case": "nope", "steps": [1]}]})")),
+               std::invalid_argument);
+}
+
 TEST(ReportJson, ParsesALoadCase) {
   auto const c{r::parse_case<T>(json::parse(R"({"name": "u", "control": "mixed", "stress_components": ["22", "33"],
     "direction": [1, 0, 0, 0.5, 0, 0], "path": [0, 1], "steps": 4, "scale": 0.01})"))};
   EXPECT_EQ(c.name, "u");
   EXPECT_EQ(c.path.size(), 4u);
-  EXPECT_DOUBLE_EQ(c.direction(0, 1), 0.5);
-  EXPECT_DOUBLE_EQ(c.direction(1, 0), 0.5);
+  EXPECT_DOUBLE_EQ(c.points[1](0, 1), 0.005); // scale * path * direction
+  EXPECT_DOUBLE_EQ(c.points[1](1, 0), 0.005);
   tensor2 const free{tmech::dcontract(c.control.stress_projector(), tmech::eye<T, 3, 2>())};
   EXPECT_DOUBLE_EQ(free(1, 1), 1);
   EXPECT_DOUBLE_EQ(free(0, 0), 0);

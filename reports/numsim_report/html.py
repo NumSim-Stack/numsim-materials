@@ -101,7 +101,7 @@ def load_case_section(run: RunOutput) -> str:
         ok = bool(np.all(data.columns["converged"] == 1))
         rows.append([c["name"], c.get("control", "strain"), len(it),
                      f"{int(np.max(it, initial=0))} / {np.mean(it) if len(it) else 0:.2f}",
-                     f"{np.nanmax(err) if len(err) else 0:.1e}", verdict(ok, "yes" if ok else "no")])
+                     f"{np.nanmax(err):.1e}" if np.isfinite(err).any() else "–", verdict(ok, "yes" if ok else "no")])
     return "<h2>Load cases</h2>" + table(
         ["case", "control", "steps", "iterations (max / mean)", "max tangent error", "converged"], rows, [2, 3, 4])
 
@@ -119,6 +119,22 @@ def check_section(checks: list[CheckResult], plots: list[tuple[str, bytes]] = ()
     out = "<h2>Checks</h2>" + table(["check", "cases", "max error (case)", "tolerance", "result"], rows, [1, 2, 3])
     for name, png in plots:
         out += f'<h3>{esc(name)}</h3><figure><img alt="{esc(name)}" src="{data_uri(png)}"></figure>'
+    return out
+
+
+def study_section(studies: list, plots: list[bytes]) -> str:
+    """studies: StudyResult list; plots: one PNG per study."""
+    if not studies:
+        return ""
+    out = "<h2>Step-size study</h2>"
+    for res, png in zip(studies, plots):
+        out += f"<h3>{esc(res.name)}</h3>"
+        rows = [[r.steps, f"{r.increment:.3e}", f"{r.error:.3e}"] for r in res.rows]
+        rows.append([res.reference_steps, f"{1.0 / res.reference_steps:.3e}", "reference"])
+        out += table(["steps per segment", "segment fraction per step", f"error of {res.quantity}"], rows, [0, 1, 2])
+        summary = ("exact on this path (errors at round-off)" if res.exact
+                   else f"observed order {res.order:.2f}, required ≥ {res.min_order:g}")
+        out += f'<p>{esc(summary)}: {verdict(res.passed)}</p><figure><img alt="{esc(res.name)}" src="{data_uri(png)}"></figure>'
     return out
 
 
@@ -143,12 +159,14 @@ def revision(folder: pathlib.Path) -> str:
 
 
 def report_page(run: RunOutput, expr: Expressions, checks: list[CheckResult], figures: list[bytes],
-                folder: pathlib.Path, check_plots: list[tuple[str, bytes]] = ()) -> str:
-    passed = sum(c.passed for c in checks)
-    meta = (f"{passed}/{len(checks)} checks passed · {'all steps converged' if run.converged else 'a case did not converge'}"
+                folder: pathlib.Path, check_plots: list[tuple[str, bytes]] = (), studies: list = (),
+                study_plots: list[bytes] = ()) -> str:
+    passed = sum(c.passed for c in checks) + sum(s.passed for s in studies)
+    meta = (f"{passed}/{len(checks) + len(studies)} checks passed · {'all steps converged' if run.converged else 'a case did not converge'}"
             f" · {esc(revision(folder))} · {datetime.date.today().isoformat()}")
     body = (f'<div class="meta">{meta}</div>' + parameter_section(run, expr) + load_case_section(run)
-            + check_section(checks, check_plots) + figure_section(run.spec, figures) + graph_section(run))
+            + check_section(checks, check_plots) + study_section(studies, study_plots) + figure_section(run.spec, figures)
+            + graph_section(run))
     return page(run.spec.get("title", folder.name), body)
 
 

@@ -1,5 +1,6 @@
 // material_report <report.json> <output directory>
-// Writes resolved.json, graph.json and per case <case>.csv and <case>_iterations.csv.
+// Writes resolved.json, graph.json, per case <case>.csv and <case>_iterations.csv, and per study
+// <study>_<steps>.csv (the study's case run with that many steps per segment).
 // Exit code 0: all steps converged, 1: a step did not converge, 2: input error.
 
 #include <filesystem>
@@ -27,20 +28,26 @@ nlohmann::json load(std::filesystem::path const &file) {
   return r::resolve_report(nlohmann::json::parse(in), file.parent_path());
 }
 
+/// Runs one case, writing <stem>.csv and <stem>_iterations.csv; false if a step did not converge.
+bool run_one(nlohmann::json const &doc, r::load_case<T> const &c, std::filesystem::path const &stem) {
+  std::ofstream steps{stem.string() + ".csv"}, residuals{stem.string() + "_iterations.csv"};
+  r::csv_sink<policy> sink{steps, residuals};
+  if (r::run_case<policy>(doc, c, sink))
+    return true;
+  std::cerr << "material_report: " << stem.filename().string() << ": a step did not converge\n";
+  return false;
+}
+
 bool run(nlohmann::json const &doc, std::filesystem::path const &out) {
   std::filesystem::create_directories(out);
   std::ofstream{out / "resolved.json"} << doc.dump(2) << "\n";
   std::ofstream{out / "graph.json"} << r::describe_graph<policy>(doc).dump(2) << "\n";
   bool converged{true};
-  for (auto const &spec : doc.at("cases")) {
-    auto const c{r::parse_case<T>(spec)};
-    std::ofstream steps{out / (c.name + ".csv")}, residuals{out / (c.name + "_iterations.csv")};
-    r::csv_sink<policy> sink{steps, residuals};
-    if (!r::run_case<policy>(doc, c, sink)) {
-      std::cerr << "material_report: " << c.name << ": a step did not converge\n";
-      converged = false;
-    }
-  }
+  for (auto const &spec : doc.at("cases"))
+    converged = run_one(doc, r::parse_case<T>(spec), out / spec.at("name").get<std::string>()) && converged;
+  for (auto const &study : r::parse_studies(doc))
+    for (auto const n : study.steps)
+      converged = run_one(doc, r::parse_case<T>(r::with_steps(study.case_spec, n)), out / (study.name + "_" + std::to_string(n))) && converged;
   return converged;
 }
 
