@@ -57,7 +57,7 @@ load_case<T> parse_case(nlohmann::json const &c) {
           load_path<T>{c.at("path").get<std::vector<T>>(), c.value("steps", 50), c.value("scale", T{1}), c.value("dt", T{1})}};
 }
 
-/// "record" as (column, "material::property") pairs, sorted by column name.
+/// "record" as (column, "material::property") pairs; nlohmann::json orders them by column name.
 inline std::vector<std::pair<std::string, std::string>> parse_record(nlohmann::json const &doc) {
   std::vector<std::pair<std::string, std::string>> out;
   auto const record = doc.value("record", nlohmann::json::object());

@@ -73,7 +73,7 @@ private:
       require(name, idx.size() == 4, "a rank-4 tensor takes four indices");
       push(name, [t4, idx] { return (*t4)(idx[0], idx[1], idx[2], idx[3]); });
     } else {
-      throw std::invalid_argument("column '" + name + "': '" + source + "' is not a scalar or 3D tensor property");
+      throw std::invalid_argument("column '" + name + "': '" + source + "' is not a scalar, rank-2 or rank-4 3D tensor property");
     }
   }
 
