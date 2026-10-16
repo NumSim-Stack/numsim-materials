@@ -21,7 +21,7 @@
              "C1111_random": "random::tangent[1,1,1,1]", "C2222_random": "random::tangent[2,2,2,2]", "C1122_random": "random::tangent[1,1,2,2]", "C1212_random": "random::tangent[1,2,1,2]",
              "A_m": "injection::concentration_matrix[1,1,1,1]", "A_f": "injection::concentration_fibre[1,1,1,1]"},
   "checks": [
-    {"name": "aligned fibres equal the unidirectional Mori-Tanaka spheroid", "cases": "*", "value": "np.sqrt((sig_aligned_11 - sig_ud_11)**2 + (sig_aligned_22 - sig_ud_22)**2 + (sig_aligned_12 - sig_ud_12)**2)", "tolerance": 1e-9, "relative": true, "expected": "np.sqrt(sig_ud_11**2 + sig_ud_22**2 + sig_ud_12**2)"},
+    {"name": "aligned fibres equal the unidirectional Mori-Tanaka spheroid", "cases": "*", "value": "np.sqrt((sig_aligned_11 - sig_ud_11)**2 + (sig_aligned_22 - sig_ud_22)**2 + (sig_aligned_12 - sig_ud_12)**2) / np.maximum(np.sqrt(sig_ud_11**2 + sig_ud_22**2 + sig_ud_12**2), 1e-30)", "tolerance": 1e-9},
     {"name": "random orientation is isotropic: C1111 = C2222, C1212 = (C1111 − C1122)/2", "case": "uniaxial_strain", "value": "np.maximum(abs(C1111_random - C2222_random), abs(C1212_random - (C1111_random - C1122_random) / 2)) / C1111_random", "tolerance": 1e-6},
     {"name": "injection moulded: stiffer along the flow than across", "case": "uniaxial_strain", "value": "np.maximum(stress_22 - stress_11, 0)", "where": "strain_11 > 0", "tolerance": 0},
     {"name": "ordering along x1: aligned ≥ injection ≥ random", "case": "uniaxial_strain", "value": "np.maximum(stress_11 - sig_aligned_11, 0) + np.maximum(sig_random_11 - stress_11, 0)", "where": "strain_11 > 0", "tolerance": 1e-9},
