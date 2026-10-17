@@ -2,32 +2,30 @@
 #define NUMSIM_MATERIALS_SHORT_FIBRE_COMPOSITE_H
 
 #include <cmath>
-#include <limits>
 #include <span>
 #include <stdexcept>
 #include <string>
-#include <utility>
 #include <vector>
 
 #include <tmech/tmech.h>
 #include "numsim-materials/core/elastic_constants.h"
-#include "numsim-materials/core/eshelby.h"
-#include "numsim-materials/core/isotropize.h"
+#include "numsim-materials/core/lebedev.h"
 #include "numsim-materials/core/material_base.h"
+#include "numsim-materials/core/parameter_helpers.h"
 #include "numsim-materials/core/orientation.h"
 #include "numsim-materials/core/tensor_identities.h"
 
 namespace numsim::materials {
 
-/// Mori-Tanaka stiffness of spheroidal fibres in an isotropic matrix, averaged over the fibre
-/// orientation distribution (ACG with the second-order orientation tensor): either the
-/// orientation average of the dilute concentration inside Mori-Tanaka ("concentration") or the
-/// average of the unidirectional stiffness ("stiffness"). Outputs "tangent", "stress",
-/// "concentration_matrix", "concentration_fibre".
+/// Mori-Tanaka stiffness of fibres in an isotropic matrix, averaged over the fibre orientation
+/// distribution (ACG with the second-order orientation tensor): the orientation average of the dilute
+/// concentration inside Mori-Tanaka ("concentration") or of the unidirectional stiffness ("stiffness").
+/// Matrix and fibre are phase nodes (produced tangent and fraction; the fibre's "eshelby" is its shape
+/// along x1); everything is formed once in the fibre frame and rotated onto the quadrature directions. A
+/// tangent producer: outputs "tangent", "concentration_matrix", "concentration_fibre".
 ///
-/// Parameters: "matrix", "fibre" (isotropic materials providing "tangent"), "volume_fraction",
-/// "aspect_ratio" (length over diameter), "orientation" [a11, a22, a33, a12, a13, a23],
-/// "averaging", "precision" (Lebedev degree), "strain_source", "tangent_property".
+/// Parameters: "matrix", "fibre" (phase names), "orientation" [a11, a22, a33, a12, a13, a23], "averaging",
+/// "precision" (Lebedev degree).
 template <typename Traits>
 class short_fibre_composite final : public material_base<short_fibre_composite<Traits>, Traits> {
 public:
@@ -38,92 +36,86 @@ public:
   static_assert(Dim == 3, "short_fibre_composite: three-dimensional");
   using tensor2 = tmech::tensor<value_type, 3, 2>;
   using tensor4 = tmech::tensor<value_type, 3, 4>;
-  using vector = tmech::tensor<value_type, 3, 1>;
 
   enum class averaging_kind { concentration, stiffness };
 
   template <typename... Args>
   explicit short_fibre_composite(Args &&...args)
       : base(std::forward<Args>(args)...),
-        m_stress(base::template add_output<tensor2>("stress", &short_fibre_composite::update)),
-        m_tangent(base::template add_output<tensor4>("tangent")),
+        m_tangent(base::template add_output<tensor4>("tangent", &short_fibre_composite::compute)),
         m_A_matrix(base::template add_output<tensor4>("concentration_matrix")),
         m_A_fibre(base::template add_output<tensor4>("concentration_fibre")),
-        m_c(base::template get_parameter<value_type>("volume_fraction")),
-        m_aspect_ratio(base::template get_parameter<value_type>("aspect_ratio")),
         m_averaging(parse_averaging(base::template get_parameter<std::string>("averaging"))),
-        m_precision(static_cast<std::size_t>(base::template get_parameter<int>("precision"))),
-        m_Cm(base::template add_input<tensor4>(base::template get_parameter<std::string>("matrix"),
-                                               base::template get_parameter<std::string>("tangent_property"), EdgeKind::Global)),
-        m_Cf(base::template add_input<tensor4>(base::template get_parameter<std::string>("fibre"),
-                                               base::template get_parameter<std::string>("tangent_property"), EdgeKind::Global)),
-        m_strain(base::template add_input<tensor2>(base::template get_parameter<std::string>("strain_source"), "strain",
-                                                   EdgeKind::Global)) {
+        m_Cm(base::template add_input<tensor4>(base::template get_parameter<std::string>("matrix"), "tangent", EdgeKind::Global)),
+        m_cm(base::template add_input<value_type>(base::template get_parameter<std::string>("matrix"), "volume_fraction", EdgeKind::Global)),
+        m_Cf(base::template add_input<tensor4>(base::template get_parameter<std::string>("fibre"), "tangent", EdgeKind::Global)),
+        m_c(base::template add_input<value_type>(base::template get_parameter<std::string>("fibre"), "volume_fraction", EdgeKind::Global)),
+        m_S(base::template add_input<tensor4>(base::template get_parameter<std::string>("fibre"), "eshelby", EdgeKind::Global)) {
     auto const &a{base::template get_parameter<std::vector<value_type>>("orientation")};
+    auto const precision{base::template get_parameter<int>("precision")};
     if (a.size() != 6)
       throw std::invalid_argument("short_fibre_composite '" + base::name() + "': orientation takes [a11, a22, a33, a12, a13, a23]");
-    if (!(m_c >= 0 && m_c <= 1) || !(m_aspect_ratio > 0))
-      throw std::invalid_argument("short_fibre_composite '" + base::name() + "': needs a fraction in [0, 1] and a positive aspect ratio");
-    (void)lebedev::rule(m_precision); // validates the precision
+    if (precision < 0)
+      throw std::invalid_argument("short_fibre_composite '" + base::name() + "': precision must be a Lebedev degree");
+    (void)lebedev::rule(static_cast<std::size_t>(precision)); // validated here: an aligned distribution never uses it
     tensor2 const A{symmetric_tensor<value_type>(std::span<value_type const, 6>{a.data(), 6})};
-    m_nodes = orientation::nodes(orientation::fit_acg(A), m_precision);
+    for (auto const &[n, w] : orientation::nodes(orientation::fit_acg(A), static_cast<std::size_t>(precision))) {
+      tensor2 const R{rotation_to(n)}; // the rank-4 rotation as two fixed tensors per direction
+      m_Q.push_back(tensor4{tmech::otimesu(R, R)});
+      m_Qt.push_back(tensor4{tmech::otimesu(tmech::trans(R), tmech::trans(R))});
+      m_w.push_back(w);
+    }
   }
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
-    para.template insert<std::string>("matrix").template add<is_required>();
-    para.template insert<std::string>("fibre").template add<is_required>();
-    para.template insert<value_type>("volume_fraction").template add<is_required>();
-    para.template insert<value_type>("aspect_ratio").template add<is_required>();
-    para.template insert<std::vector<value_type>>("orientation").template add<is_required>();
-    para.template insert<std::string>("averaging").template add<set_default>(std::string{"concentration"});
-    para.template insert<int>("precision").template add<set_default>(15);
-    para.template insert<std::string>("strain_source").template add<is_required>();
-    para.template insert<std::string>("tangent_property").template add<set_default>(std::string{"tangent"});
+    required<std::string>(para, "matrix");
+    required<std::string>(para, "fibre");
+    required<std::vector<value_type>>(para, "orientation");
+    optional<std::string>(para, "averaging", std::string{"concentration"});
+    optional<int>(para, "precision", 23);
     return para;
   }
 
   /// One callback for every output.
-  void update() {
+  void compute() {
     auto const &Is{sym_identity<value_type, 3>()};
     auto const &Cm{m_Cm.get()};
     auto const &Cf{m_Cf.get()};
-    value_type const nu{poisson_of(Cm)};
-    if (nu != m_cached_nu) { // the Eshelby tensors depend on the matrix only
-      m_S.clear();
-      tensor4 const S1{eshelby::ellipsoid(nu, m_aspect_ratio, value_type{1}, value_type{1})}; // along x1
-      for (auto const &[n, w] : m_nodes)
-        m_S.push_back(rotate(S1, rotation_to(n)));
-      m_cached_nu = nu;
-    }
-    tensor4 const Cm_inv{tmech::inv(Cm)};
+    value_type const c{m_c.get()}, cm{m_cm.get()};
+    if (std::abs(cm + c - 1) > value_type{1e-10} || !(c < 1))
+      throw std::invalid_argument("short_fibre_composite '" + base::name() + "': the two fractions must sum to one with the fibres below one");
     tensor4 const dC{Cf - Cm};
-    tensor4 const M{tmech::dcontract(Cm_inv, dC)};
-    value_type const cm{1 - m_c};
+    tensor4 const T1{tmech::inv(Is + tmech::dcontract(m_S.get(), tensor4{tmech::dcontract(tmech::inv(Cm), dC)}))}; // dilute, fibre frame
     if (m_averaging == averaging_kind::concentration) {
-      tensor4 T_avg;
-      for (std::size_t q{0}; q < m_nodes.size(); ++q)
-        T_avg += m_nodes[q].second * tmech::inv(Is + tmech::dcontract(m_S[q], M));
-      m_A_matrix = tmech::inv(cm * Is + m_c * T_avg);
-      m_A_fibre = tmech::dcontract(T_avg, m_A_matrix);
-    } else {
-      m_A_fibre = tensor4{};
-      for (std::size_t q{0}; q < m_nodes.size(); ++q) {
-        tensor4 const Tq{tmech::inv(Is + tmech::dcontract(m_S[q], M))};
-        m_A_fibre += m_nodes[q].second * tmech::dcontract(Tq, tensor4{tmech::inv(cm * Is + m_c * Tq)});
+      // <T> and <(Cf - Cm) : T> over the directions, then Mori-Tanaka with the averaged concentration
+      tensor4 const D1{tmech::dcontract(dC, T1)};
+      tensor4 T_avg, D_avg;
+      for (std::size_t q{0}; q < m_w.size(); ++q) {
+        T_avg += m_w[q] * rotated(T1, q);
+        D_avg += m_w[q] * rotated(D1, q);
       }
-      m_A_matrix = (Is - m_c * m_A_fibre) / cm;
+      m_A_matrix = tmech::inv(cm * Is + c * T_avg);
+      m_A_fibre = tmech::dcontract(T_avg, m_A_matrix);
+      m_tangent = Cm + c * tmech::dcontract(D_avg, m_A_matrix);
+    } else {
+      // the unidirectional Mori-Tanaka stiffness and concentration, averaged over the directions
+      tensor4 const A1{tmech::dcontract(T1, tensor4{tmech::inv(cm * Is + c * T1)})};
+      tensor4 const C1{Cm + c * tmech::dcontract(dC, A1)};
+      m_A_fibre = tensor4{};
+      m_tangent = tensor4{};
+      for (std::size_t q{0}; q < m_w.size(); ++q) {
+        m_A_fibre += m_w[q] * rotated(A1, q);
+        m_tangent += m_w[q] * rotated(C1, q);
+      }
+      m_A_matrix = (Is - c * m_A_fibre) / cm;
     }
-    m_tangent = Cm + m_c * tmech::dcontract(dC, m_A_fibre);
-    m_stress = tmech::dcontract(m_tangent, m_strain.get());
   }
 
 private:
-  value_type poisson_of(tensor4 const &C) const {
-    auto const [K, G]{isotropize<value_type, 3>(C)};
-    if (tmech::norm(tensor4{C - isotropic_stiffness<value_type, 3>(K, G)}) > value_type{1e-8} * tmech::norm(C))
-      throw std::invalid_argument("short_fibre_composite '" + base::name() + "': the matrix must be isotropic");
-    return poisson_ratio(K, G);
+  /// X of the fibre frame in direction q: R X R^T on every index.
+  [[nodiscard]] tensor4 rotated(tensor4 const &X, std::size_t q) const noexcept {
+    return tmech::dcontract(tensor4{tmech::dcontract(m_Q[q], X)}, m_Qt[q]);
   }
 
   static averaging_kind parse_averaging(std::string const &s) {
@@ -134,20 +126,17 @@ private:
     throw std::invalid_argument("short_fibre_composite: unknown averaging '" + s + "' (concentration, stiffness)");
   }
 
-  tensor2 &m_stress;
   tensor4 &m_tangent;
   tensor4 &m_A_matrix;
   tensor4 &m_A_fibre;
-  value_type const &m_c;
-  value_type const &m_aspect_ratio;
   averaging_kind m_averaging;
-  std::size_t m_precision;
   input_property<tensor4, property_traits> const &m_Cm;
+  input_property<value_type, property_traits> const &m_cm;
   input_property<tensor4, property_traits> const &m_Cf;
-  input_property<tensor2, property_traits> const &m_strain;
-  std::vector<std::pair<vector, value_type>> m_nodes;
-  std::vector<tensor4> m_S;
-  value_type m_cached_nu{std::numeric_limits<value_type>::quiet_NaN()};
+  input_property<value_type, property_traits> const &m_c;
+  input_property<tensor4, property_traits> const &m_S; ///< the fibre shape along x1
+  std::vector<tensor4> m_Q, m_Qt; ///< otimesu(R, R) and its transpose per quadrature direction
+  std::vector<value_type> m_w;
 };
 
 } // namespace numsim::materials

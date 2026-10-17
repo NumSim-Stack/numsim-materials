@@ -34,7 +34,6 @@
 #include "numsim-materials/materials/phase.h"
 #include "numsim-materials/materials/rule_of_mixture.h"
 #include "numsim-materials/materials/mean_field_tangent.h"
-#include "numsim-materials/materials/mean_field_composite.h"
 #include "numsim-materials/materials/short_fibre_composite.h"
 #include "numsim-materials/materials/neo_hooke.h"
 #include "numsim-materials/materials/saint_venant_kirchhoff.h"
@@ -113,8 +112,6 @@ void register_default_materials() {
     factory.template register_type<depolarisation_spheroid<Traits>>("depolarisation_spheroid");
     factory.template register_type<depolarisation_ellipsoid<Traits>>("depolarisation_ellipsoid");
     factory.template register_type<mean_field_tangent<Traits>>("mean_field_tangent");
-    factory.template register_type<inclusion<Traits>>("inclusion");
-    factory.template register_type<mean_field_composite<Traits>>("mean_field_composite");
     factory.template register_type<short_fibre_composite<Traits>>("short_fibre_composite");
   }
   factory.template register_type<rule_of_mixture<Traits>>("rule_of_mixture");
