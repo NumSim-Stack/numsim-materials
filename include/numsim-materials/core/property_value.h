@@ -8,7 +8,7 @@ namespace numsim::materials {
 
 /// Value of a plain property, or the new value of a history property; nullptr for another type.
 template <typename T>
-T const *property_value(property_base const *p) {
+T const *property_value(property_base const *p) noexcept {
   if (auto const *plain{dynamic_cast<property<T> const *>(p)})
     return &plain->get();
   if (auto const *hist{dynamic_cast<history_property<T, property_traits> const *>(p)})

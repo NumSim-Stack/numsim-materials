@@ -33,7 +33,7 @@ public:
   [[nodiscard]] tensor4 const &stress_projector() const noexcept { return m_P; }
 
   /// Projector onto the strain-controlled components.
-  [[nodiscard]] tensor4 strain_projector() const { return tensor4{sym_identity<T, 3>() - m_P}; }
+  [[nodiscard]] tensor4 strain_projector() const noexcept { return tensor4{sym_identity<T, 3>() - m_P}; }
 
 private:
   load_control() = default;
@@ -64,7 +64,7 @@ public:
   [[nodiscard]] tensor4 const &stress_projector() const noexcept { return m_M; }
 
   /// Projector onto the prescribed components of F.
-  [[nodiscard]] tensor4 deformation_projector() const {
+  [[nodiscard]] tensor4 deformation_projector() const noexcept {
     auto const I{tmech::eye<T, 3, 2>()};
     return tensor4{tmech::otimesu(I, I) - m_M};
   }

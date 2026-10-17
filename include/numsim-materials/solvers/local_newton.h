@@ -3,6 +3,7 @@
 
 #include <string>
 #include "numsim-materials/core/material_base.h"
+#include "numsim-materials/core/parameter_helpers.h"
 #include "numsim-materials/solvers/newton_scalar.h"
 
 namespace numsim::materials {
@@ -45,9 +46,8 @@ public:
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
-    para.template insert<value_type>("tolerance")
-        .template add<set_default>(value_type{1e-10});
-    para.template insert<int>("max_iter").template add<set_default>(50);
+    optional<value_type>(para, "tolerance", value_type{1e-10});
+    optional<int>(para, "max_iter", 50);
     return para;
   }
 

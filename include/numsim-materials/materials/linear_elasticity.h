@@ -3,6 +3,7 @@
 
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_base.h"
+#include "numsim-materials/core/parameter_helpers.h"
 #include "numsim-materials/core/tensor_identities.h"
 
 namespace numsim::materials {
@@ -51,10 +52,9 @@ public:
    */
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
-    para.template insert<value_type>("K").template add<is_required>();
-    para.template insert<value_type>("G").template add<is_required>();
-    para.template insert<std::string>("strain_producer_name")
-        .template add<is_required>();
+    required<value_type>(para, "K");
+    required<value_type>(para, "G");
+    required<std::string>(para, "strain_producer_name");
     return para;
   }
 

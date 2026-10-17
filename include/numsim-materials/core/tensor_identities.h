@@ -16,7 +16,7 @@
 namespace numsim::materials {
 
 template <typename T, std::size_t Dim>
-tmech::tensor<T, Dim, 4> const &sym_identity() {
+tmech::tensor<T, Dim, 4> const &sym_identity() noexcept {
   static tmech::tensor<T, Dim, 4> const value{[] {
     auto const I{tmech::eye<T, Dim, 2>()};
     return tmech::tensor<T, Dim, 4>{(tmech::otimesu(I, I) + tmech::otimesl(I, I)) * T{0.5}};
@@ -25,7 +25,7 @@ tmech::tensor<T, Dim, 4> const &sym_identity() {
 }
 
 template <typename T, std::size_t Dim>
-tmech::tensor<T, Dim, 4> const &skew_identity() {
+tmech::tensor<T, Dim, 4> const &skew_identity() noexcept {
   static tmech::tensor<T, Dim, 4> const value{[] {
     auto const I{tmech::eye<T, Dim, 2>()};
     return tmech::tensor<T, Dim, 4>{(tmech::otimesu(I, I) - tmech::otimesl(I, I)) * T{0.5}};
@@ -35,7 +35,7 @@ tmech::tensor<T, Dim, 4> const &skew_identity() {
 
 /// I (x) I / Dim
 template <typename T, std::size_t Dim>
-tmech::tensor<T, Dim, 4> const &vol_projector() {
+tmech::tensor<T, Dim, 4> const &vol_projector() noexcept {
   static tmech::tensor<T, Dim, 4> const value{[] {
     auto const I{tmech::eye<T, Dim, 2>()};
     return tmech::tensor<T, Dim, 4>{tmech::otimes(I, I) / T{Dim}};
@@ -45,7 +45,7 @@ tmech::tensor<T, Dim, 4> const &vol_projector() {
 
 /// Isym - I (x) I / Dim
 template <typename T, std::size_t Dim>
-tmech::tensor<T, Dim, 4> const &dev_projector() {
+tmech::tensor<T, Dim, 4> const &dev_projector() noexcept {
   static tmech::tensor<T, Dim, 4> const value{sym_identity<T, Dim>() - vol_projector<T, Dim>()};
   return value;
 }
@@ -64,7 +64,7 @@ inline std::size_t component_index(std::string_view name) {
 
 /// Orthonormal basis of symmetric 3D tensors in Abaqus order.
 template <typename T>
-std::array<tmech::tensor<T, 3, 2>, 6> const &symmetric_basis() {
+std::array<tmech::tensor<T, 3, 2>, 6> const &symmetric_basis() noexcept {
   static auto const basis = [] {
     std::array<tmech::tensor<T, 3, 2>, 6> b;
     for (std::size_t a{0}; a < 6; ++a) {
@@ -90,7 +90,7 @@ inline std::size_t full_component_index(std::string_view name) {
 
 /// Basis e_i (x) e_j of all 3D rank-2 tensors, in full_components order.
 template <typename T>
-std::array<tmech::tensor<T, 3, 2>, 9> const &full_basis() {
+std::array<tmech::tensor<T, 3, 2>, 9> const &full_basis() noexcept {
   static auto const basis = [] {
     std::array<tmech::tensor<T, 3, 2>, 9> b;
     for (std::size_t a{0}; a < 9; ++a)
@@ -102,7 +102,7 @@ std::array<tmech::tensor<T, 3, 2>, 9> const &full_basis() {
 
 /// Tensor from its nine components in full_components order.
 template <typename T>
-tmech::tensor<T, 3, 2> general_tensor(std::span<T const, 9> v) {
+tmech::tensor<T, 3, 2> general_tensor(std::span<T const, 9> v) noexcept {
   tmech::tensor<T, 3, 2> t;
   for (std::size_t a{0}; a < 9; ++a)
     t(full_indices[a].first, full_indices[a].second) = v[a];
@@ -111,7 +111,7 @@ tmech::tensor<T, 3, 2> general_tensor(std::span<T const, 9> v) {
 
 /// Symmetric tensor from its components in Abaqus order (tensor, not engineering, shears).
 template <typename T>
-tmech::tensor<T, 3, 2> symmetric_tensor(std::span<T const, 6> v) {
+tmech::tensor<T, 3, 2> symmetric_tensor(std::span<T const, 6> v) noexcept {
   tmech::tensor<T, 3, 2> t;
   for (std::size_t a{0}; a < 6; ++a) {
     auto const [i, j]{voigt_indices[a]};

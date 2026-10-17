@@ -32,7 +32,7 @@ public:
 
   [[nodiscard]] std::size_t size() const noexcept { return (m_points.size() - 1) * static_cast<std::size_t>(m_steps); }
 
-  [[nodiscard]] load_step<T> unloaded() const { return {0, 0, 0, m_scale * m_points.front()}; }
+  [[nodiscard]] load_step<T> unloaded() const noexcept { return {0, 0, 0, m_scale * m_points.front()}; }
 
   [[nodiscard]] load_step<T> at(int index) const {
     if (index < 1 || index > static_cast<int>(size()))
@@ -43,7 +43,7 @@ public:
   }
 
   /// Steps 1 ... size() as a view.
-  [[nodiscard]] auto steps() const {
+  [[nodiscard]] auto steps() const noexcept {
     return std::views::iota(1, static_cast<int>(size()) + 1) | std::views::transform([this](int i) { return at(i); });
   }
 
