@@ -4,7 +4,7 @@ numsim-materials json_model document ({"materials": [...]}, a flat graph of name
 
 usage: convert_uvwmaterial_card.py <card.json> [--strain-source strain] [--prefix name]
 
-Supported: linear_elasticity, linear_elastic_incremental, saint_venant_kirchhoff,
+Supported: linear_elasticity, linear_elastic_incremental, saint_venant_kirchhoff, hencky_strains_linear_elastic,
 small_strain_rule_of_mixture_composite, small_strain_mean_field_composite,
 small_strain_short_fibre_composite, small_strain_isotropic_damage (with its state function, yield
 function and propagation law). Anything else raises with the issue of the port that covers it.
@@ -26,8 +26,7 @@ UNSUPPORTED = {
     "small_strain_isotropic_nonlocal_damage": "#121", "small_strain_short_fibre_history_composite": "#118",
     "small_strain_short_fibre_damage_nonlocal": "#121", "small_strain_short_fibre_interface_damage_nonlocal": "#121",
     "small_strain_plasticity_single_function": "#120", "small_strain_incremental_plasticity_single_function": "#120",
-    "incremental_saint_venant_kirchhoff": "#113", "hencky_strains_linear_elastic": "#113",
-    "hencky_strains_linear_thermo_elastic": "#113", "hencky_strains_linear_thermo_chemo_elastic": "#113",
+    "incremental_saint_venant_kirchhoff": "#113",
     "finite_strain_mean_field_composite": "#122", "finite_strain_mean_field_composite_explicit": "#122",
     "finite_strain_mean_field_composite_elastic": "#122", "linear_isotropic_conductivity": "#109",
     "conductivity_mean_field_composite": "#110", "gamm2022": "#123", "neo_hookean_incompressible": "#112",
@@ -106,6 +105,14 @@ class Converter:
             self.nu_of[node] = (3 * kg["K"] - 2 * kg["G"]) / (2 * (3 * kg["K"] + kg["G"]))
             return node, "tangent", True
         return self.convert(spec, name), TANGENT_PROPERTY.get(spec["name"], "tangent"), False
+
+    def convert_hencky_strains_linear_elastic(self, card, name):
+        raise ValueError("hencky_strains_linear_elastic: a finite-strain card needs an external_deformation_gradient_source; "
+                         "write {\"type\": \"hencky_elasticity\", \"deformation_gradient_source\": ..., \"tangent_source\": an isotropic_tangent} by hand "
+                         "(thermo variants: a thermal_eigenstrain as \"eigenstrain_source\")")
+
+    convert_hencky_strains_linear_thermo_elastic = convert_hencky_strains_linear_elastic
+    convert_hencky_strains_linear_thermo_chemo_elastic = convert_hencky_strains_linear_elastic
 
     def convert_small_strain_rule_of_mixture_composite(self, card, name):
         """Linear phases: rule_of_mixture tangent + linear_stress. Nonlinear phases at the composite strain are

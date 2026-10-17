@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <stdexcept>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -30,7 +31,7 @@ struct load_case {
   tensor2 stress;              ///< stress target per unit load factor
   load_path<T> path;
   int tangent_every{1};        ///< finite-difference tangent check every n-th step; 0 = never
-  T fd_step{1e-7};             ///< perturbation of the tangent check
+  std::optional<T> fd_step;    ///< perturbation of the tangent check; unset = the driver's default
 
   /// Prescribed strain at a step: linear between the points of its segment.
   [[nodiscard]] tensor2 strain_at(load_step<T> const &s) const {
@@ -110,10 +111,14 @@ load_case<T> parse_case(nlohmann::json const &c) {
     for (auto const f : factors)
       points.push_back(tensor2{scale * f * direction});
   }
-  return {c.at("name").get<std::string>(), parse_control<T>(c), parse_deformation_control<T>(c), std::move(points),
-          c.contains("stress") ? parse_symmetric<T>(c["stress"]) : tensor2{},
-          load_path<T>{std::move(factors), c.value("steps", 50), c.contains("points") ? T{1} : scale, c.value("dt", T{1})},
-          c.value("tangent_every", 1), c.value("fd_step", T{1e-7})};
+  return {.name = c.at("name").get<std::string>(),
+          .control = parse_control<T>(c),
+          .finite_control = parse_deformation_control<T>(c),
+          .points = std::move(points),
+          .stress = c.contains("stress") ? parse_symmetric<T>(c["stress"]) : tensor2{},
+          .path = load_path<T>{std::move(factors), c.value("steps", 50), c.contains("points") ? T{1} : scale, c.value("dt", T{1})},
+          .tangent_every = c.value("tangent_every", 1),
+          .fd_step = c.contains("fd_step") ? std::optional<T>{c.at("fd_step").get<T>()} : std::nullopt};
 }
 
 /// A case run again with several step counts (document key "studies").

@@ -143,8 +143,8 @@ TEST(ReportJson, ParsesALoadCase) {
   EXPECT_DOUBLE_EQ(free(1, 1), 1);
   EXPECT_DOUBLE_EQ(free(0, 0), 0);
   EXPECT_EQ(c.tangent_every, 1);
-  EXPECT_DOUBLE_EQ(c.fd_step, 1e-7);
-  EXPECT_DOUBLE_EQ(r::parse_case<T>(json::parse(R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], "fd_step": 1e-6})")).fd_step, 1e-6);
+  EXPECT_FALSE(c.fd_step.has_value()); // the driver's default applies
+  EXPECT_DOUBLE_EQ(r::parse_case<T>(json::parse(R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], "fd_step": 1e-6})")).fd_step.value(), 1e-6);
   EXPECT_EQ(r::parse_case<T>(json::parse(R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], "tangent_every": 0})")).tangent_every, 0);
   EXPECT_THROW(r::parse_case<T>(json::parse(R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0]})")), std::exception);
   EXPECT_THROW(r::parse_case<T>(json::parse(R"({"name": "u", "control": "x", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1]})")),

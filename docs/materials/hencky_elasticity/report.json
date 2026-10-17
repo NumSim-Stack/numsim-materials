@@ -5,7 +5,10 @@
   "derived": {"E": "9 * K * G / (3 * K + G)", "nu": "(3 * K - 2 * G) / (2 * (3 * K + G))"},
   "model": {"materials": [
     {"type": "external_deformation_gradient_source", "name": "F"},
-    {"type": "hencky_elasticity", "name": "hencky", "deformation_gradient_source": "F", "K": "$K", "G": "$G"}]},
+    {"type": "constant_scalar", "name": "K", "value": "$K"},
+    {"type": "constant_scalar", "name": "G", "value": "$G"},
+    {"type": "isotropic_tangent", "name": "stiffness", "K_source": "K", "G_source": "G"},
+    {"type": "hencky_elasticity", "name": "hencky", "deformation_gradient_source": "F", "tangent_source": "stiffness"}]},
   "point": {"deformation_gradient_source": "F", "stress_source": "hencky"},
   "record": {"eps": "hencky::log_strain"},
   "checks": [

@@ -4,18 +4,14 @@
 #include <string>
 
 #include <tmech/tmech.h>
-#include "numsim-materials/core/elastic_constants.h"
-#include "numsim-materials/core/log_strain.h"
 #include "numsim-materials/core/material_base.h"
+#include "numsim-materials/core/parameter_helpers.h"
 
 namespace numsim::materials {
 
-/// Linear elasticity in the logarithmic strain: eps = ln V, tau = C : (eps - eps_eig), P = tau F^-T,
-/// with the consistent dP/dF through d ln V / dF (core/log_strain.h). Outputs "stress" (P),
-/// "tangent" (dP/dF), "log_strain".
-///
-/// Parameters: "K", "G", "deformation_gradient_source", optional "eigenstrain_source" (an
-/// eigenstrain to subtract from the log strain: thermal, chemical).
+/// Linear elasticity in the logarithmic strain eps = ln V = ln(F F^T) / 2 with a produced stiffness C
+/// ("tangent_source", e.g. isotropic_tangent): tau = C : (eps - eps_eig), P = tau F^-T and the consistent
+/// dP/dF. Outputs "stress" (P), "tangent" (dP/dF), "log_strain".
 template <typename Traits>
 class hencky_elasticity final : public material_base<hencky_elasticity<Traits>, Traits> {
 public:
@@ -29,36 +25,39 @@ public:
   template <typename... Args>
   explicit hencky_elasticity(Args &&...args)
       : base(std::forward<Args>(args)...),
-        m_P(base::template add_output<tensor2>("stress", &hencky_elasticity::update)),
+        m_P(base::template add_output<tensor2>("stress", &hencky_elasticity::compute)),
         m_A(base::template add_output<tensor4>("tangent")),
         m_log_strain(base::template add_output<tensor2>("log_strain")),
-        m_C(isotropic_stiffness<value_type, Dim>(base::template get_parameter<value_type>("K"),
-                                                 base::template get_parameter<value_type>("G"))),
-        m_F(base::template add_input<tensor2>(base::template get_parameter<std::string>("deformation_gradient_source"),
-                                              "deformation_gradient", EdgeKind::Global)),
-        m_F_inv(base::template add_input<tensor2>(base::template get_parameter<std::string>("deformation_gradient_source"),
-                                                  "inverse", EdgeKind::Global)),
+        m_C(base::template add_input<tensor4>(base::template get_parameter<std::string>("tangent_source"),
+                                              base::template get_parameter<std::string>("tangent_property"), EdgeKind::Global)),
+        m_F_name(base::template get_parameter<std::string>("deformation_gradient_source")),
+        m_F(base::template add_input<tensor2>(m_F_name, "deformation_gradient", EdgeKind::Global)),
+        m_F_inv(base::template add_input<tensor2>(m_F_name, "inverse", EdgeKind::Global)),
         m_eigenstrain(eigenstrain_input()) {}
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
-    para.template insert<value_type>("K").template add<is_required>();
-    para.template insert<value_type>("G").template add<is_required>();
-    para.template insert<std::string>("deformation_gradient_source").template add<is_required>();
-    para.template insert<std::string>("eigenstrain_source").template add<set_default>(std::string{});
+    required<std::string>(para, "tangent_source");
+    optional<std::string>(para, "tangent_property", std::string{"tangent"});
+    required<std::string>(para, "deformation_gradient_source");
+    optional<std::string>(para, "eigenstrain_source", std::string{});
     return para;
   }
 
-  void update() {
+  void compute() noexcept {
+    auto const &F{m_F.get()};
     auto const &Finv{m_F_inv.get()};
-    auto const [log_V, dlog_dF]{log_strain(m_F.get())};
-    m_log_strain = log_V;
-    tensor2 const eps{m_eigenstrain ? tensor2{m_log_strain - m_eigenstrain->get()} : m_log_strain};
-    tensor2 const tau{tmech::dcontract(m_C, eps)};
-    m_P = tau * tmech::trans(Finv);
-    // dP/dF = (dtau/dF) . F^-T - P_il F^-1_jk, dtau/dF = C : d ln V / dF
-    tensor4 const dtau{tmech::dcontract(m_C, dlog_dF)};
+    auto const &C{m_C.get()};
     auto const I{tmech::eye<value_type, Dim, 2>()};
+    tensor2 const b{F * tmech::trans(F)};
+    auto ln_b{tmech::log(b)};
+    m_log_strain = value_type{0.5} * ln_b;
+    tensor2 const eps{m_eigenstrain ? tensor2{m_log_strain - m_eigenstrain->get()} : m_log_strain};
+    tensor2 const tau{tmech::dcontract(C, eps)};
+    m_P = tau * tmech::trans(Finv);
+    // d ln V / dF = 1/2 (d ln b / db) : (db / dF), db_ij / dF_kl = d_ik F_jl + F_il d_jk
+    tensor4 const dlog_dF{value_type{0.5} * tmech::dcontract(tensor4{ln_b.derivative()}, tensor4{tmech::otimesu(I, F) + tmech::otimesl(F, I)})};
+    tensor4 const dtau{tmech::dcontract(C, dlog_dF)};
     m_A = tmech::dcontract(tmech::otimesu(I, Finv), dtau) - tmech::otimesl(m_P, Finv);
   }
 
@@ -71,7 +70,8 @@ private:
   tensor2 &m_P;
   tensor4 &m_A;
   tensor2 &m_log_strain;
-  tensor4 m_C;
+  input_property<tensor4, property_traits> const &m_C;
+  std::string const &m_F_name;
   input_property<tensor2, property_traits> const &m_F;
   input_property<tensor2, property_traits> const &m_F_inv;
   input_property<tensor2, property_traits> const *m_eigenstrain; ///< null without an eigenstrain_source

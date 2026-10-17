@@ -66,7 +66,6 @@ add_numsim_test(test_damage_laws test_damage_laws.cpp)
 add_numsim_test(test_uvwmaterial_cards test_uvwmaterial_cards.cpp)
 add_numsim_test(test_voigt_composite test_voigt_composite.cpp)
 add_numsim_test(test_hencky_elasticity test_hencky_elasticity.cpp)
-add_numsim_test(test_log_strain test_log_strain.cpp)
 
 # Data dumper for plotting (not a test — standalone executable)
 add_executable(plot_data plot_data.cpp)

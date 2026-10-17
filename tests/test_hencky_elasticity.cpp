@@ -4,7 +4,9 @@
 #include <tmech/tmech.h>
 #include "numsim-materials/core/elastic_constants.h"
 #include "numsim-materials/core/material_context.h"
+#include "numsim-materials/materials/constant_scalar.h"
 #include "numsim-materials/materials/hencky_elasticity.h"
+#include "numsim-materials/materials/isotropic_tangent.h"
 #include "numsim-materials/materials/thermal_eigenstrain.h"
 #include "numsim-materials/umat/deformation_gradient_driver.h"
 #include "numsim-materials/umat/external_state_source.h"
@@ -32,21 +34,31 @@ std::unique_ptr<ctx_type> build(bool with_eigenstrain = false) {
   param_type p;
   p.insert<std::string>("name", "F");
   ctx.create<nm::external_deformation_gradient_source<policy>>(p);
+  for (auto const &[name, value] : {std::pair{"K", K}, std::pair{"G", G}, std::pair{"alpha", alpha}}) {
+    p.clear();
+    p.insert<std::string>("name", name);
+    p.insert<T>("value", value);
+    ctx.create<nm::constant_scalar<policy>>(p);
+  }
+  p.clear();
+  p.insert<std::string>("name", "stiffness");
+  p.insert<std::string>("K_source", "K");
+  p.insert<std::string>("G_source", "G");
+  ctx.create<nm::isotropic_tangent<policy>>(p);
   if (with_eigenstrain) {
     p.clear();
     p.insert<std::string>("name", "temperature");
     ctx.create<nm::external_scalar_source<policy>>(p);
     p.clear();
     p.insert<std::string>("name", "thermal");
-    p.insert<T>("alpha", alpha);
+    p.insert<std::string>("alpha_source", "alpha::value");
     p.insert<T>("reference_temperature", T0);
     ctx.create<nm::thermal_eigenstrain<policy>>(p);
   }
   p.clear();
   p.insert<std::string>("name", "hencky");
   p.insert<std::string>("deformation_gradient_source", "F");
-  p.insert<T>("K", K);
-  p.insert<T>("G", G);
+  p.insert<std::string>("tangent_source", "stiffness");
   if (with_eigenstrain)
     p.insert<std::string>("eigenstrain_source", "thermal");
   ctx.create<nm::hencky_elasticity<policy>>(p);
@@ -106,6 +118,35 @@ TEST(Hencky, UniaxialStressHasLogarithmicPoissonContractionAndTangent) {
   EXPECT_LT(d.tangent_error(res), 1e-6);
 }
 
+// the symptom of tmech#37: the tangent at repeated and nearly repeated stretches
+TEST(Hencky, TangentIsConsistentAtRepeatedStretches) {
+  auto ctx{build()};
+  u::material_point_evaluator<policy> ev(*ctx, {.strain_source = {}, .stress_source = "hencky", .deformation_gradient_source = "F"});
+  for (auto const &F : {stretch(1.15, 1.15, 1.0), stretch(1.2, 1.2, 1.2), stretch(1.15, 1.15 + 1e-9, 1.0), stretch(1.204, 0.9458, 0.9458)}) {
+    driver d(ev);
+    auto const res{d.step(F, tensor2{}, control::deformation(), 0, 1)};
+    EXPECT_LT(d.tangent_error(res), 1e-6) << F(0, 0) << " " << F(1, 1) << " " << F(2, 2);
+  }
+}
+
+TEST(Hencky, IsObjective) {
+  auto ctx{build()};
+  u::material_point_evaluator<policy> ev(*ctx, {.strain_source = {}, .stress_source = "hencky", .deformation_gradient_source = "F"});
+  tmech::tensor<T, 3, 1> axis;
+  axis(0) = 1;
+  axis(1) = 2;
+  axis(2) = 2;
+  tensor2 const R{nm::rotation(tmech::tensor<T, 3, 1>{axis / 3}, T{0.7})};
+  tensor2 U{stretch(1.3, 0.9, 1.1)};
+  U(0, 1) = U(1, 0) = 0.1;
+  ev.evaluate_deformation_gradient(nullptr, tmech::eye<T, 3, 2>(), U, 0, 1);
+  tensor2 const P_U{ev.stress()};
+  ev.evaluate_deformation_gradient(nullptr, tmech::eye<T, 3, 2>(), tensor2{R * U}, 0, 1);
+  EXPECT_NEAR(tmech::norm(tensor2{ev.stress() - R * P_U}) / tmech::norm(P_U), 0, 1e-12); // P(R U) = R P(U)
+  ev.evaluate_deformation_gradient(nullptr, tmech::eye<T, 3, 2>(), R, 0, 1);
+  EXPECT_NEAR(tmech::norm(ev.stress()), 0, 1e-10 * K);                                  // a rotation is stress free
+}
+
 TEST(Hencky, EigenstrainShiftsTheLogStrain) {
   auto ctx{build(true)};
   dynamic_cast<nm::external_deformation_gradient_source<policy> *>(ctx->find("F"))->bind(tmech::eye<T, 3, 2>(), tmech::eye<T, 3, 2>());
@@ -122,7 +163,10 @@ TEST(Hencky, FromJson) {
   ctx_type ctx;
   nm::umat::make_json_builder<policy>(R"({"materials": [
     {"type": "external_deformation_gradient_source", "name": "F"},
-    {"type": "hencky_elasticity", "name": "h", "deformation_gradient_source": "F", "K": 166.67, "G": 76.92}]})")(ctx, {});
+    {"type": "constant_scalar", "name": "K", "value": 166.67},
+    {"type": "constant_scalar", "name": "G", "value": 76.92},
+    {"type": "isotropic_tangent", "name": "stiffness", "K_source": "K", "G_source": "G"},
+    {"type": "hencky_elasticity", "name": "h", "deformation_gradient_source": "F", "tangent_source": "stiffness"}]})")(ctx, {});
   EXPECT_NE(ctx.find("h"), nullptr);
 }
 
