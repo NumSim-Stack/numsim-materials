@@ -13,8 +13,9 @@ using policy = nm::material_policy_default;
 using T = policy::value_type;
 using tensor4 = tmech::tensor<T, 3, 4>;
 
-/// The Mori-Tanaka example card of uvwmaterial after tools/convert_uvwmaterial_card.py (checked by its own tests).
-char const *const converted = R"({"materials": [{"type": "external_strain_source", "name": "strain"}, {"type": "linear_elasticity", "name": "mt_matrix", "strain_producer_name": "strain", "K": 6000.000000000001, "G": 620.6896551724138}, {"type": "linear_elasticity", "name": "mt_inclusion1_material", "strain_producer_name": "strain", "K": 1749.9999999999998, "G": 807.6923076923076}, {"type": "inclusion", "name": "mt_inclusion1", "material": "mt_inclusion1_material", "volume_fraction": 0.5, "shape": "sphere"}, {"type": "mean_field_composite", "name": "mt", "matrix": "mt_matrix", "inclusions": ["mt_inclusion1"], "kernel": "mori_tanaka", "strain_source": "strain"}]})";
+/// "model" of tools/convert_uvwmaterial_card.py for the MORI_TANAKA card of tools/tests (its own tests check the rest);
+/// the composite is the tangent producer "mt_tangent", "mt" its linear_stress.
+char const *const converted = R"({"materials": [{"type": "external_strain_source", "name": "strain"}, {"type": "constant_scalar", "name": "mt_matrix_material_K", "value": 6000.000000000001}, {"type": "constant_scalar", "name": "mt_matrix_material_G", "value": 620.6896551724138}, {"type": "isotropic_tangent", "name": "mt_matrix_material_C", "K_source": "mt_matrix_material_K", "G_source": "mt_matrix_material_G"}, {"type": "isotropic_moduli", "name": "mt_matrix_material_C_moduli", "tangent_source": "mt_matrix_material_C"}, {"type": "constant_scalar", "name": "mt_inclusion1_material_K", "value": 1749.9999999999998}, {"type": "constant_scalar", "name": "mt_inclusion1_material_G", "value": 807.6923076923076}, {"type": "isotropic_tangent", "name": "mt_inclusion1_material_C", "K_source": "mt_inclusion1_material_K", "G_source": "mt_inclusion1_material_G"}, {"type": "eshelby_sphere", "name": "mt_inclusion1_shape", "nu_source": "mt_matrix_material_C_moduli", "nu_property": "poisson_ratio"}, {"type": "constant_scalar", "name": "mt_inclusion1_c", "value": 0.5}, {"type": "phase", "name": "mt_inclusion1", "tangent_source": "mt_inclusion1_material_C", "eshelby_source": "mt_inclusion1_shape", "fraction_source": "mt_inclusion1_c"}, {"type": "constant_scalar", "name": "mt_matrix_c", "value": 0.5}, {"type": "phase", "name": "mt_matrix", "tangent_source": "mt_matrix_material_C", "fraction_source": "mt_matrix_c"}, {"type": "mean_field_tangent", "name": "mt_tangent", "matrix": "mt_matrix", "phases": ["mt_inclusion1"], "kernel": "mori_tanaka"}, {"type": "linear_stress", "name": "mt", "tangent_source": "mt_tangent", "strain_source": "strain"}]})";
 
 TEST(UvwmaterialCards, TheConvertedMoriTanakaCardLoadsAndMatchesTheAnalyticModuli) {
   nm::material_context<policy> ctx;
@@ -24,7 +25,7 @@ TEST(UvwmaterialCards, TheConvertedMoriTanakaCardLoadsAndMatchesTheAnalyticModul
   T const Ki{nm::bulk_modulus(2100.0, 0.3)};
   T const c{0.5};
   T const K_mt{Km + c * (Ki - Km) / (1 + (1 - c) * (Ki - Km) / (Km + 4 * Gm / 3))};
-  auto const [K, G]{nm::isotropize<T, 3>(ctx.get<tensor4>("mt", "tangent"))};
+  auto const [K, G]{nm::isotropize<T, 3>(ctx.get<tensor4>("mt_tangent", "tangent"))};
   EXPECT_NEAR(K, K_mt, 1e-9 * K_mt);
 }
 
