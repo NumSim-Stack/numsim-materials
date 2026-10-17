@@ -131,13 +131,15 @@ TEST(Eshelby, GeneralEllipsoid) {
   EXPECT_LT(S(0, 0, 0, 0), S(2, 2, 2, 2));
   // a general ellipsoid with two nearly equal axes is continuous into the spheroid
   EXPECT_NEAR(diff(es::ellipsoid<T>(nu, 1.0, 1.0 + 1e-7, 2.0), es::ellipsoid<T>(nu, 1.0, 1.0, 2.0)), 0, 1e-6);
+  for (T const delta : {1e-9, 1e-11, 1e-13}) // across the switch from the difference rule to the sum rules
+    EXPECT_NEAR(diff(es::ellipsoid<T>(nu, 1.0, 1.0 + delta, 2.0), es::ellipsoid<T>(nu, 1.0, 1.0, 2.0)), 0, 1e-8) << delta;
 }
 
 TEST(Eshelby, RejectsInvalidInput) {
-  EXPECT_THROW(es::sphere<T>(0.5), std::domain_error);
-  EXPECT_THROW(es::ellipsoid<T>(nu, 0.0, 1.0, 1.0), std::domain_error);
-  EXPECT_THROW(es::ellipsoid<T>(nu, inf, inf, 1.0), std::domain_error);
-  EXPECT_THROW(es::cylinder<T>(nu, 3), std::out_of_range);
+  EXPECT_THROW((void)es::sphere<T>(0.5), std::domain_error);
+  EXPECT_THROW((void)es::ellipsoid<T>(nu, 0.0, 1.0, 1.0), std::domain_error);
+  EXPECT_THROW((void)es::ellipsoid<T>(nu, inf, inf, 1.0), std::domain_error);
+  EXPECT_THROW((void)es::cylinder<T>(nu, 3), std::out_of_range);
 }
 
 } // namespace
