@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include <cmath>
+#include <limits>
 #include <numbers>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/elastic_constants.h"
@@ -81,6 +82,33 @@ TEST(Rotation, FromAxisAndAngle) {
   EXPECT_NEAR(tmech::norm(vector{Rd * e1 - d}), 0, 1e-14);
   EXPECT_NEAR(tmech::norm(tensor2{tmech::trans(Rd) * Rd - tmech::eye<T, 3, 2>()}), 0, 1e-14);
   EXPECT_NEAR(tmech::norm(tensor2{nm::rotation_to(e1) - tmech::eye<T, 3, 2>()}), 0, 1e-14);
+}
+
+template <typename S>
+class RotationTo : public testing::Test {};
+using scalar_types = testing::Types<float, double>;
+TYPED_TEST_SUITE(RotationTo, scalar_types);
+
+// the parallel and antiparallel branches must be reached at the precision of the scalar type
+TYPED_TEST(RotationTo, ParallelAntiparallelAndGenericDirections) {
+  using S = TypeParam;
+  using vec = tmech::tensor<S, 3, 1>;
+  using mat = tmech::tensor<S, 3, 2>;
+  S const tol{64 * std::numeric_limits<S>::epsilon()};
+  auto const v = [](double a, double b, double c) {
+    vec out;
+    out(0) = static_cast<S>(a);
+    out(1) = static_cast<S>(b);
+    out(2) = static_cast<S>(c);
+    return out;
+  };
+  vec const e1{v(1, 0, 0)};
+  for (auto const &d : {e1, v(-1, 0, 0), v(0.6, 0, 0.8), v(0, -1, 0), v(-0.36, 0.48, 0.8)}) {
+    mat const R{nm::rotation_to(d)};
+    EXPECT_NEAR(tmech::norm(vec{R * e1 - d}), 0, tol) << d(0) << " " << d(1) << " " << d(2);
+    EXPECT_NEAR(tmech::norm(mat{tmech::trans(R) * R - tmech::eye<S, 3, 2>()}), 0, tol);
+    EXPECT_NEAR(tmech::det(R), 1, tol);
+  }
 }
 
 } // namespace

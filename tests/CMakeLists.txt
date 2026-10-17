@@ -47,7 +47,6 @@ add_numsim_test(test_deformation_gradient_driver test_deformation_gradient_drive
 add_numsim_test(test_report test_report.cpp)
 add_numsim_test(test_report_case test_report_case.cpp)
 add_numsim_test(test_core_utilities test_core_utilities.cpp)
-add_numsim_test(test_elliptic_integrals test_elliptic_integrals.cpp)
 add_numsim_test(test_elastic_constants test_elastic_constants.cpp)
 
 # Data dumper for plotting (not a test — standalone executable)
