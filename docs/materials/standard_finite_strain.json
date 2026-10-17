@@ -1,11 +1,11 @@
 {
-  "parameters": {"steps": 50, "stretch": 0.3, "shear": 0.5, "tangent_tolerance": 1e-6, "tangent_every": 5},
+  "parameters": {"steps": 50, "stretch": 0.3, "shear": 0.5, "tangent_tolerance": 1e-6, "tangent_every": 5, "fd_step": 1e-6},
   "cases": [
-    {"name": "uniaxial_stretch", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1, -0.6], "scale": "$stretch", "steps": "$steps", "tangent_every": "$tangent_every"},
-    {"name": "uniaxial_stress", "control": "uniaxial_stress", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1, -0.6], "scale": "$stretch", "steps": "$steps", "tangent_every": "$tangent_every"},
-    {"name": "simple_shear", "direction": [0, 0, 0, 1, 0, 0, 0, 0, 0], "path": [0, 1, -1], "scale": "$shear", "steps": "$steps", "tangent_every": "$tangent_every"},
-    {"name": "equibiaxial_stretch", "direction": [1, 1, 0, 0, 0, 0], "path": [0, 1, -0.5], "scale": "$stretch", "steps": "$steps", "tangent_every": "$tangent_every"},
-    {"name": "volumetric", "direction": [1, 1, 1, 0, 0, 0], "path": [0, 1, -0.5], "scale": "$stretch", "steps": "$steps", "tangent_every": "$tangent_every"}
+    {"name": "uniaxial_stretch", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1, -0.6], "scale": "$stretch", "steps": "$steps", "tangent_every": "$tangent_every", "fd_step": "$fd_step"},
+    {"name": "uniaxial_stress", "control": "uniaxial_stress", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1, -0.6], "scale": "$stretch", "steps": "$steps", "tangent_every": "$tangent_every", "fd_step": "$fd_step"},
+    {"name": "simple_shear", "direction": [0, 0, 0, 1, 0, 0, 0, 0, 0], "path": [0, 1, -1], "scale": "$shear", "steps": "$steps", "tangent_every": "$tangent_every", "fd_step": "$fd_step"},
+    {"name": "equibiaxial_stretch", "direction": [1, 1, 0, 0, 0, 0], "path": [0, 1, -0.5], "scale": "$stretch", "steps": "$steps", "tangent_every": "$tangent_every", "fd_step": "$fd_step"},
+    {"name": "volumetric", "direction": [1, 1, 1, 0, 0, 0], "path": [0, 1, -0.5], "scale": "$stretch", "steps": "$steps", "tangent_every": "$tangent_every", "fd_step": "$fd_step"}
   ],
   "figures": [
     {"title": "First Piola-Kirchhoff stress for prescribed deformation", "panels": [
@@ -24,7 +24,7 @@
      "text": "The Cauchy stress of simple shear at finite strain has normal components that small strain does not.",
      "panels": [{"case": "simple_shear", "x": "F_12", "y": ["stress_11", "stress_22", "stress_12"], "xlabel": "γ"}]},
     {"title": "Tangent check", "columns": 1,
-     "text": "Relative difference between dP/dF and central differences of P, every tangent_every-th step.",
+     "text": "Relative difference between dP/dF and central differences of P (step fd_step), every tangent_every-th step.",
      "panels": [{"cases": "*", "x": "step", "y": [{"expr": "np.maximum(tangent_error, 1e-17)", "label": "‖A − A_fd‖ / ‖A‖"}], "logy": true}]}
   ],
   "checks": [

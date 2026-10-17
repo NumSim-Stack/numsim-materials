@@ -121,7 +121,8 @@ template <typename Traits, typename Sink>
 bool run_case(nlohmann::json const &doc, load_case<typename Traits::value_type> const &c, Sink &sink,
               typename umat::material_point_driver<Traits>::options opts = {}) {
   if (is_finite_strain(doc))
-    return detail::run_finite_strain<Traits>(doc, c, sink, {.tolerance = opts.tolerance, .max_iter = opts.max_iter, .fd_step = opts.fd_step});
+    return detail::run_finite_strain<Traits>(doc, c, sink, {.tolerance = opts.tolerance, .max_iter = opts.max_iter, .fd_step = c.fd_step});
+  opts.fd_step = c.fd_step;
   return detail::run_small_strain<Traits>(doc, c, sink, opts);
 }
 

@@ -41,6 +41,7 @@
 #include "numsim-materials/materials/power_damage_law.h"
 #include "numsim-materials/materials/saturation_damage_law.h"
 #include "numsim-materials/materials/peerlings_damage_law.h"
+#include "numsim-materials/materials/hencky_elasticity.h"
 #include "numsim-materials/materials/neo_hooke.h"
 #include "numsim-materials/materials/saint_venant_kirchhoff.h"
 #include "numsim-materials/materials/linear_stress.h"
@@ -128,6 +129,7 @@ void register_default_materials() {
   factory.template register_type<power_damage_law<Traits>>("power_damage_law");
   factory.template register_type<saturation_damage_law<Traits>>("saturation_damage_law");
   factory.template register_type<peerlings_damage_law<Traits>>("peerlings_damage_law");
+  factory.template register_type<hencky_elasticity<Traits>>("hencky_elasticity");
   factory.template register_type<saint_venant_kirchhoff<Traits>>("saint_venant_kirchhoff");
   factory.template register_type<neo_hooke<Traits>>("neo_hooke");
   factory.template register_type<constant_scalar<Traits>>("constant_scalar");
