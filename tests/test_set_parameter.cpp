@@ -5,6 +5,7 @@
 #include <numsim-core/parameter_handler.h>
 #include "numsim-materials/core/material_base.h"
 #include "numsim-materials/core/material_context.h"
+#include "numsim-materials/core/parameter_helpers.h"
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/umat/external_state_source.h"
 #include <tmech/tmech.h>
@@ -278,3 +279,29 @@ TEST(SetParameter, TypeIsNotDeduced) {
 }
 
 }  // namespace
+
+namespace {
+/// A data source with nothing in it: only defaults apply.
+class empty_source final : public numsim_core::parameter_visitor_base<std::string> {
+public:
+  bool contains(const std::string&) const override { return false; }
+  std::any read(const std::string&, std::type_index) const override { return {}; }
+};
+}  // namespace
+
+TEST(ParameterHelpers, RequiredAndOptionalDeclareTheParameters) {
+  policy::InputParameterController para;
+  nm::required<T>(para, "K");
+  nm::optional<T>(para, "q", T{2.5});
+  nm::optional<std::string>(para, "mode", std::string{"plain"});
+
+  param_type without_K;
+  EXPECT_THROW(para.accept(empty_source{}, without_K), std::invalid_argument);  // K is required
+  EXPECT_DOUBLE_EQ(without_K.get<T>("q"), 2.5);                               // defaults were applied
+  EXPECT_EQ(without_K.get<std::string>("mode"), "plain");
+
+  param_type with_K;
+  with_K.insert<T>("K", T{3});
+  EXPECT_NO_THROW(para.accept(empty_source{}, with_K));
+  EXPECT_DOUBLE_EQ(with_K.get<T>("K"), 3.0);
+}

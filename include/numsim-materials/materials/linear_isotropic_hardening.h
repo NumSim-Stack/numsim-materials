@@ -2,6 +2,7 @@
 #define LINEAR_ISOTROPIC_HARDENING_H
 
 #include "numsim-materials/core/material_base.h"
+#include "numsim-materials/core/parameter_helpers.h"
 
 namespace numsim::materials {
 
@@ -35,8 +36,8 @@ public:
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
-    para.template insert<std::string>("source").template add<is_required>();
-    para.template insert<value_type>("K").template add<is_required>();
+    required<std::string>(para, "source");
+    required<value_type>(para, "K");
     return para;
   }
 
