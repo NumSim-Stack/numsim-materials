@@ -16,6 +16,7 @@ See docs/uvwmaterial-mapping.md.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import pathlib
 import sys
@@ -54,6 +55,21 @@ class Converter:
         self.tangent_sources: dict[str, str] = {}  # top material -> the node producing its tangent, when not itself
         self.nu_of: dict[str, float] = {}          # tangent producer -> its Poisson ratio
         self.residual: str | None = None           # "node::residual" of a fixed point the point has to close
+        self.strain_property = "strain"            # the property of strain_source the materials read
+
+    def strain_of(self, key: str = "strain_source") -> dict:
+        """The strain wiring of a material: the composite strain, or a phase strain inside local_strain()."""
+        return {key: self.strain_source, **({"strain_property": self.strain_property} if self.strain_property != "strain" else {})}
+
+    @contextlib.contextmanager
+    def local_strain(self, node: str, prop: str):
+        """Materials converted inside read their strain from node::prop (a mean_field_strain output)."""
+        saved = (self.strain_source, self.strain_property)
+        self.strain_source, self.strain_property = node, prop
+        try:
+            yield
+        finally:
+            self.strain_source, self.strain_property = saved
 
     def unique(self, name: str) -> str:
         candidate, n = name, 1
@@ -79,11 +95,11 @@ class Converter:
         return handler(card, name)
 
     def convert_linear_elasticity(self, card, name):
-        return self.add({"type": "linear_elasticity", "name": name, "strain_producer_name": self.strain_source, **moduli(card["parameter"])})
+        return self.add({"type": "linear_elasticity", "name": name, **self.strain_of("strain_producer_name"), **moduli(card["parameter"])})
 
     def convert_linear_elastic_incremental(self, card, name):
-        total = self.add({"type": "linear_elasticity", "name": name + "_tangent", "strain_producer_name": self.strain_source, **moduli(card["parameter"])})
-        return self.add({"type": "incremental_linear_elasticity", "name": name, "strain_source": self.strain_source, "tangent_source": total})
+        total = self.add({"type": "linear_elasticity", "name": name + "_tangent", **self.strain_of("strain_producer_name"), **moduli(card["parameter"])})
+        return self.add({"type": "incremental_linear_elasticity", "name": name, **self.strain_of(), "tangent_source": total})
 
     def convert_saint_venant_kirchhoff(self, card, name):
         raise ValueError("saint_venant_kirchhoff: a finite-strain card needs an external_deformation_gradient_source; "
@@ -115,34 +131,57 @@ class Converter:
     convert_hencky_strains_linear_thermo_chemo_elastic = convert_hencky_strains_linear_elastic
 
     def convert_small_strain_rule_of_mixture_composite(self, card, name):
-        """Linear phases: rule_of_mixture tangent + linear_stress. Nonlinear phases at the composite strain are
-        Voigt only (mean_field_stress averages what they produce); Reuss and Hill need local strains (#117)."""
+        """Linear phases: rule_of_mixture tangent + linear_stress. Nonlinear phases: mean_field_strain with the
+        kernel localises, every material reads its phase strain, mean_field_stress averages; a nonlinear phase
+        reads its tangent over a local edge (not for Voigt, whose concentrations need no tangent) and the
+        point closes the fixed point."""
         kernel = KERNELS[card["kernal"]]
-        phases, nodes, linear = [], [], True
-        for key, spec in card["materials"].items():
-            node, tangent_property, is_linear = self.phase_tangent(spec, f"{name}_{key}_material")
-            linear &= is_linear
-            phases.append(self.add({"type": "phase", "name": f"{name}_{key}", "tangent_source": node, "tangent_property": tangent_property,
-                                    "fraction_source": self.fraction(spec["volume_fraction"], f"{name}_{key}")}))
-            nodes.append((node, STRESS_PROPERTY.get(spec["name"], "stress"), tangent_property))
-        rom = self.add({"type": "rule_of_mixture", "name": f"{name}_tangent", "phases": phases, "kernel": kernel})
-        if linear:
+        if all(spec["name"] == "linear_elasticity" for spec in card["materials"].values()):
+            phases = []
+            for key, spec in card["materials"].items():
+                node, _, _ = self.phase_tangent(spec, f"{name}_{key}_material")
+                phases.append(self.add({"type": "phase", "name": f"{name}_{key}", "tangent_source": node,
+                                        "fraction_source": self.fraction(spec["volume_fraction"], f"{name}_{key}")}))
+            rom = self.add({"type": "rule_of_mixture", "name": f"{name}_tangent", "phases": phases, "kernel": kernel})
             self.tangent_sources[name] = rom
             return self.add({"type": "linear_stress", "name": name, "tangent_source": rom, "strain_source": self.strain_source})
+        strain_node = f"{name}_strain"
+        phases, stresses, tangents = [], [], []
+        for key, spec in card["materials"].items():
+            phase_name = f"{name}_{key}"
+            phase = {"type": "phase", "name": phase_name, "fraction_source": self.fraction(spec["volume_fraction"], phase_name)}
+            if spec["name"] == "linear_elasticity":
+                tangent, _, _ = self.phase_tangent(spec, f"{phase_name}_material")
+                stress = self.add({"type": "linear_stress", "name": f"{phase_name}_stress", "tangent_source": tangent,
+                                   "strain_source": strain_node, "strain_property": f"strain_{phase_name}"})
+                phase["tangent_source"] = tangent
+                stresses.append((stress, "stress"))
+                tangents.append((tangent, "tangent"))
+            else:
+                with self.local_strain(strain_node, f"strain_{phase_name}"):
+                    material = self.convert(spec, f"{phase_name}_material")
+                tangent_property = TANGENT_PROPERTY.get(spec["name"], "tangent")
+                phase |= {"tangent_source": material, "tangent_property": tangent_property}
+                if kernel != "voigt":  # the concentrations need the algorithmic tangent: previous pass, from the elastic one
+                    if spec["name"] != "small_strain_isotropic_damage":
+                        raise ValueError(f"rule of mixture: no initial tangent known for {spec['name']} on a local edge; wire the phase by hand")
+                    phase |= {"tangent_edge": "local", "initial_tangent_source": f"{material}_elastic"}
+                stresses.append((material, STRESS_PROPERTY.get(spec["name"], "stress")))
+                tangents.append((material, tangent_property))
+            phases.append(self.add(phase))
+        self.add({"type": "mean_field_strain", "name": strain_node, "strain_source": self.strain_source,
+                  "matrix": phases[0], "phases": phases[1:], "kernel": kernel})
         if kernel != "voigt":
-            raise ValueError(f"rule of mixture: {card['kernal']} with nonlinear phases needs the local strains of #117")
-        # the phase with its own property names (a damage material) is the matrix of mean_field_stress; the rest share one pair
-        odd = [i for i, (_, sp, tp) in enumerate(nodes) if (sp, tp) != ("stress", "tangent")]
-        first = odd[0] if len(odd) == 1 else 0
-        rest = [i for i in range(len(nodes)) if i != first]
-        if len({nodes[i][1:] for i in rest}) > 1:
+            self.residual = f"{name}::residual"
+        if len({(sp, tp) for (_, sp), (_, tp) in zip(stresses[1:], tangents[1:])}) > 1:
             raise ValueError("rule of mixture: the phases name their stress and tangent properties differently; wire mean_field_stress by hand")
-        doc = {"type": "mean_field_stress", "name": name, "concentration_source": rom, "matrix": phases[first], "phases": [phases[i] for i in rest],
-               "matrix_stress_source": nodes[first][0], "stress_sources": [nodes[i][0] for i in rest]}
-        if nodes[first][1:] != ("stress", "tangent"):
-            doc |= {"matrix_stress_property": nodes[first][1], "matrix_tangent_property": nodes[first][2]}
-        if rest and nodes[rest[0]][1:] != ("stress", "tangent"):
-            doc |= {"stress_property": nodes[rest[0]][1], "tangent_property": nodes[rest[0]][2]}
+        doc = {"type": "mean_field_stress", "name": name, "concentration_source": strain_node, "matrix": phases[0], "phases": phases[1:],
+               "matrix_stress_source": stresses[0][0], "stress_sources": [n for n, _ in stresses[1:]],
+               "matrix_tangent_source": tangents[0][0], "tangent_sources": [n for n, _ in tangents[1:]]}
+        if (stresses[0][1], tangents[0][1]) != ("stress", "tangent"):
+            doc |= {"matrix_stress_property": stresses[0][1], "matrix_tangent_property": tangents[0][1]}
+        if len(stresses) > 1 and (stresses[1][1], tangents[1][1]) != ("stress", "tangent"):
+            doc |= {"stress_property": stresses[1][1], "tangent_property": tangents[1][1]}
         return self.add(doc)
 
     ESHELBY_DIRECTIONS = {"long_fibre_x1": [1, 0, 0], "long_fibre_x2": [0, 1, 0], "long_fibre_x3": [0, 0, 1]}
@@ -268,7 +307,7 @@ class Converter:
         sf = card["state_function"]
         if sf["name"] not in STATE_FUNCTIONS:
             raise ValueError(f"state function {sf['name']}: not supported (#119)")
-        state = self.add({"type": STATE_FUNCTIONS[sf["name"]], "name": f"{name}_state", "strain_source": self.strain_source,
+        state = self.add({"type": STATE_FUNCTIONS[sf["name"]], "name": f"{name}_state", **self.strain_of(),
                           **self.state_function_parameters(sf, elastic, card["base_material"].get("parameter", {}))})
         yf = card["yield_function"]
         if yf["name"] != "strain_based_damage":

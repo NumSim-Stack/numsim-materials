@@ -19,7 +19,7 @@ a self-consistent effective medium) the consumers follow.
 | `isotropic_moduli` | `tangent_source` / `tangent_property` | `K`, `G`, `poisson_ratio` |
 | `eshelby_sphere`, `eshelby_cylinder`, `eshelby_spheroid`, `eshelby_ellipsoid` | `nu_source` / `nu_property` (`nu_edge`, `nu_initial`) | `tensor` (rank 4) |
 | `depolarisation_sphere`, `_cylinder`, `_spheroid`, `_ellipsoid` | geometry only | `tensor` (rank 2, trace one) |
-| `phase` | `tangent_source`, `fraction_source`, optional `eshelby_source`, `depolarisation_source` | `tangent`, `volume_fraction`, `eshelby`, `depolarisation` |
+| `phase` | `tangent_source`, `fraction_source`, optional `eshelby_source`, `depolarisation_source` (`tangent_edge`, `initial_tangent_source`) | `tangent`, `volume_fraction`, `eshelby`, `depolarisation` |
 | `rule_of_mixture` | `phases` | `tangent`, `concentration_<phase>` |
 | `mean_field_tangent` | `matrix`, `phases`, `kernel`, `relaxation` | `tangent`, `concentration_<phase>`, `residual` |
 | `short_fibre_composite` | `matrix`, `fibre`, `orientation`, `precision`, `averaging` | `tangent`, `concentration_matrix`, `concentration_fibre` |
@@ -125,8 +125,7 @@ strain ──► mean_field_strain ──strain_matrix──► matrix material 
 - `mean_field_stress` produces `stress` = Σ cᵣ σᵣ and `tangent` = Σ cᵣ ℂᵣ : Aᵣ from the materials' current
   stresses and tangents (`matrix_stress_source`, `stress_sources`, optional `tangent_sources`;
   `matrix_stress_property` / `matrix_tangent_property` when the matrix material names them differently) and
-  the concentrations of the strain node, plus `residual`, the largest relative difference between a phase
-  node's tangent and its material's current one — zero for linear phases.
+  the concentrations of the strain node.
 
 **Linear phases.** The tangents are producers, every edge is global, one pass is exact and the result equals
 §3 to round-off — with the phase strains and stresses available as properties:
@@ -139,9 +138,37 @@ strain ──► mean_field_strain ──strain_matrix──► matrix material 
  "matrix_stress_source": "m", "stress_sources": ["s"], "matrix_tangent_source": "Cm", "tangent_sources": ["Cf"]}
 ```
 
-**Nonlinear phases** (damage, plasticity) close a cycle — the concentrations need the algorithmic tangent, the
-tangent needs the local strain — and are the subject of the next PR: the phase node reads its tangent over a
-local edge and the passes of §5 close the fixed point.
+**Nonlinear phases.** A phase whose tangent depends on its own strain closes a cycle: the concentrations
+need the algorithmic tangent, the tangent needs the local strain. The phase node reads the tangent over a
+local edge, starting from the elastic one:
+
+```json
+{"type": "phase", "name": "matrix", "tangent_source": "damage", "tangent_property": "damaged_tangent",
+ "tangent_edge": "local", "initial_tangent_source": "Cm", "fraction_source": "cm"},
+{"type": "mean_field_strain", "name": "mt_strain", "strain_source": "strain", "matrix": "matrix", "phases": ["spheres"]},
+{"type": "linear_elasticity", "name": "elastic", "strain_producer_name": "mt_strain", "strain_property": "strain_matrix", "K": 3, "G": 1},
+{"type": "von_mises_state_function", "name": "state", "strain_source": "mt_strain", "strain_property": "strain_matrix"},
+{"type": "strain_threshold_yield", "name": "yield", "state_source": "state", "kappa_critical": 0.002},
+{"type": "exponential_damage_law", "name": "law", "yield_source": "yield", "kappa_0": 0.002, "beta": 30},
+{"type": "isotropic_damage", "name": "damage", "elastic_source": "elastic", "damage_source": "law", "state_source": "state", "yield_source": "yield"},
+{"type": "linear_stress", "name": "s", "tangent_source": "Cf", "strain_source": "mt_strain", "strain_property": "strain_spheres"},
+{"type": "mean_field_stress", "name": "mt", "concentration_source": "mt_strain", "matrix": "matrix", "phases": ["spheres"],
+ "matrix_stress_source": "damage", "matrix_stress_property": "damaged_stress", "matrix_tangent_property": "damaged_tangent",
+ "stress_sources": ["s"], "tangent_sources": ["Cf"]}
+```
+
+One `update()` is one pass with the tangent of the previous pass; `mean_field_stress::residual` is the largest
+relative difference between the tangent a phase node carried and its material's current one. The whole
+damage chain is evaluated at the matrix strain, with its own history. Isotropic damage keeps Poisson's ratio,
+so the Eshelby node reads ν of the undamaged tangent; an anisotropic algorithmic tangent would use
+`isotropic_moduli` with a local `nu_edge` the same way as §3.
+
+The published tangent Σ cᵣ ℂᵣ : Aᵣ is first order in Δε: exact as the step vanishes, not a central
+difference across a damage kink. The same holds for the localisation itself — a Reuss composite equalises the
+stress *increments* of the algorithmic tangents, so its phase stresses agree to first order in the step while
+the phases harden. A softening phase in series (damage under Reuss or Hill) is a snap-back problem: there is no
+stable equal-stress path and the result depends on the step — a property of the problem, which the passes do
+not hide.
 
 ---
 
@@ -157,9 +184,8 @@ Local edges make every pass acyclic; the fixed point is reached by repeating `up
   so that the returned stress is consistent for the given increment.
 - In a test: `while (ctx.get<T>("mt", "residual") > tol) ctx.update();`.
 
-It is a Picard iteration on the tangents — linear convergence, fine for self-consistent contrasts of order
-10–100 (and, in the next PR, for damage with moderate softening); near snap-back it can stall, which the
-residual then shows.
+It is a Picard iteration on the tangents — linear convergence, fine for damage with moderate softening and
+for self-consistent contrasts of order 10–100; near snap-back it can stall, which the residual then shows.
 
 ---
 
@@ -173,7 +199,7 @@ republished by `phase` as `depolarisation` (#110 for the composite nodes).
 ## 7. Reports and tests
 
 `docs/materials/rule_of_mixture`, `mean_field_tangent` (dilute, Mori–Tanaka, self-consistent, unidirectional
-fibres), `short_fibre_composite`; tests
-`test_rule_of_mixture`, `test_mean_field_tangent`, `test_short_fibre_composite`, `test_mean_field_local`,
+fibres), `short_fibre_composite`, `mean_field_damage` (the local pair with a damaging matrix); tests
+`test_rule_of_mixture`, `test_mean_field_tangent`, `test_short_fibre_composite`, `test_mean_field_local`, `test_mean_field_damage`,
 `test_eshelby_materials`, `test_depolarisation_materials`, `test_scalar_producers`. The uvwmaterial cards
 map onto these nodes through `tools/convert_uvwmaterial_card.py` (see `uvwmaterial-mapping.md`).
