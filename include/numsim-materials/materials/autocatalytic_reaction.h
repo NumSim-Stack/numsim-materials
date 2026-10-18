@@ -79,7 +79,7 @@ public:
   }
 
   /// Apply solver increment to state, clamped to [0, 1].
-  void update() override {
+  void update() {
     compute_rate_constant();
     m_his.new_value() = std::min(m_his.new_value() + m_dz.get(), value_type{1});
   }

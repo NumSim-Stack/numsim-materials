@@ -58,7 +58,7 @@ public:
     return para;
   }
 
-  void update() override {
+  void update() {
     tensor d;
     d.fill(value_type{0});
     d(0, 0) = m_dir[0];
