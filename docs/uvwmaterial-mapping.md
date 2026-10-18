@@ -35,7 +35,7 @@ is a `*_source` parameter. `tools/convert_uvwmaterial_card.py` converts the old 
 | `eigenstrain_curing_material_base`, `degree_of_cure_dependent_material` | `thermal_eigenstrain` with the cure as source; `inclusion.fraction_source`; `weighted_sum` | | #137 |
 | `small_strain_rule_of_mixture_history` (Voigt) | `weighted_sum` with `constant_scalar` fractions: every phase reads the composite strain, the sum is Σ cᵢσᵢ, Σ cᵢCᵢ (`tests/test_voigt_composite.cpp`) | `terms`, weights | #117; not from JSON yet (no reader for `terms`) |
 | `small_strain_rule_of_mixture_history` (Reuss) | — | | #117, after the vector Newton lands |
-| `small_strain_mean_field_composite_history`, `_plastic` | — | | #116 |
+| `small_strain_mean_field_composite_history`, `_plastic`, `_damage` | `mean_field_strain` + the phase materials + `mean_field_stress` | the strain node produces `strain_<phase>` (history) and the concentrations; the materials consume them (`strain_source`, `strain_property`); the stress node averages what they produce (linear phases here; the nonlinear fixed point follows) | #116 |
 | `small_strain_short_fibre_history_composite` | — | | #118 |
 | `*_nonlocal*`, `element_deletion` | — | | #121 |
 | `finite_strain_mean_field_composite*` | — | | #122 |
