@@ -33,6 +33,7 @@
 #include "numsim-materials/materials/poisson_ratio_from_moduli.h"
 #include "numsim-materials/materials/phase.h"
 #include "numsim-materials/materials/rule_of_mixture.h"
+#include "numsim-materials/materials/mean_field_tangent.h"
 #include "numsim-materials/materials/neo_hooke.h"
 #include "numsim-materials/materials/saint_venant_kirchhoff.h"
 #include "numsim-materials/materials/linear_stress.h"
@@ -109,6 +110,7 @@ void register_default_materials() {
     factory.template register_type<depolarisation_cylinder<Traits>>("depolarisation_cylinder");
     factory.template register_type<depolarisation_spheroid<Traits>>("depolarisation_spheroid");
     factory.template register_type<depolarisation_ellipsoid<Traits>>("depolarisation_ellipsoid");
+    factory.template register_type<mean_field_tangent<Traits>>("mean_field_tangent");
   }
   factory.template register_type<rule_of_mixture<Traits>>("rule_of_mixture");
   factory.template register_type<phase<Traits>>("phase");
