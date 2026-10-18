@@ -2,6 +2,7 @@
 #define J2_RK_PLASTICITY_H
 
 #include <cmath>
+#include <format>
 #include <stdexcept>
 #include <vector>
 #include <tmech/tmech.h>
@@ -162,6 +163,7 @@ public:
         // Implicit stage: Newton on F = 0
         const auto aii = m_diag[i];
         m_dlambda[i] = value_type{0};
+        bool stage_converged = false;
 
         for (int iter = 0; iter < m_max_iter; ++iter) {
           tensor2 eps_p_i{eps_p_acc + aii * m_dlambda[i] * ts.eval.N};
@@ -174,12 +176,19 @@ public:
 
           if (std::abs(se.F) < m_tol) {
             m_N_stage[i] = se.N;
+            stage_converged = true;
             break;
           }
 
           const auto dF_i = aii * m_yf.jacobian(m_yf.effective_modulus(m_G), m_dH.get());
           m_dlambda[i] -= se.F / dF_i;
         }
+
+        // m_N_stage[i] is written on the converged path only; an unconverged stage would otherwise reuse the
+        // previous call's flow direction. Throw, as the other return maps do.
+        if (!stage_converged)
+          throw std::runtime_error(std::format("j2_rk_plasticity ('{}'): implicit stage {} of {} failed to converge in {} iterations (tolerance {:g})",
+                                               this->name(), i, s, m_max_iter, m_tol));
       }
     }
 
