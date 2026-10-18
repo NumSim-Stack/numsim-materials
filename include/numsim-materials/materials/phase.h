@@ -6,6 +6,7 @@
 
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_base.h"
+#include "numsim-materials/core/parameter_helpers.h"
 
 namespace numsim::materials {
 
@@ -63,17 +64,17 @@ public:
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
-    para.template insert<std::string>("tangent_source").template add<is_required>();
-    para.template insert<std::string>("tangent_property").template add<set_default>(std::string{"tangent"});
-    para.template insert<std::string>("tangent_edge").template add<set_default>(std::string{"global"});
-    para.template insert<std::string>("initial_tangent_source").template add<set_default>(std::string{});
-    para.template insert<std::string>("initial_tangent_property").template add<set_default>(std::string{"tangent"});
-    para.template insert<std::string>("fraction_source").template add<is_required>();
-    para.template insert<std::string>("fraction_property").template add<set_default>(std::string{"value"});
-    para.template insert<std::string>("eshelby_source").template add<set_default>(std::string{});
-    para.template insert<std::string>("eshelby_property").template add<set_default>(std::string{"tensor"});
-    para.template insert<std::string>("depolarisation_source").template add<set_default>(std::string{});
-    para.template insert<std::string>("depolarisation_property").template add<set_default>(std::string{"tensor"});
+    required<std::string>(para, "tangent_source");
+    optional<std::string>(para, "tangent_property", std::string{"tangent"});
+    optional<std::string>(para, "tangent_edge", std::string{"global"});
+    optional<std::string>(para, "initial_tangent_source", std::string{});
+    optional<std::string>(para, "initial_tangent_property", std::string{"tangent"});
+    required<std::string>(para, "fraction_source");
+    optional<std::string>(para, "fraction_property", std::string{"value"});
+    optional<std::string>(para, "eshelby_source", std::string{});
+    optional<std::string>(para, "eshelby_property", std::string{"tensor"});
+    optional<std::string>(para, "depolarisation_source", std::string{});
+    optional<std::string>(para, "depolarisation_property", std::string{"tensor"});
     return para;
   }
 
