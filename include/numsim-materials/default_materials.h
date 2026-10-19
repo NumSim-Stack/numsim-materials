@@ -21,6 +21,12 @@
 #include "numsim-materials/materials/vector_strain_state_function.h"
 #include "numsim-materials/materials/isotropic_tangent.h"
 #include "numsim-materials/materials/linear_elasticity.h"
+#include "numsim-materials/materials/eshelby_cylinder.h"
+#include "numsim-materials/materials/eshelby_ellipsoid.h"
+#include "numsim-materials/materials/eshelby_sphere.h"
+#include "numsim-materials/materials/eshelby_spheroid.h"
+#include "numsim-materials/materials/isotropic_moduli.h"
+#include "numsim-materials/materials/poisson_ratio_from_moduli.h"
 #include "numsim-materials/materials/neo_hooke.h"
 #include "numsim-materials/materials/saint_venant_kirchhoff.h"
 #include "numsim-materials/materials/linear_stress.h"
@@ -86,6 +92,14 @@ void register_default_materials() {
   auto& factory = material_factory<Traits>::instance();
   factory.template register_type<scalar_stepper<Traits>>("scalar_stepper");
   factory.template register_type<linear_elasticity<Traits>>("linear_elasticity");
+  factory.template register_type<isotropic_moduli<Traits>>("isotropic_moduli");
+  factory.template register_type<poisson_ratio_from_moduli<Traits>>("poisson_ratio_from_moduli");
+  if constexpr (Traits::Dim == 3) { // closed-form Eshelby tensors exist for three dimensions
+    factory.template register_type<eshelby_sphere<Traits>>("eshelby_sphere");
+    factory.template register_type<eshelby_cylinder<Traits>>("eshelby_cylinder");
+    factory.template register_type<eshelby_spheroid<Traits>>("eshelby_spheroid");
+    factory.template register_type<eshelby_ellipsoid<Traits>>("eshelby_ellipsoid");
+  }
   factory.template register_type<saint_venant_kirchhoff<Traits>>("saint_venant_kirchhoff");
   factory.template register_type<neo_hooke<Traits>>("neo_hooke");
   factory.template register_type<constant_scalar<Traits>>("constant_scalar");
