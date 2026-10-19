@@ -13,7 +13,9 @@ namespace numsim::materials {
 
 /// The moduli of an isotropic tangent as scalar outputs "K", "G", "poisson_ratio", so that consumers
 /// of nu (Eshelby nodes) follow a tangent that evolves. A tangent off its isotropic projection by more
-/// than "tolerance" (relative) is rejected. Parameters: "tangent_source", "tangent_property", "tolerance".
+/// than "tolerance" (relative) is rejected; a non-positive tolerance projects without the check (the
+/// effective medium of a self-consistent scheme, an algorithmic tangent). Parameters: "tangent_source",
+/// "tangent_property", "tolerance".
 template <typename Traits>
 class isotropic_moduli final : public material_base<isotropic_moduli<Traits>, Traits> {
 public:
@@ -43,7 +45,7 @@ public:
 
   /// One callback for the three outputs.
   void compute() {
-    auto const [K, G]{require_isotropic(m_C.get(), base::name(), m_tolerance)};
+    auto const [K, G]{m_tolerance > 0 ? require_isotropic(m_C.get(), base::name(), m_tolerance) : isotropize(m_C.get())};
     m_K = K;
     m_G = G;
     m_nu = poisson_ratio(K, G);

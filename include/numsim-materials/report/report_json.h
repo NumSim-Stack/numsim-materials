@@ -141,7 +141,8 @@ inline std::vector<refinement_study> parse_studies(nlohmann::json const &doc) {
   return out;
 }
 
-/// "point": the evaluator configuration (strain_source, stress_source, optional tangent_source, time_source).
+/// "point": the evaluator configuration (strain_source, stress_source, optional tangent_source, time_source,
+/// residual with tolerance and max_passes).
 template <typename Traits>
 typename umat::material_point_evaluator<Traits>::config parse_point(nlohmann::json const &doc) {
   auto const &p{doc.at("point")};
@@ -154,6 +155,9 @@ typename umat::material_point_evaluator<Traits>::config parse_point(nlohmann::js
   if (p.contains("tangent_source"))
     cfg.tangent_source = p["tangent_source"].template get<std::string>();
   cfg.time_source = p.value("time_source", std::string{});
+  cfg.residual_property = p.value("residual", std::string{});
+  cfg.residual_tolerance = p.value("tolerance", cfg.residual_tolerance);
+  cfg.max_passes = p.value("max_passes", cfg.max_passes);
   return cfg;
 }
 

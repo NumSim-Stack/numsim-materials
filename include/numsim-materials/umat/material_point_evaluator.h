@@ -70,6 +70,12 @@ public:
     std::optional<std::string> tangent_source{};
     /// external_deformation_gradient_source (finite strain). APPENDED, see tangent_source.
     std::string deformation_gradient_source{};
+    /// Optional "material::property" of a residual: the graph is updated again until it is at most
+    /// residual_tolerance (a fixed point closed over local edges, e.g. the self-consistent scheme).
+    /// APPENDED, see tangent_source.
+    std::string residual_property{};
+    value_type residual_tolerance{1e-10};
+    int max_passes{100};
   };
 
   /// One host call's arguments.
@@ -140,6 +146,10 @@ public:
     if (!m_cfg.plastic_strain_property.empty()) {
       const auto src = connection_source::parse(m_cfg.plastic_strain_property);
       m_plastic_strain = resolve_history<tensor2>(src.material, src.property);
+    }
+    if (!m_cfg.residual_property.empty()) {
+      const auto src = connection_source::parse(m_cfg.residual_property);
+      m_residual = resolve_property<value_type>(src.material, src.property);
     }
 
     m_statev = std::make_unique<statev_map<Traits>>(m_ctx, exclusions);
@@ -247,7 +257,7 @@ public:
     m_strain_src->bind(old6, new6);
     if (m_time_src) m_time_src->bind(time, time + dtime);
 
-    m_ctx.update();
+    run();
 
     stress_to_buffer<value_type>(*m_stress, stress6);
     tangent_to_buffer<value_type>(*m_tangent, tangent36);
@@ -300,7 +310,19 @@ public:
     m_statev->unpack(statev);
     m_F_src->bind(F_old, F_new);
     if (m_time_src) m_time_src->bind(time, time + dtime);
+    run();
+  }
+
+  /// One graph update, repeated to the fixed point when a residual is configured.
+  void run() {
     m_ctx.update();
+    if (!m_residual) return;
+    for (int pass{1}; *m_residual > m_cfg.residual_tolerance; ++pass) {
+      if (pass >= m_cfg.max_passes)
+        throw std::runtime_error("material_point_evaluator: '" + m_cfg.residual_property + "' did not reach " +
+                                 std::to_string(m_cfg.residual_tolerance) + " in " + std::to_string(m_cfg.max_passes) + " passes");
+      m_ctx.update();
+    }
   }
 
   /// Stress of the last evaluation (P for finite strain).
@@ -439,6 +461,7 @@ private:
   external_scalar_source<Traits>* m_time_src{nullptr};
   const tensor2* m_stress{nullptr};
   const tensor4* m_tangent{nullptr};
+  const value_type* m_residual{nullptr}; ///< null without a residual_property
   const numsim_core::history_property<tensor2, property_traits>*
       m_plastic_strain{nullptr};
   std::unique_ptr<statev_map<Traits>> m_statev;
