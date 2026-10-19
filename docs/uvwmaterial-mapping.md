@@ -32,7 +32,8 @@ is a `*_source` parameter. `tools/convert_uvwmaterial_card.py` converts the old 
 | `nth_order_autocatalytic_reaction` | `kamal_sourour_rate` | `A1`, `E1`, `A2`, `E2`, `m`, `n` | #136 |
 | `eigenstrain_temperature_material_base`, `thermo_mechanical_elastic` | `thermal_eigenstrain` | `alpha_source` (a produced coefficient), `reference_temperature`, `temperature_source` | #135 |
 | `eigenstrain_curing_material_base`, `degree_of_cure_dependent_material` | `thermal_eigenstrain` with the cure as source; `inclusion.fraction_source`; `weighted_sum` | | #137 |
-| `small_strain_rule_of_mixture_history` | — (Voigt is `weighted_sum` of the phase stresses) | | #117 |
+| `small_strain_rule_of_mixture_history` (Voigt) | `weighted_sum` with `constant_scalar` fractions: every phase reads the composite strain, the sum is Σ cᵢσᵢ, Σ cᵢCᵢ (`tests/test_voigt_composite.cpp`) | `terms`, weights | #117; not from JSON yet (no reader for `terms`) |
+| `small_strain_rule_of_mixture_history` (Reuss) | — | | #117, after the vector Newton lands |
 | `small_strain_mean_field_composite_history`, `_plastic` | — | | #116 |
 | `small_strain_short_fibre_history_composite` | — | | #118 |
 | `*_nonlocal*`, `element_deletion` | — | | #121 |
