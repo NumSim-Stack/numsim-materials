@@ -1,4 +1,4 @@
-#include <print>
+#include <numsim-core/print.h>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/materials/tensor_component_stepper.h"
@@ -23,9 +23,9 @@ int main() {
   const T G_eff = G + K*eta*beta;   // 84423
 
 
-  std::println("Elastic constants: lambda={:.1f}, G={:.1f}, K={:.1f}", lambda, G, K);
-  std::println("G_eff = {:.1f}", G_eff);
-  std::println("");
+  numsim_core::println("Elastic constants: lambda={:.1f}, G={:.1f}, K={:.1f}", lambda, G, K);
+  numsim_core::println("G_eff = {:.1f}", G_eff);
+  numsim_core::println("");
 
   // Simulate a few steps manually
   tensor2 eps_p{};   // zero initially
@@ -61,7 +61,7 @@ int main() {
     T F = modified_sig_eq - sigma_0 - H_val;
 
     if (F <= 0) {
-      std::println("step {:2d}: ELASTIC  eps11={:.4f} sig11={:.1f} p={:.1f}",
+      numsim_core::println("step {:2d}: ELASTIC  eps11={:.4f} sig11={:.1f} p={:.1f}",
                    step, eps11, sig_trial(0, 0), p_trial);
       continue;
     }
@@ -78,7 +78,7 @@ int main() {
     T sqrt_j2_corrected = sqrt_j2_trial - G * dlambda;
     bool apex = (G * dlambda >= sqrt_j2_trial);
 
-    std::println("step {:2d}: eps11={:.4f}  sqrt_J2_trial={:.2f}  G*dl={:.2f}  "
+    numsim_core::println("step {:2d}: eps11={:.4f}  sqrt_J2_trial={:.2f}  G*dl={:.2f}  "
                  "sqrt_J2_corr={:.2f}  {}",
                  step, eps11, sqrt_j2_trial, G*dlambda, sqrt_j2_corrected,
                  apex ? "*** APEX OVERSHOOT ***" : "ok");

@@ -101,7 +101,7 @@ public:
   }
 
   /// Append one row: the current value of every source. Called by the engine.
-  void update() override {
+  void update() {
     std::size_t c = 0;
     for (auto const* in : m_scalar_inputs)
       m_buffer.push(c++, static_cast<double>(in->get()));

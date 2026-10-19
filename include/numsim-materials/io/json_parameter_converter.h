@@ -1,9 +1,11 @@
 #ifndef JSON_PARAMETER_CONVERTER_H
 #define JSON_PARAMETER_CONVERTER_H
 
+#include <algorithm>
 #include <any>
 #include <functional>
-#include <print>
+#include <iterator>
+#include <numsim-core/print.h>
 #include <stdexcept>
 #include <string>
 #include <typeindex>
@@ -44,13 +46,15 @@ struct json_adapter {
 template<typename JsonType>
 class json_reader_registry {
 public:
-  using reader_fn = std::function<std::any(const JsonType&)>;
+  /// A reader gets the parameter key with the value: readers are found by type, and two parameters of one
+  /// type (vector_newton's "zero_blocks", weighted_sum's "terms") must each report under their own name.
+  using reader_fn = std::function<std::any(const JsonType&, const std::string&)>;
   using adapter = json_adapter<JsonType>;
 
   /// Register a type with default JSON conversion (json.get<T>() → std::any).
   template<typename T>
   json_reader_registry& add() {
-    m_readers[typeid(T)] = [](const JsonType& j) -> std::any {
+    m_readers[typeid(T)] = [](const JsonType& j, const std::string&) -> std::any {
       return adapter::template get<T>(j);
     };
     return *this;
@@ -63,15 +67,27 @@ public:
     return *this;
   }
 
+  /// A reader for one parameter, taking precedence over the reader of its type.
+  template<typename T>
+  json_reader_registry& add_for_key(std::string key, reader_fn fn) {
+    m_keyed_readers[{std::type_index(typeid(T)), std::move(key)}] = std::move(fn);
+    return *this;
+  }
+
   /// Read a JSON value and return as std::any.
   /// Throws if no reader is registered for the given type.
   std::any read(std::type_index tid, const JsonType& j, const std::string& key) const {
-    auto it = m_readers.find(tid);
-    if (it == m_readers.end())
+    const reader_fn* fn = nullptr;
+    if (auto keyed = m_keyed_readers.find({tid, key}); keyed != m_keyed_readers.end())
+      fn = &keyed->second;
+    else if (auto it = m_readers.find(tid); it != m_readers.end())
+      fn = &it->second;
+
+    if (!fn)
       throw std::runtime_error(
           "json_reader_registry: no reader for parameter '" + key + "'");
     try {
-      return it->second(j);
+      return (*fn)(j, key);
     } catch (const std::exception& e) {
       throw std::runtime_error(
           "json_reader_registry: failed to read parameter '" + key + "': " + e.what());
@@ -79,7 +95,16 @@ public:
   }
 
 private:
+  struct keyed_hash {
+    std::size_t operator()(const std::pair<std::type_index, std::string>& k) const noexcept {
+      return std::hash<std::type_index>{}(k.first) ^
+             (std::hash<std::string>{}(k.second) << 1);
+    }
+  };
+
   std::unordered_map<std::type_index, reader_fn> m_readers;
+  std::unordered_map<std::pair<std::type_index, std::string>, reader_fn, keyed_hash>
+      m_keyed_readers;
 };
 
 // --- Default registry factory ---
@@ -103,7 +128,7 @@ json_reader_registry<JsonType> make_default_json_registry() {
 
   // vector<size_t>: element-wise conversion
   reg.template add<std::vector<std::size_t>>(
-      [](const JsonType& j) -> std::any {
+      [](const JsonType& j, const std::string&) -> std::any {
         std::vector<std::size_t> result;
         for (const auto& elem : j)
           result.push_back(adapter::template get<std::size_t>(elem));
@@ -123,12 +148,12 @@ json_reader_registry<JsonType> make_default_json_registry() {
   };
 
   reg.template add<sop>(
-      [convert_sop](const JsonType& j) -> std::any {
+      [convert_sop](const JsonType& j, const std::string&) -> std::any {
         return convert_sop(j);
       });
 
   reg.template add<std::vector<sop>>(
-      [convert_sop](const JsonType& j) -> std::any {
+      [convert_sop](const JsonType& j, const std::string&) -> std::any {
         std::vector<sop> result;
         for (const auto& elem : j)
           result.push_back(convert_sop(elem));
@@ -141,7 +166,7 @@ json_reader_registry<JsonType> make_default_json_registry() {
   // No "dim" — the dimension is fixed by the Traits policy, which keeps the
   // kind set small enough for an exhaustive switch on the solver side.
   reg.template add<std::vector<unknown_spec>>(
-      [](const JsonType& j) -> std::any {
+      [](const JsonType& j, const std::string&) -> std::any {
         std::vector<unknown_spec> result;
         for (const auto& elem : j) {
           unknown_spec s;
@@ -159,23 +184,25 @@ json_reader_registry<JsonType> make_default_json_registry() {
         return result;
       });
 
-  // Structurally-zero Jacobian blocks:
-  //   "zero_blocks": [["dgamma", "backstress"]]
+  // a vector of string pairs, shared by "zero_blocks" and "terms": the message names the key it was given
+  // and says what an entry must be in that parameter's words
+  const auto string_pairs = [](const JsonType& j, const std::string& key, const char* entry) -> std::any {
+    std::vector<block_ref> result;
+    std::ranges::transform(j, std::back_inserter(result), [&](const JsonType& elem) {
+      std::vector<std::string> names;
+      std::ranges::transform(elem, std::back_inserter(names),
+                             [](const JsonType& part) { return adapter::template get<std::string>(part); });
+      if (names.size() != 2)
+        throw std::runtime_error(key + ": each entry must be " + entry + ", but one has " + std::to_string(names.size()));
+      return block_ref{std::move(names[0]), std::move(names[1])};
+    });
+    return result;
+  };
   reg.template add<std::vector<block_ref>>(
-      [](const JsonType& j) -> std::any {
-        std::vector<block_ref> result;
-        for (const auto& elem : j) {
-          std::vector<std::string> names;
-          for (const auto& part : elem)
-            names.push_back(adapter::template get<std::string>(part));
-          if (names.size() != 2)
-            throw std::runtime_error(
-                "zero_blocks: each entry must be a [row, column] pair of "
-                "unknown names");
-          result.emplace_back(std::move(names[0]), std::move(names[1]));
-        }
-        return result;
-      });
+      [string_pairs](const JsonType& j, const std::string& key) { return string_pairs(j, key, "a pair of two names"); });
+  reg.template add_for_key<std::vector<block_ref>>("zero_blocks", [string_pairs](const JsonType& j, const std::string& key) {
+    return string_pairs(j, key, "a [row, column] pair of unknown names");
+  });
 
   return reg;
 }
@@ -234,7 +261,7 @@ void json_to_parameters(
 
   adapter::for_each_key(json, [&](const std::string& key) {
     if (key != "type" && !schema_keys.contains(key))
-      std::println(stderr, "  warning: unknown parameter '{}' in JSON (not in schema)", key);
+      numsim_core::println(stderr, "  warning: unknown parameter '{}' in JSON (not in schema)", key);
   });
 
   // Read + insert + validate in one call

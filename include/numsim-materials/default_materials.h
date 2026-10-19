@@ -5,6 +5,7 @@
 #include "numsim-materials/core/material_base.h"
 #include "numsim-materials/solvers/backward_euler.h"
 #include "numsim-materials/solvers/local_newton.h"
+#include "numsim-materials/solvers/rk_integrator.h"
 #include "numsim-materials/solvers/vector_newton.h"
 #include "numsim-materials/materials/scalar_stepper.h"
 #include "numsim-materials/materials/constant_scalar.h"
@@ -20,6 +21,8 @@
 #include "numsim-materials/materials/vector_strain_state_function.h"
 #include "numsim-materials/materials/isotropic_tangent.h"
 #include "numsim-materials/materials/linear_elasticity.h"
+#include "numsim-materials/materials/neo_hooke.h"
+#include "numsim-materials/materials/saint_venant_kirchhoff.h"
 #include "numsim-materials/materials/linear_stress.h"
 #include "numsim-materials/materials/autocatalytic_reaction.h"
 #include "numsim-materials/materials/tensor_component_stepper.h"
@@ -83,6 +86,8 @@ void register_default_materials() {
   auto& factory = material_factory<Traits>::instance();
   factory.template register_type<scalar_stepper<Traits>>("scalar_stepper");
   factory.template register_type<linear_elasticity<Traits>>("linear_elasticity");
+  factory.template register_type<saint_venant_kirchhoff<Traits>>("saint_venant_kirchhoff");
+  factory.template register_type<neo_hooke<Traits>>("neo_hooke");
   factory.template register_type<constant_scalar<Traits>>("constant_scalar");
   factory.template register_type<props_scalar<Traits>>("props_scalar");
 
@@ -134,6 +139,10 @@ void register_default_materials() {
   // A single registered type covers every unknown combination — the layout is
   // dispatched from the "unknowns" parameter, not baked into the template.
   factory.template register_type<vector_newton<Traits>>("vector_newton");
+  // Unregistered until now, so the whole Runge-Kutta family -- every explicit
+  // and implicit tableau -- was unreachable from a document. Nothing caught it
+  // because the conformance scan looked only at materials/, not solvers/.
+  factory.template register_type<rk_integrator<Traits>>("rk_integrator");
 }
 
 } // namespace numsim::materials

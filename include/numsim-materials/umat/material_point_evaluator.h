@@ -44,7 +44,7 @@ public:
   using context_type = material_context<Traits>;
 
   struct config {
-    /// Name of the external_strain_source material.
+    /// external_strain_source (small strain); empty for finite strain.
     std::string strain_source;
     /// Material producing the stress the host wants back.
     std::string stress_source;
@@ -67,6 +67,8 @@ public:
     /// APPENDED — a field inserted mid-struct would silently re-bind the
     /// trailing arguments of an existing aggregate initialiser.
     std::optional<std::string> tangent_source{};
+    /// external_deformation_gradient_source (finite strain). APPENDED, see tangent_source.
+    std::string deformation_gradient_source{};
   };
 
   /// One host call's arguments.
@@ -105,11 +107,22 @@ public:
       throw fatal_error(
           "material_point_evaluator: the context must be finalized first");
 
-    m_strain_src = resolve_source<external_strain_source<Traits>>(
-        m_cfg.strain_source, "strain_source");
+    if (m_cfg.strain_source.empty() == m_cfg.deformation_gradient_source.empty())
+      throw fatal_error(
+          "material_point_evaluator: set exactly one of strain_source and "
+          "deformation_gradient_source");
 
     std::vector<statev_exclusion> exclusions = m_cfg.extra_exclusions;
-    exclusions.emplace_back(m_cfg.strain_source, "strain");
+    if (!m_cfg.strain_source.empty()) {
+      m_strain_src = resolve_source<external_strain_source<Traits>>(
+          m_cfg.strain_source, "strain_source");
+      exclusions.emplace_back(m_cfg.strain_source, "strain");
+    } else {
+      m_F_src = resolve_source<external_deformation_gradient_source<Traits>>(
+          m_cfg.deformation_gradient_source, "deformation_gradient_source");
+      exclusions.emplace_back(m_cfg.deformation_gradient_source,
+                              "deformation_gradient");
+    }
 
     if (!m_cfg.time_source.empty()) {
       m_time_src = resolve_source<external_scalar_source<Traits>>(
@@ -150,9 +163,15 @@ public:
     return m_statev->describe();
   }
 
+  [[nodiscard]] bool finite_strain() const noexcept { return m_F_src != nullptr; }
+
   /// Evaluate one material point. See the class comment for why this retains
   /// nothing, and why it is not const.
   void evaluate(const call& c) {
+    if (finite_strain())
+      throw fatal_error(
+          "material_point_evaluator: a deformation-gradient model has no "
+          "small-strain call; use evaluate_deformation_gradient()");
     if (c.ec == element_case::plane_stress)
       throw fatal_error(
           "material_point_evaluator: plane stress needs an outer solve for the "
@@ -220,6 +239,10 @@ public:
       if (!is_identity_rotation(R)) m_statev->rotate_history(R);
     }
 
+    if (finite_strain())
+      throw fatal_error(
+          "material_point_evaluator: a deformation-gradient model has no "
+          "small-strain call; use evaluate_deformation_gradient()");
     m_strain_src->bind(old6, new6);
     if (m_time_src) m_time_src->bind(time, time + dtime);
 
@@ -261,6 +284,30 @@ public:
   }
 
   /// Write the updated history back. No commit(): the host owns the timestep.
+  /// Finite-strain evaluation; results via stress() and tangent(). Pair with store_statev().
+  void evaluate_deformation_gradient(const value_type* statev, const tensor2& F_old,
+                                     const tensor2& F_new, value_type time,
+                                     value_type dtime) {
+    if (!finite_strain())
+      throw fatal_error(
+          "material_point_evaluator: evaluate_deformation_gradient needs a "
+          "deformation_gradient_source");
+    if (!m_props_readers.empty() && !m_props_bound)
+      throw fatal_error(
+          "material_point_evaluator: this model reads its material constants "
+          "per call — call bind_props() before evaluating");
+    m_statev->unpack(statev);
+    m_F_src->bind(F_old, F_new);
+    if (m_time_src) m_time_src->bind(time, time + dtime);
+    m_ctx.update();
+  }
+
+  /// Stress of the last evaluation (P for finite strain).
+  [[nodiscard]] const tensor2& stress() const noexcept { return *m_stress; }
+
+  /// Tangent of the last evaluation (dP/dF for finite strain).
+  [[nodiscard]] const tensor4& tangent() const noexcept { return *m_tangent; }
+
   void store_statev(value_type* statev) const { m_statev->pack(statev); }
 
   void check_nstatv(std::size_t host_nstatv) const {
@@ -391,6 +438,7 @@ private:
   context_type& m_ctx;
   config m_cfg;
   external_strain_source<Traits>* m_strain_src{nullptr};
+  external_deformation_gradient_source<Traits>* m_F_src{nullptr};
   external_scalar_source<Traits>* m_time_src{nullptr};
   const tensor2* m_stress{nullptr};
   const tensor4* m_tangent{nullptr};

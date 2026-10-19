@@ -32,9 +32,9 @@ public:
       : base(std::forward<Args>(args)...),
         m_sig(base::template add_output<tensor2>("stress", &linear_elasticity::update_stress)),
         m_C(base::template add_output<tensor4>("tangent")),
-        m_eps_name(base::template get_parameter<std::string>("strain_producer_name")),
         m_K(base::template get_parameter<value_type>("K")),
         m_G(base::template get_parameter<value_type>("G")),
+        m_eps_name(base::template get_parameter<std::string>("strain_producer_name")),
         m_eps(base::template add_input<tensor2>(m_eps_name, "strain", EdgeKind::Global))
   {
     update_tangent();

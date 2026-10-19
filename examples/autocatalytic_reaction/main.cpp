@@ -1,4 +1,4 @@
-#include <print>
+#include <numsim-core/print.h>
 #include <numsim-materials/default_materials.h>
 #include <numsim-materials/core/material_context.h>
 #include <numsim-materials/materials/scalar_stepper.h>
@@ -56,7 +56,7 @@ int main() {
   for (int i = 0; i < 200; ++i) {
     ctx.update();
     if (i % 10 == 0)
-      std::println("step {:3d}: time = {:6.0f}s, curing = {:.6e}",
+      numsim_core::println("step {:3d}: time = {:6.0f}s, curing = {:.6e}",
                    i, time.new_value(), curing.new_value());
     ctx.commit();
   }

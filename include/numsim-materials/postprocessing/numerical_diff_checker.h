@@ -3,7 +3,7 @@
 
 #include <cassert>
 #include <cmath>
-#include <print>
+#include <numsim-core/print.h>
 #include <string>
 #include <type_traits>
 #include <unordered_set>
@@ -76,7 +76,7 @@ void report_mismatches(T analytical, T numerical, T tol) {
   auto ref = std::max(std::abs(analytical), std::abs(numerical));
   auto rel = (ref > T{1e-30}) ? diff / ref : diff;
   if (rel > tol)
-    std::println("    scalar: analytical={:.6e} numerical={:.6e} diff={:.6e} rel={:.6e}",
+    numsim_core::println("    scalar: analytical={:.6e} numerical={:.6e} diff={:.6e} rel={:.6e}",
                  analytical, numerical, diff, rel);
 }
 
@@ -89,7 +89,7 @@ void report_mismatches(const tmech::tensor<T,Dim,2>& analytical,
       auto ref = std::max(std::abs(analytical(i,j)), std::abs(numerical(i,j)));
       auto rel = (ref > T{1e-30}) ? diff / ref : diff;
       if (rel > tol)
-        std::println("    ({},{}) analytical={:.6e} numerical={:.6e} rel={:.6e}",
+        numsim_core::println("    ({},{}) analytical={:.6e} numerical={:.6e} rel={:.6e}",
                      i, j, analytical(i,j), numerical(i,j), rel);
     }
 }
@@ -105,7 +105,7 @@ void report_mismatches(const tmech::tensor<T,Dim,4>& analytical,
           auto ref = std::max(std::abs(analytical(i,j,k,l)), std::abs(numerical(i,j,k,l)));
           auto rel = (ref > T{1e-30}) ? diff / ref : diff;
           if (rel > tol)
-            std::println("    ({},{},{},{}) analytical={:.6e} numerical={:.6e} rel={:.6e}",
+            numsim_core::println("    ({},{},{},{}) analytical={:.6e} numerical={:.6e} rel={:.6e}",
                          i, j, k, l, analytical(i,j,k,l), numerical(i,j,k,l), rel);
         }
 }
@@ -257,7 +257,7 @@ public:
 
     // 8. Report mismatching components
     if (m_rel_error > m_report_threshold) {
-      std::println("  numerical_diff_checker '{}': mismatching components (rel > {:.2e}):",
+      numsim_core::println("  numerical_diff_checker '{}': mismatching components (rel > {:.2e}):",
                    base::name(), m_report_threshold);
       detail::report_mismatches(analytical, numerical, m_report_threshold);
     }

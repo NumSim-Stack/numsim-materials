@@ -58,6 +58,8 @@ void register_umat_materials() {
       "external_strain_source");
   factory.template register_type<external_scalar_source<Traits>>(
       "external_scalar_source");
+  factory.template register_type<external_deformation_gradient_source<Traits>>(
+      "external_deformation_gradient_source");
 }
 
 /// The materials a document may name, registered once per Traits.

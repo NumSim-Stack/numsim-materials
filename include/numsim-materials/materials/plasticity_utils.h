@@ -17,6 +17,13 @@ tmech::tensor<T, Dim, 4> make_IIdev() {
   return tmech::tensor<T, Dim, 4>{IIsym - IIvol};
 }
 
+/// The same projector, built once per (T, Dim) and shared.
+template<typename T, std::size_t Dim>
+const tmech::tensor<T, Dim, 4>& cached_IIdev() {
+  static const tmech::tensor<T, Dim, 4> value{make_IIdev<T, Dim>()};
+  return value;
+}
+
 /// Isotropic elastic tangent C = K*I⊗I + 2G*IIdev.
 ///
 /// The bulk term is K*I⊗I, NOT 3K*IIvol. Those are equal only at Dim = 3,
