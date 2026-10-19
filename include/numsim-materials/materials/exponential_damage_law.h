@@ -2,74 +2,47 @@
 #define EXPONENTIAL_DAMAGE_LAW_H
 
 #include <cmath>
-#include "numsim-materials/core/material_base.h"
+#include <utility>
+
+#include "numsim-materials/core/parameter_helpers.h"
+#include "numsim-materials/materials/detail/scalar_damage_law.h"
 
 namespace numsim::materials {
 
-/// Exponential damage evolution law.
-///
-/// D(kappa) = 1 - (kappa_0 / kappa) * exp(beta * (kappa_0 - kappa))
-/// dD/dkappa = (kappa_0 / kappa^2) * exp(beta*(kappa_0-kappa))
-///           + (kappa_0 * beta / kappa) * exp(beta*(kappa_0-kappa))
-///
-/// Outputs:
-///   "damage"   — scalar D in [0, 1)
-///   "d_damage" — scalar dD/dkappa
-///
-/// Inputs:
-///   yield_source::kappa — damage multiplier from yield function
+/// Exponential law d = 1 - kappa_0 / kappa exp(beta (kappa_0 - kappa)) above the threshold, capped at d_max.
+/// Parameters "kappa_0" > 0, "beta" >= 0, "d_max", "yield_source"; outputs "damage", "d_damage".
 template <typename Traits>
-class exponential_damage_law final
-    : public material_base<exponential_damage_law<Traits>, Traits> {
+class exponential_damage_law final : public detail::scalar_damage_law<exponential_damage_law<Traits>, Traits> {
 public:
-  using base = material_base<exponential_damage_law<Traits>, Traits>;
+  using base = detail::scalar_damage_law<exponential_damage_law<Traits>, Traits>;
   using value_type = typename base::value_type;
   using input_parameter_controller = typename base::input_parameter_controller;
 
   template <typename... Args>
-  explicit exponential_damage_law(Args&&... args)
-      : base(std::forward<Args>(args)...),
-        m_damage(base::template add_output<value_type>(
-            "damage", &exponential_damage_law::compute)),
-        m_d_damage(base::template add_output<value_type>("d_damage")),
-        m_kappa_0(base::template get_parameter<value_type>("kappa_0")),
-        m_beta(base::template get_parameter<value_type>("beta")),
-        m_yield_source(base::template get_parameter<std::string>("yield_source")),
-        m_kappa(base::template add_input<value_type>(
-            m_yield_source, "kappa", EdgeKind::Global))
-  {}
+  explicit exponential_damage_law(Args &&...args)
+      : base(std::forward<Args>(args)...), m_beta(base::template get_parameter<value_type>("beta")) {
+    base::require(base::kappa_0() > 0, "kappa_0 must be positive");
+    base::require(m_beta >= 0, "beta must be non-negative");
+    base::register_output();
+  }
+
+  static constexpr char const *type_name() noexcept { return "exponential_damage_law"; }
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
-    para.template insert<std::string>("yield_source").template add<is_required>();
-    para.template insert<value_type>("kappa_0").template add<is_required>();
-    para.template insert<value_type>("beta").template add<is_required>();
+    required<value_type>(para, "kappa_0");
+    required<value_type>(para, "beta");
     return para;
   }
 
-  void compute() {
-    const auto kappa = m_kappa.get();
-
-    if (kappa <= m_kappa_0 || kappa < value_type{1e-30}) {
-      m_damage = value_type{0};
-      m_d_damage = value_type{0};
-      return;
-    }
-
-    const auto exp_term = std::exp(m_beta * (m_kappa_0 - kappa));
-    const auto ratio = m_kappa_0 / kappa;
-
-    m_damage = std::min(value_type{1} - ratio * exp_term, value_type{0.999});
-    m_d_damage = ratio * exp_term * (value_type{1} / kappa + m_beta);
+  [[nodiscard]] std::pair<value_type, value_type> evaluate(value_type kappa) const noexcept {
+    auto const ratio{base::kappa_0() / kappa};
+    auto const e{std::exp(m_beta * (base::kappa_0() - kappa))};
+    return {1 - ratio * e, ratio * e * (1 / kappa + m_beta)};
   }
 
 private:
-  value_type& m_damage;
-  value_type& m_d_damage;
-  const value_type& m_kappa_0;
-  const value_type& m_beta;
-  const std::string& m_yield_source;
-  const input_property<value_type, property_traits>& m_kappa;
+  value_type const &m_beta;
 };
 
 } // namespace numsim::materials

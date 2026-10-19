@@ -97,11 +97,14 @@ TEST(LoadPath, RejectsStepsOutsideThePath) {
 }
 
 TEST(ReportJson, ParsesThePointAndTheColumns) {
-  auto const doc = json::parse(R"({"point": {"strain_source": "s", "stress_source": "m", "tangent_source": "t"},
-    "record": {"kappa": "m::kappa"}})");
+  auto const doc = json::parse(R"({"point": {"strain_source": "s", "stress_source": "m", "tangent_source": "t",
+    "stress_property": "damaged_stress", "tangent_property": "damaged_tangent"}, "record": {"kappa": "m::kappa"}})");
   auto const cfg{r::parse_point<policy>(doc)};
   EXPECT_EQ(cfg.strain_source, "s");
   EXPECT_EQ(cfg.stress_source, "m");
+  EXPECT_EQ(cfg.stress_property, "damaged_stress");
+  EXPECT_EQ(cfg.tangent_property, "damaged_tangent");
+  EXPECT_EQ(r::parse_point<policy>(json::parse(R"({"point": {"strain_source": "s", "stress_source": "m"}})")).stress_property, "stress");
   ASSERT_TRUE(cfg.tangent_source.has_value());
   EXPECT_EQ(*cfg.tangent_source, "t");
   auto const cols{r::parse_columns(doc)};
@@ -109,7 +112,7 @@ TEST(ReportJson, ParsesThePointAndTheColumns) {
   EXPECT_EQ(cols[0].name, "strain");
   EXPECT_EQ(cols[0].source, "s::strain");
   EXPECT_FALSE(cols[0].full);
-  EXPECT_EQ(cols[1].source, "m::stress");
+  EXPECT_EQ(cols[1].source, "m::damaged_stress");
   EXPECT_EQ(cols[2].name, "kappa");
   EXPECT_EQ(cols[2].source, "m::kappa");
 }

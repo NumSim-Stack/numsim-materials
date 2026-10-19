@@ -118,6 +118,16 @@ TEST(ReportSpec, RecordsWhereEachParameterIsUsed) {
   EXPECT_EQ(out["parameter_usage"]["unused"], json::array());
 }
 
+TEST(ReportSpec, ANamedEntryReplacesTheIncludedOne) {
+  auto const dir{std::filesystem::temp_directory_path() / "numsim_report_spec_replace"};
+  std::filesystem::create_directories(dir);
+  std::ofstream{dir / "standard.json"} << R"({"checks": [{"name": "tangent", "tolerance": 1e-6}, {"name": "other"}]})";
+  auto const out = r::resolve_report(json::parse(R"({"include": ["standard.json"], "checks": [{"name": "tangent", "tolerance": 1e-3}, {"name": "new"}]})"), dir.string());
+  ASSERT_EQ(out["checks"].size(), 3u);
+  EXPECT_EQ(out["checks"][0]["tolerance"], 1e-3);
+  EXPECT_EQ(out["checks"][2]["name"], "new");
+}
+
 TEST(ReportSpec, IncludeCycleThrows) {
   auto const dir{std::filesystem::temp_directory_path() / "numsim_report_spec_cycle"};
   std::filesystem::create_directories(dir);

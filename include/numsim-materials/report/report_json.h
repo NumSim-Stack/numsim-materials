@@ -141,8 +141,9 @@ inline std::vector<refinement_study> parse_studies(nlohmann::json const &doc) {
   return out;
 }
 
-/// "point": the evaluator configuration (strain_source, stress_source, optional tangent_source, time_source,
-/// residual with tolerance and max_passes).
+/// "point": the evaluator configuration (strain_source or deformation_gradient_source, stress_source;
+/// optional tangent_source, stress_property, tangent_property, time_source, residual with tolerance and
+/// max_passes).
 template <typename Traits>
 typename umat::material_point_evaluator<Traits>::config parse_point(nlohmann::json const &doc) {
   auto const &p{doc.at("point")};
@@ -154,6 +155,8 @@ typename umat::material_point_evaluator<Traits>::config parse_point(nlohmann::js
   cfg.stress_source = p.at("stress_source").template get<std::string>();
   if (p.contains("tangent_source"))
     cfg.tangent_source = p["tangent_source"].template get<std::string>();
+  cfg.stress_property = p.value("stress_property", std::string{"stress"});
+  cfg.tangent_property = p.value("tangent_property", std::string{"tangent"});
   cfg.time_source = p.value("time_source", std::string{});
   cfg.residual_property = p.value("residual", std::string{});
   cfg.residual_tolerance = p.value("tolerance", cfg.residual_tolerance);
@@ -172,7 +175,7 @@ struct column_spec {
 /// "record" (nlohmann::json orders those by column name; a value may be {"source", "full"}).
 inline std::vector<column_spec> parse_columns(nlohmann::json const &doc) {
   auto const &p{doc.at("point")};
-  auto const stress{p.at("stress_source").get<std::string>() + "::stress"};
+  auto const stress{p.at("stress_source").get<std::string>() + "::" + p.value("stress_property", std::string{"stress"})};
   std::vector<column_spec> out;
   if (is_finite_strain(doc))
     out = {{"F", p.at("deformation_gradient_source").get<std::string>() + "::deformation_gradient", true}, {"P", stress, true}};
