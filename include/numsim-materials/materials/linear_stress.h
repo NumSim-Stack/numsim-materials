@@ -3,6 +3,7 @@
 
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_base.h"
+#include "numsim-materials/core/parameter_helpers.h"
 
 namespace numsim::materials {
 
@@ -33,14 +34,13 @@ public:
             "tangent", EdgeKind::Global)),
         m_eps(base::template add_input<tensor2>(
             base::template get_parameter<std::string>("strain_source"),
-            "strain", EdgeKind::Global)) {}
+            base::template get_parameter<std::string>("strain_property"), EdgeKind::Global)) {}
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
-    para.template insert<std::string>("tangent_source")
-        .template add<is_required>();
-    para.template insert<std::string>("strain_source")
-        .template add<is_required>();
+    required<std::string>(para, "tangent_source");
+    required<std::string>(para, "strain_source");
+    optional<std::string>(para, "strain_property", std::string{"strain"});
     return para;
   }
 
