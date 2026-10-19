@@ -21,6 +21,13 @@ class ExpressionTest(unittest.TestCase):
         np.testing.assert_array_equal(expr("E * x", "a"), [0, 2, 4])
         self.assertEqual(expr(3), 3)
 
+    def test_derived_values_resolve_in_any_order(self):
+        spec = {"parameters": {"K": 2.0}, "derived": {"A": "B + 1", "B": "C * 2", "C": "K"}}
+        expr = Expressions(spec, {})
+        self.assertEqual(expr("A"), 5.0)
+        with self.assertRaises(NameError):
+            Expressions({"derived": {"A": "B", "B": "A"}}, {})
+
     def test_no_builtins_beyond_the_whitelist(self):
         with self.assertRaises(NameError):
             Expressions(SPEC, {})("open('x')")

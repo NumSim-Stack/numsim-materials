@@ -31,6 +31,8 @@
 #include "numsim-materials/materials/depolarisation_spheroid.h"
 #include "numsim-materials/materials/isotropic_moduli.h"
 #include "numsim-materials/materials/poisson_ratio_from_moduli.h"
+#include "numsim-materials/materials/phase.h"
+#include "numsim-materials/materials/rule_of_mixture.h"
 #include "numsim-materials/materials/neo_hooke.h"
 #include "numsim-materials/materials/saint_venant_kirchhoff.h"
 #include "numsim-materials/materials/linear_stress.h"
@@ -108,6 +110,8 @@ void register_default_materials() {
     factory.template register_type<depolarisation_spheroid<Traits>>("depolarisation_spheroid");
     factory.template register_type<depolarisation_ellipsoid<Traits>>("depolarisation_ellipsoid");
   }
+  factory.template register_type<rule_of_mixture<Traits>>("rule_of_mixture");
+  factory.template register_type<phase<Traits>>("phase");
   factory.template register_type<saint_venant_kirchhoff<Traits>>("saint_venant_kirchhoff");
   factory.template register_type<neo_hooke<Traits>>("neo_hooke");
   factory.template register_type<constant_scalar<Traits>>("constant_scalar");
