@@ -1,0 +1,23 @@
+{
+  "title": "incremental_linear_elasticity",
+  "include": ["../standard_small_strain.json"],
+  "parameters": {"K": 166666.67, "G": 76923.08},
+  "derived": {"E": "9 * K * G / (3 * K + G)", "nu": "(3 * K - 2 * G) / (2 * (3 * K + G))"},
+  "model": {"materials": [
+    {"type": "external_strain_source", "name": "strain"},
+    {"type": "linear_elasticity", "name": "total", "strain_producer_name": "strain", "K": "$K", "G": "$G"},
+    {"type": "incremental_linear_elasticity", "name": "inc", "strain_source": "strain", "tangent_source": "total"}]},
+  "point": {"strain_source": "strain", "stress_source": "inc"},
+  "record": {"sig_total": "total::stress"},
+  "cases": [
+    {"name": "tension_then_shear", "points": [[0, 0, 0, 0, 0, 0], [1, 0, 0, 0, 0, 0], [1, 0, 0, 1, 0, 0], [0, 0, 0, 0, 0, 0]], "scale": "$amplitude", "steps": "$steps", "tangent_every": "$tangent_every"}
+  ],
+  "studies": [
+    {"name": "constant tangent: exact for any step", "case": "uniaxial_strain", "steps": [2, 5, 10, 20, 40], "quantity": "stress_11"}
+  ],
+  "checks": [
+    {"name": "equals the total form on every path", "cases": "*", "value": "np.sqrt((stress_11 - sig_total_11)**2 + (stress_22 - sig_total_22)**2 + (stress_12 - sig_total_12)**2) / np.max(np.sqrt(sig_total_11**2 + sig_total_22**2 + sig_total_12**2))", "tolerance": 1e-10},
+    {"name": "σ11 = E ε11 (uniaxial stress)", "case": "uniaxial_stress", "value": "stress_11", "expected": "E * strain_11", "tolerance": 1e-10, "relative": true, "plot": {"x": "strain_11"}},
+    {"name": "a closed path returns to zero stress", "case": "tension_then_shear", "value": "abs(stress_11) + abs(stress_12)", "where": "step == 150", "tolerance": 1e-9}
+  ]
+}
