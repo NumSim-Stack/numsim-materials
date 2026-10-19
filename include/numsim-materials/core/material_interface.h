@@ -7,6 +7,7 @@
 #include <type_traits>
 #include <memory>
 #include <string>
+#include <typeinfo>
 #include <vector>
 
 #include "numsim-materials/core/property_traits.h"
@@ -18,6 +19,19 @@
 #include "numsim-materials/core/traits.h"
 
 namespace numsim::materials {
+
+namespace detail {
+/// How a parameter type reads in an error message.
+template <typename T>
+std::string parameter_type_label() {
+  if constexpr (std::is_same_v<T, bool>) return "a boolean";
+  else if constexpr (std::is_floating_point_v<T>) return "a real number";
+  else if constexpr (std::is_integral_v<T>) return "an integer";
+  else if constexpr (std::is_same_v<T, std::string>) return "a string";
+  else if constexpr (requires { typename T::value_type; typename T::iterator; }) return "a list";
+  else return std::string{"of type "} + typeid(T).name();
+}
+} // namespace detail
 
 /// Virtual base for all materials: property registration, typed input wiring and material references;
 /// work happens in the callbacks bound to properties, there is no virtual update() to override.
@@ -41,14 +55,18 @@ public:
 
   const std::string& name() const noexcept { return m_name; }
 
+  /// Reads a parameter; a missing key or a wrong stored type is reported with the material, the key and the
+  /// type this material reads (not as a bare bad_any_cast or the handler's "Key not found").
   template <typename T>
   const T& get_parameter(std::string const& key) const {
-    return m_parameter_handler.template get<T>(key);
-  }
-
-  template <typename T>
-  const T& get_parameter(std::string&& key) const {
-    return m_parameter_handler.template get<T>(std::forward<std::string>(key));
+    try {
+      return m_parameter_handler.template get<T>(key);
+    } catch (const std::bad_any_cast&) {
+      throw std::invalid_argument("material '" + m_name + "': parameter '" + key + "' is not " + detail::parameter_type_label<T>() +
+                                  " as this material reads it (a whole number written without a decimal point is the usual cause)");
+    } catch (const std::invalid_argument&) {
+      throw std::invalid_argument("material '" + m_name + "': parameter '" + key + "' is missing");
+    }
   }
 
   /// Overwrite a parameter in place so references bound by get_parameter() stay
