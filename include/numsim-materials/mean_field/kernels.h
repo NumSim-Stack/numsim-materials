@@ -3,6 +3,7 @@
 
 #include <map>
 #include <memory>
+#include <format>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -215,8 +216,8 @@ public:
       }
       C = (1 - m_relaxation) * C + m_relaxation * C_new;
     }
-    throw std::runtime_error("self_consistent: no convergence in " + std::to_string(m_max_iterations) + " iterations (residual " +
-                             std::to_string(residual) + ")");
+    throw std::runtime_error(std::format("self_consistent: no convergence in {} iterations (residual {:g}, tolerance {:g})",
+                                         m_max_iterations, residual, m_tolerance));
   }
 
 private:

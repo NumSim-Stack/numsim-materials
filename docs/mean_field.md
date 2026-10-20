@@ -25,6 +25,7 @@ an evolving fraction) the consumers follow. A mean-field scheme is a **kernel ob
 | `mean_field_strain` | `strain_source` (history), `phases` (matrix first), `kernel` {object} | `strain_<phase>` (history), `concentration_<phase>` |
 | `mean_field_composite_local_linear` | `phases` [{`concentration`, `stress`, `tangent`, `fraction`}] | `stress`, `tangent` |
 | `mean_field_composite_local_nonlinear` | `phases` [{… , `used_tangent`}] | `stress`, `tangent`, `residual` |
+| `scalar_split` | `source` / `property`, `weights` | `value_<i>` = wᵢ · value |
 
 Every `<x>_source` names a material, every `<x>_property` the property on it (defaults: `tangent`, `value`,
 `tensor`, `strain`, `stress`). A fixed value is a `constant_scalar`; a value that evolves is whatever node
@@ -183,6 +184,41 @@ the phases harden. A softening phase in series (damage under Reuss or Hill) is a
 stable equal-stress path and the result depends on the step — a property of the problem, which the passes do
 not hide.
 
+### Short fibres at their local strains
+
+`short_fibre_composite` (§3) averages one fibre over its orientations and only knows tangents. When the
+fibres are materials (damage), every orientation is a phase of its own with its own history. The deck entry
+`orientation_phases` writes these phases: it is expanded into plain entries before the graph is built, one
+fibre phase per node of the half Lebedev rule fitted to the orientation tensor (an antipodal pair is one
+direction carrying both weights):
+
+```json
+{"type": "orientation_phases", "name": "sf", "strain_source": "strain", "matrix": "matrix",
+ "matrix_stress": "elastic_m::stress", "fraction_source": "c", "orientation": [0.7, 0.25, 0.05, 0, 0, 0], "precision": 11,
+ "kernel": {"type": "mori_tanaka", "eshelby": {"type": "eshelby_spheroid", "aspect_ratio": 15, "nu_source": "moduli", "nu_property": "poisson_ratio"}},
+ "phase": {"tangent_source": "Cf"},
+ "per_direction": [
+   {"type": "linear_elasticity", "name": "fe_{q}", "strain_producer_name": "sf_strain", "strain_property": "strain_sf_{q}", "K": 166666.67, "G": 76923.08},
+   ...,
+   {"type": "isotropic_damage", "name": "fibre_{q}", "elastic_source": "fe_{q}", ...}],
+ "stress": "fibre_{q}::damaged_stress", "tangent": "fibre_{q}::damaged_tangent", "matrix_tangent": "elastic_m::tangent"}
+```
+
+It becomes `sf_fractions` (a `scalar_split` of `c` by the node weights), per direction q the phase `sf_<q>`
+(from the `phase` template, fraction `sf_fractions::value_<q>`) and a copy of `per_direction` with `{q}` → q,
+then `sf_strain` (`mean_field_strain`, the matrix first) and `sf` (`mean_field_composite_local_linear`; the
+stress and tangent of phase q from the `stress` / `tangent` templates, which default to the phase node's
+tangent). The phase material of direction q reads `strain_sf_<q>` of `sf_strain`.
+
+The kernel is any of §3. For `dilute` and `mori_tanaka`, `eshelby` is the template of an Eshelby node that is
+emitted per direction along it. For `self_consistent`, `shape` is the kernel shape of a fibre, placed along every
+direction, and `matrix_shape` (default `sphere`) is the shape of the matrix. With elastic fibres one pass is the
+global composite over the same phases; Mori–Tanaka equals `short_fibre_composite` with `averaging`
+`concentration`.
+
+The phases localise with their initial tangents (the `phase` template's `tangent_source`), so the localisation
+is linear and one pass is exact, while the averaged stress and tangent are the damaged ones.
+
 ---
 
 ## 5. Who runs the fixed point
@@ -215,6 +251,7 @@ republished by `phase` as `depolarisation` (#110 for the composite nodes).
 `docs/materials/mean_field_composite_global` (dilute, Mori–Tanaka, self-consistent, unidirectional fibres),
 `mean_field_composite_global_rule_of_mixture`, `short_fibre_composite`, `mean_field_damage` (the local pair with a
 damaging matrix); tests `test_mean_field_kernels`, `test_mean_field_composite_global`, `test_rule_of_mixture`,
-`test_short_fibre_composite`, `test_mean_field_local`, `test_mean_field_damage`,
+`test_short_fibre_composite`, `test_mean_field_local`, `test_mean_field_damage`, `test_orientation_phases`,
+`test_json_expansions`, `test_scalar_split`,
 `test_eshelby_materials`, `test_depolarisation_materials`, `test_scalar_producers`. The uvwmaterial cards
 map onto these nodes through `tools/convert_uvwmaterial_card.py` (see `uvwmaterial-mapping.md`).

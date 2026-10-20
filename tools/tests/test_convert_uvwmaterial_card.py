@@ -74,6 +74,7 @@ class ConvertTest(unittest.TestCase):
         self.assertEqual((shape["type"], shape["aspect_ratio"], shape["direction"], shape["nu_source"]),
                          ("eshelby_spheroid", 27.0, [1, 0, 0], matrix["tangent_source"] + "_moduli"))
         self.assertEqual(top["precision"], 7)
+        self.assertEqual(top["averaging"], "stiffness")
         self.assertAlmostEqual(sum(top["orientation"][:3]), 1.0)
         self.assertAlmostEqual(by_name(doc, matrix["fraction_source"])["value"], 0.5)
 

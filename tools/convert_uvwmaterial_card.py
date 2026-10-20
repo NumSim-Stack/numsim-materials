@@ -263,7 +263,8 @@ class Converter:
         a = card["fibre_orientation_tensor"]  # 9 components row-major
         orientation = [a[0], a[4], a[8], a[1], a[2], a[5]]
         tangent = self.add({"type": "short_fibre_composite", "name": f"{name}_tangent", "matrix": matrix_phase, "fibre": phase,
-                            "orientation": orientation, "precision": card.get("integration_precision", 23)})
+                            "orientation": orientation, "precision": card.get("integration_precision", 23),
+                            "averaging": "stiffness"})  # uvwmaterial: Voigt over the unidirectional composites
         return self.stress_of(tangent, name)
 
     def propagation_law(self, law: dict, yield_name: str, name: str) -> str:
