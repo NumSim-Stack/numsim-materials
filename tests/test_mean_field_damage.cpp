@@ -94,9 +94,8 @@ std::unique_ptr<ctx_type> build(bool nonlinear, std::string const &kernel = "mor
   p.clear();
   p.insert<std::string>("name", "mt_strain");
   p.insert<std::string>("strain_source", "strain");
-  p.insert<std::string>("matrix", "matrix");
-  p.insert<std::vector<std::string>>("phases", {"spheres"});
-  p.insert<std::string>("kernel", kernel);
+  p.insert<std::vector<std::string>>("phases", {"matrix", "spheres"});
+  p.insert<nm::object_spec<param_type>>("kernel", {kernel, {}});
   ctx.create<nm::mean_field_strain<policy>>(p);
   // the phase materials at their local strains
   p.clear();
@@ -305,9 +304,8 @@ std::unique_ptr<ctx_type> build_plastic() {
   p.clear();
   p.insert<std::string>("name", "mt_strain");
   p.insert<std::string>("strain_source", "strain");
-  p.insert<std::string>("matrix", "matrix");
-  p.insert<std::vector<std::string>>("phases", {"spheres"});
-  p.insert<std::string>("kernel", "reuss");
+  p.insert<std::vector<std::string>>("phases", {"matrix", "spheres"});
+  p.insert<nm::object_spec<param_type>>("kernel", {"reuss", {}});
   ctx.create<nm::mean_field_strain<policy>>(p);
   p.clear();
   p.insert<std::string>("name", "solver");
@@ -404,7 +402,7 @@ TEST(MeanFieldDamage, FromJson) {
     {"type": "phase", "name": "matrix", "tangent_source": "damage", "tangent_property": "damaged_tangent", "tangent_edge": "local",
      "initial_tangent_source": "C_m", "fraction_source": "cm"},
     {"type": "phase", "name": "spheres", "tangent_source": "C_i", "fraction_source": "c", "eshelby_source": "sphere"},
-    {"type": "mean_field_strain", "name": "mt_strain", "strain_source": "strain", "matrix": "matrix", "phases": ["spheres"]},
+    {"type": "mean_field_strain", "name": "mt_strain", "strain_source": "strain", "phases": ["matrix", "spheres"], "kernel": {"type": "mori_tanaka"}},
     {"type": "linear_elasticity", "name": "elastic", "strain_producer_name": "mt_strain", "strain_property": "strain_matrix", "K": 3.0, "G": 1.0},
     {"type": "von_mises_state_function", "name": "state", "strain_source": "mt_strain", "strain_property": "strain_matrix"},
     {"type": "strain_threshold_yield", "name": "yield", "state_source": "state", "kappa_critical": 0.002},
