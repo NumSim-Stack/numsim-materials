@@ -7,6 +7,7 @@
 #include <optional>
 #include <span>
 #include <stdexcept>
+#include <format>
 #include <string>
 #include <vector>
 
@@ -319,8 +320,8 @@ public:
     if (!m_residual) return;
     for (int pass{1}; *m_residual > m_cfg.residual_tolerance; ++pass) {
       if (pass >= m_cfg.max_passes)
-        throw std::runtime_error("material_point_evaluator: '" + m_cfg.residual_property + "' did not reach " +
-                                 std::to_string(m_cfg.residual_tolerance) + " in " + std::to_string(m_cfg.max_passes) + " passes");
+        throw std::runtime_error(std::format("material_point_evaluator: '{}' did not reach {:g} in {} passes (last {:g})",
+                                             m_cfg.residual_property, m_cfg.residual_tolerance, m_cfg.max_passes, *m_residual));
       m_ctx.update();
     }
   }
