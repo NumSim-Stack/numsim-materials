@@ -2,6 +2,7 @@
 #define MATERIAL_INTERFACE_H
 
 #include <any>
+#include <cstddef>
 #include <functional>
 #include <stdexcept>
 #include <type_traits>
@@ -92,6 +93,8 @@ public:
           "identity and cannot be changed after construction");
     try {
       m_parameter_handler.template get<T>(key) = value;
+      if (m_revision)
+        ++*m_revision; // the engine recomputes its constant properties
     } catch (const std::bad_any_cast&) {
       // Otherwise this surfaces as a bare "bad any_cast" naming nothing, and
       // from a type that is neither invalid_argument nor runtime_error.
@@ -161,6 +164,16 @@ public:
     return m_typed_inputs;
   }
 
+  /// An output declared a function of the parameters and of `reads` (material_base::constant_output).
+  struct constant_declaration {
+    std::string output;
+    std::vector<input_wire_base const*> reads;
+  };
+  const std::vector<constant_declaration>& constant_outputs() const noexcept { return m_constant_outputs; }
+
+  /// The engine's revision counter, bumped by set_parameter(); bound at finalize().
+  void bind_revision(std::size_t* revision) noexcept { m_revision = revision; }
+
 protected:
   template <typename T>
   T& add_property(std::string const& property_name, T&& data = T()) {
@@ -195,6 +208,10 @@ protected:
     return ref;
   }
 
+  void declare_constant(std::string output, std::vector<input_wire_base const*> reads) {
+    m_constant_outputs.push_back({std::move(output), std::move(reads)});
+  }
+
   /// Add a lazy reference to another material, resolved at finalize().
   template <typename T>
   material_ref<T, Traits>& add_material_ref(std::string name) {
@@ -211,6 +228,8 @@ protected:
 private:
   std::vector<std::unique_ptr<input_wire_base>> m_typed_inputs;
   std::vector<std::unique_ptr<material_ref_base<Traits>>> m_material_refs;
+  std::vector<constant_declaration> m_constant_outputs;
+  std::size_t* m_revision{nullptr};
 };
 
 } // namespace numsim::materials

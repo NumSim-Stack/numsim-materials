@@ -74,6 +74,12 @@ protected:
     return ref;
   }
 
+  /// `output` is a function of the parameters and of `reads` only: once every read is constant too (over a
+  /// global edge), the engine computes it once instead of on every update.
+  void constant_output(std::string const& output, std::vector<input_wire_base const*> reads = {}) {
+    base::declare_constant(output, std::move(reads));
+  }
+
 private:
   /// Bind a member function as the update callback for a property.
   /// The lambda captures a reference to the derived material — the material

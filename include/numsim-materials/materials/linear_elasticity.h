@@ -41,6 +41,7 @@ public:
         m_eigenstrain(eigenstrain_input())
   {
     update_tangent();
+    base::constant_output("tangent");
   }
 
   /**

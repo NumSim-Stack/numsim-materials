@@ -33,7 +33,10 @@ public:
         m_nu(base::template add_output<value_type>("poisson_ratio")),
         m_tolerance(base::template get_parameter<value_type>("tolerance")),
         m_C(base::template add_input<tensor4>(base::template get_parameter<std::string>("tangent_source"),
-                                              base::template get_parameter<std::string>("tangent_property"), EdgeKind::Global)) {}
+                                              base::template get_parameter<std::string>("tangent_property"), EdgeKind::Global)) {
+    for (auto const *output : {"K", "G", "poisson_ratio"})
+      base::constant_output(output, {&m_C});
+  }
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};

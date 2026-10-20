@@ -28,6 +28,7 @@ public:
     if (!(K > 0 && G > 0))
       throw std::invalid_argument("poisson_ratio_from_moduli '" + base::name() + "': K and G must be positive");
     m_nu = poisson_ratio(K, G);
+    base::constant_output("value");
   }
 
   static input_parameter_controller parameters() {

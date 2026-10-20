@@ -2,6 +2,8 @@
 #define PROPERTY_ENGINE_H
 
 #include <algorithm>
+#include <cstddef>
+#include <memory>
 #include <numsim-core/print.h>
 #include <queue>
 #include <stdexcept>
@@ -30,14 +32,14 @@ public:
              const std::vector<material_interface_type*>& interfaces) {
     compute_execution_order(properties, interfaces);
     collect_history_properties(properties);
+    find_constants(properties, interfaces);
   }
 
-  /// Run all property update callbacks in topological order.
+  /// Run all property update callbacks in topological order; a constant one only until it has run.
   void update() {
-    for (auto* prop : m_property_execution_order) {
-      if (prop->traits().update)
-        prop->traits().update();
-    }
+    refresh_constants();
+    for (auto* prop : m_property_execution_order)
+      run(prop);
   }
 
   /// Update a single property and all its upstream dependencies.
@@ -52,13 +54,19 @@ public:
   /// Update a single property (by pointer) and all its upstream dependencies.
   void update_property(const property_base* target,
                        const std::unordered_set<const property_base*>& exclude = {}) {
+    refresh_constants();
     auto subgraph = collect_upstream(target);
     for (auto* prop : m_property_execution_order) {
-      if (subgraph.contains(prop) && prop->traits().update
-          && !exclude.contains(prop))
-        prop->traits().update();
+      if (subgraph.contains(prop) && !exclude.contains(prop))
+        run(prop);
     }
   }
+
+  /// A property computed once: declared constant (material_base::constant_output) and reading only constants.
+  bool is_constant(const property_base* prop) const { return m_constant.contains(prop); }
+
+  /// Bumped by every write outside the graph (set_parameter, get_mutable): constants are recomputed.
+  std::size_t* revision() noexcept { return m_revision.get(); }
 
   void commit() {
     for (auto* hp : m_history_properties)
@@ -101,6 +109,7 @@ public:
   template<typename T>
   T& get_mutable(property_handler& properties,
                  const std::string& material, const std::string& prop_name) {
+    ++*m_revision; // the caller may write anything, a constant included
     auto* p = find_property(properties, material, prop_name);
     if (!p)
       throw std::runtime_error("property_engine::get_mutable(): property '" +
@@ -125,8 +134,8 @@ public:
     numsim_core::println(stderr, "=== Property execution order ({} properties) ===",
                  m_property_execution_order.size());
     for (auto* prop : m_property_execution_order)
-      numsim_core::println(stderr, "  {}::{}{}", prop->traits().id.owner, prop->traits().id.name,
-                   prop->traits().update ? "" : " (no callback)");
+      numsim_core::println(stderr, "  {}::{}{}{}", prop->traits().id.owner, prop->traits().id.name,
+                   prop->traits().update ? "" : " (no callback)", is_constant(prop) ? " (constant)" : "");
   }
 
 private:
@@ -241,6 +250,64 @@ private:
     }
   }
 
+  /// Constant: declared, not history, every read a global edge from a constant (the topological order has the
+  /// reads first). A callback runs once only when the outputs of its material without a callback of their own
+  /// (written by some callback of it) are constant as well.
+  void find_constants(property_handler& properties, const std::vector<material_interface_type*>& interfaces) {
+    std::unordered_map<const property_base*, const std::vector<numsim_core::input_wire_base const*>*> declared;
+    for (auto* mat : interfaces)
+      for (auto& d : mat->constant_outputs()) {
+        auto* p = find_property(properties, std::string(mat->name()), d.output);
+        if (!p)
+          throw std::logic_error("constant_output(): '" + std::string(mat->name()) + "::" + d.output +
+                                 "' is not an output of the material");
+        declared[p] = &d.reads;
+      }
+    m_constant.clear();
+    for (auto* prop : m_property_execution_order) {
+      auto it = declared.find(prop);
+      if (it == declared.end() || prop->is_history())
+        continue;
+      bool const reads_constants{std::ranges::all_of(*it->second, [&](auto const* read) {
+        if (read->edge_kind() != EdgeKind::Global)
+          return false;
+        auto* source = find_in_graph(read->source_owner(), read->source_name());
+        return source && m_constant.contains(source);
+      })};
+      if (reads_constants)
+        m_constant.insert(prop);
+    }
+    m_once.clear();
+    for (auto& [owner, props] : properties.data()) {
+      bool const quiet_constant{std::ranges::all_of(props, [&](auto const& entry) {
+        return entry.second->traits().update || m_constant.contains(entry.second.get());
+      })};
+      for (auto& [name, prop] : props)
+        if (quiet_constant && prop->traits().update && m_constant.contains(prop.get()))
+          m_once.insert(prop.get());
+    }
+    m_done.clear();
+  }
+
+  void refresh_constants() {
+    if (*m_revision != m_seen_revision) {
+      m_done.clear();
+      m_seen_revision = *m_revision;
+    }
+  }
+
+  void run(property_base* prop) {
+    auto& update = prop->traits().update;
+    if (!update)
+      return;
+    bool const once{m_once.contains(prop)};
+    if (once && m_done.contains(prop))
+      return;
+    update();
+    if (once)
+      m_done.insert(prop);
+  }
+
   void collect_history_properties(property_handler& properties) {
     m_history_properties.clear();
     for (auto& [owner, props] : properties.data())
@@ -278,6 +345,11 @@ private:
   std::unordered_map<std::string, property_base*> m_key_to_prop;  // for string-based find
   std::unordered_map<property_base*, std::vector<property_base*>> m_reverse_edges;  // pointer-based
   std::vector<property_base*> m_history_properties;
+  std::unordered_set<const property_base*> m_constant;
+  std::unordered_set<const property_base*> m_once; ///< callbacks run once
+  std::unordered_set<const property_base*> m_done; ///< ... and already run since the last revision
+  std::unique_ptr<std::size_t> m_revision{std::make_unique<std::size_t>(0)}; ///< stable address for the materials
+  std::size_t m_seen_revision{0};
 };
 
 } // namespace numsim::materials

@@ -67,6 +67,8 @@ public:
     for (auto* mat : m_store.interfaces())
       mat->wire_inputs();
     m_engine.build(m_properties, m_store.interfaces());
+    for (auto* mat : m_store.interfaces())
+      mat->bind_revision(m_engine.revision());
     check_integrity();
     m_finalized = true;
   }

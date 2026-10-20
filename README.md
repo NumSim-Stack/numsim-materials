@@ -45,7 +45,10 @@ material_context (facade)
 **Core API:**
 - `add_output<T>("name", &callback)` — produce a property
 - `add_input<T>(source, prop, EdgeKind)` — consume a property (wired at `finalize()`)
-- `ctx.update()` — execute all properties in topological order
+- `constant_output("name", {&input, ...})` — the output depends only on parameters and those inputs: when
+  they are constant too (global edges), it is computed once, not on every update; `set_parameter()` and
+  `get_mutable()` recompute the constants
+- `ctx.update()` — execute all properties in topological order (the constant ones until they have run)
 - `ctx.update_property("mat", "prop")` — selective upstream update
 - `ctx.commit()` / `ctx.revert()` — timestep history management
 - `ctx.save_state("checkpoint.bin")` / `ctx.load_state(...)` — binary checkpoint/restart
