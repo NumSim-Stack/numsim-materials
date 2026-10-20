@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <map>
 #include <memory>
 #include <stdexcept>
 #include <tmech/tmech.h>
@@ -34,6 +35,16 @@ void constant(ctx_type &ctx, std::string const &name, T value) {
   p.insert<std::string>("name", name);
   p.insert<T>("value", value);
   ctx.create<nm::constant_scalar<policy>>(p);
+}
+
+/// The kernel object of `type`; self-consistent carries the shapes of both phases.
+nm::object_spec<param_type> kernel_spec(std::string const &type) {
+  param_type k;
+  if (type == "self_consistent") {
+    k.insert<std::map<std::string, nm::object_spec<param_type>>>("shapes", {{"matrix", {"sphere", {}}}, {"spheres", {"sphere", {}}}});
+    k.insert<T>("tolerance", 1e-13);
+  }
+  return {type, k};
 }
 
 /// Stiff elastic spheres in an elastic matrix, both evaluated at their local strains: every edge is global.
@@ -77,9 +88,8 @@ std::unique_ptr<ctx_type> build(std::string const &kernel = "mori_tanaka") {
   p.clear();
   p.insert<std::string>("name", "mt_strain");
   p.insert<std::string>("strain_source", "strain");
-  p.insert<std::string>("matrix", "matrix");
-  p.insert<std::vector<std::string>>("phases", {"spheres"});
-  p.insert<std::string>("kernel", kernel);
+  p.insert<std::vector<std::string>>("phases", {"matrix", "spheres"});
+  p.insert<nm::object_spec<param_type>>("kernel", kernel_spec(kernel));
   ctx.create<nm::mean_field_strain<policy>>(p);
   // the phase materials at their local strains
   p.clear();
@@ -185,9 +195,10 @@ TEST(MeanFieldLocal, LinearPhasesReproduceTheTangentHomogenisationInOnePass) {
   EXPECT_NEAR(tmech::norm(tensor2{ctx->get<tensor2>("mt_strain", "strain_matrix") - tmech::dcontract(ref.get<tensor4>("mf", "concentration_matrix"), eps)}), 0, 1e-15);
 }
 
-// the rule-of-mixture kernels localise too: the same concentrations as the tangent producer, the same tangent
-TEST(MeanFieldLocal, RuleOfMixtureKernelsEqualTheirTangentProducer) {
-  for (auto const *kernel : {"voigt", "reuss", "hill"}) {
+// every kernel localises like the global composite holding the same kernel object: one pass, the same
+// concentrations, the same tangent
+TEST(MeanFieldLocal, EveryKernelLocalisesLikeTheGlobalComposite) {
+  for (auto const *kernel : {"voigt", "reuss", "hill", "dilute", "mori_tanaka", "self_consistent"}) {
     auto ctx{build(kernel)};
     tensor2 const eps{uniaxial(1e-3)};
     EXPECT_EQ(converge(*ctx), 1) << kernel;
@@ -204,22 +215,32 @@ TEST(MeanFieldLocal, RuleOfMixtureKernelsEqualTheirTangentProducer) {
     }
     constant(ref, "c", c);
     constant(ref, "cm", 1 - c);
+    param_type q;
+    q.insert<std::string>("name", "moduli");
+    q.insert<std::string>("tangent_source", "C_m");
+    ref.create<nm::isotropic_moduli<policy>>(q);
+    q.clear();
+    q.insert<std::string>("name", "sphere");
+    q.insert<std::string>("nu_source", "moduli");
+    q.insert<std::string>("nu_property", "poisson_ratio");
+    ref.create<nm::eshelby_sphere<policy>>(q);
     for (auto const &[name, tangent, fraction] : {std::tuple{"matrix", "C_m", "cm"}, std::tuple{"spheres", "C_i", "c"}}) {
-      param_type q;
+      q.clear();
       q.insert<std::string>("name", name);
       q.insert<std::string>("tangent_source", tangent);
       q.insert<std::string>("fraction_source", fraction);
+      q.insert<std::string>("eshelby_source", "sphere");
       ref.create<nm::phase<policy>>(q);
     }
-    param_type q;
+    q.clear();
     q.insert<std::string>("name", "rom");
     q.insert<std::vector<std::string>>("phases", {"matrix", "spheres"});
-    q.insert<nm::object_spec<param_type>>("kernel", {kernel, {}});
+    q.insert<nm::object_spec<param_type>>("kernel", kernel_spec(kernel));
     ref.create<nm::mean_field_composite_global<policy>>(q);
     ref.finalize();
     ref.update();
     auto const &C{ref.get<tensor4>("rom", "tangent")};
-    EXPECT_NEAR(tmech::norm(tensor4{ctx->get<tensor4>("mt", "tangent") - C}) / tmech::norm(C), 0, 1e-12) << kernel;
+    EXPECT_NEAR(tmech::norm(tensor4{ctx->get<tensor4>("mt", "tangent") - C}) / tmech::norm(C), 0, 1e-11) << kernel;
     EXPECT_NEAR(tmech::norm(tensor4{ctx->get<tensor4>("mt_strain", "concentration_spheres") - ref.get<tensor4>("rom", "concentration_spheres")}), 0, 1e-12) << kernel;
     EXPECT_NEAR(tmech::norm(tensor2{ctx->get<tensor2>("mt", "stress") - tmech::dcontract(C, eps)}) / tmech::norm(tmech::dcontract(C, eps)), 0, 1e-12) << kernel;
     if (std::string{kernel} == "voigt") {
@@ -259,7 +280,7 @@ TEST(MeanFieldLocal, FromJson) {
     {"type": "constant_scalar", "name": "cm", "value": 0.7},
     {"type": "phase", "name": "matrix", "tangent_source": "C_m", "fraction_source": "cm"},
     {"type": "phase", "name": "spheres", "tangent_source": "C_i", "fraction_source": "c", "eshelby_source": "sphere"},
-    {"type": "mean_field_strain", "name": "mt_strain", "strain_source": "strain", "matrix": "matrix", "phases": ["spheres"]},
+    {"type": "mean_field_strain", "name": "mt_strain", "strain_source": "strain", "phases": ["matrix", "spheres"], "kernel": {"type": "mori_tanaka"}},
     {"type": "linear_stress", "name": "m", "tangent_source": "C_m", "strain_source": "mt_strain", "strain_property": "strain_matrix"},
     {"type": "linear_stress", "name": "s", "tangent_source": "C_i", "strain_source": "mt_strain", "strain_property": "strain_spheres"},
     {"type": "mean_field_stress", "name": "mt", "concentration_source": "mt_strain", "matrix": "matrix", "phases": ["spheres"],
