@@ -219,6 +219,18 @@ global composite over the same phases; Mori–Tanaka equals `short_fibre_composi
 The phases localise with their initial tangents (the `phase` template's `tangent_source`), so the localisation
 is linear and one pass is exact, while the averaged stress and tangent are the damaged ones.
 
+With `"localisation": "nonlinear"` the fibres localise with their current tangents: the `phase` template reads
+the fibre material's tangent over a local edge, and the composite becomes
+`mean_field_composite_local_nonlinear` with `used_tangent` = `sf_<q>::tangent` per fibre (`matrix_used_tangent`
+for a nonlinear matrix). The passes run to the fixed point of §5:
+
+```json
+"localisation": "nonlinear",
+"phase": {"tangent_source": "fibre_{q}", "tangent_property": "damaged_tangent", "tangent_edge": "local", "initial_tangent_source": "Cf"}
+```
+
+Under Mori–Tanaka a softening fibre then attracts strain, so it damages more than in the linear localisation.
+
 ---
 
 ## 5. Who runs the fixed point

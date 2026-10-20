@@ -72,7 +72,7 @@ public:
     /// external_deformation_gradient_source (finite strain). APPENDED, see tangent_source.
     std::string deformation_gradient_source{};
     /// Optional "material::property" of a residual: the graph is updated again until it is at most
-    /// residual_tolerance (a fixed point closed over local edges, e.g. the self-consistent scheme).
+    /// residual_tolerance (a fixed point closed over local edges, e.g. nonlinear mean-field phases).
     /// APPENDED, see tangent_source.
     std::string residual_property{};
     value_type residual_tolerance{1e-10};
