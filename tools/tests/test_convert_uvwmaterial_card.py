@@ -88,21 +88,30 @@ class ConvertTest(unittest.TestCase):
         self.assertEqual([by_name(doc, by_name(doc, p)["fraction_source"])["value"] for p in rom["phases"]], [0.3, 0.7])
         self.assertEqual(doc["point"]["tangent_source"], "rom_tangent")
 
-    def test_damage_in_a_voigt_rule_of_mixture_averages_the_phases(self):
-        doc = convert(DAMAGE_ROM, "rom")
-        top = by_name(doc, "rom")
-        self.assertEqual((top["type"], top["concentration_source"]), ("mean_field_stress", "rom_tangent"))
-        self.assertEqual(by_name(doc, "rom_tangent")["kernel"], "voigt")
-        damaged = by_name(doc, top["matrix_stress_source"])  # the damage material is the "matrix" of the average
-        self.assertEqual((damaged["type"], top["matrix_stress_property"], top["matrix_tangent_property"]), ("isotropic_damage", "damaged_stress", "damaged_tangent"))
-        self.assertEqual(by_name(doc, top["matrix"])["tangent_property"], "damaged_tangent")
-        self.assertEqual([by_name(doc, s)["type"] for s in top["stress_sources"]], ["isotropic_tangent"])
-        law = by_name(doc, damaged["damage_source"])
-        self.assertEqual(law["type"], "exponential_damage_law")
-        self.assertAlmostEqual(law["beta"], 100.0)
-        self.assertEqual(by_name(doc, damaged["yield_source"])["kappa_critical"], 0.01)
-        with self.assertRaisesRegex(ValueError, "#117"):
-            convert({**DAMAGE_ROM, "kernal": "vrh"}, "rom")
+    def test_damage_in_a_rule_of_mixture_localises(self):
+        for kernal, kernel in (("voigt", "voigt"), ("vrh", "hill")):
+            doc = convert({**DAMAGE_ROM, "kernal": kernal}, "rom")
+            top = by_name(doc, "rom")
+            self.assertEqual((top["type"], top["concentration_source"]), ("mean_field_stress", "rom_strain"))
+            strain = by_name(doc, "rom_strain")
+            self.assertEqual((strain["type"], strain["kernel"], strain["matrix"], strain["phases"]), ("mean_field_strain", kernel, "rom_material1", ["rom_material2"]))
+            damaged = by_name(doc, top["matrix_stress_source"])  # the damage material is the first phase
+            self.assertEqual((damaged["type"], top["matrix_stress_property"], top["matrix_tangent_property"]), ("isotropic_damage", "damaged_stress", "damaged_tangent"))
+            state = by_name(doc, damaged["state_source"])  # the chain reads the phase strain
+            self.assertEqual((state["strain_source"], state["strain_property"]), ("rom_strain", "strain_rom_material1"))
+            self.assertEqual(by_name(doc, damaged["elastic_source"])["strain_property"], "strain_rom_material1")
+            elastic_phase = by_name(doc, "rom_material2")
+            self.assertEqual(by_name(doc, top["stress_sources"][0]), {"type": "linear_stress", "name": "rom_material2_stress", "tangent_source": elastic_phase["tangent_source"],
+                                                                      "strain_source": "rom_strain", "strain_property": "strain_rom_material2"})
+            damage_phase = by_name(doc, "rom_material1")
+            if kernel == "voigt":
+                self.assertNotIn("tangent_edge", damage_phase)
+                self.assertNotIn("residual", doc["point"])
+            else:
+                self.assertEqual((damage_phase["tangent_edge"], damage_phase["initial_tangent_source"]), ("local", "rom_material1_material_elastic"))
+                self.assertEqual(doc["point"]["residual"], "rom::residual")
+            law = by_name(doc, damaged["damage_source"])
+            self.assertAlmostEqual(law["beta"], 100.0)
 
     def test_linear_law_and_state_function_parameters(self):
         card = {**DAMAGE, "propagation_law": {"name": "linear", "parameter": {"K": 3.0}},

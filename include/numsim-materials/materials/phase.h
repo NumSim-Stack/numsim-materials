@@ -16,7 +16,9 @@ namespace numsim::materials {
 /// material: a composite consumes these properties and never reaches into another node.
 ///
 /// Parameters: "tangent_source", "fraction_source", "eshelby_source", "depolarisation_source" and their
-/// "_property" names (defaults "tangent", "value", "tensor", "tensor").
+/// "_property" names (defaults "tangent", "value", "tensor", "tensor"); "tangent_edge" = "local" reads the
+/// tangent without ordering (a nonlinear phase whose strain a mean_field_strain produces from this very
+/// tangent: the value of the previous pass), starting from "initial_tangent_source" / "_property".
 template <typename Traits>
 class phase final : public material_base<phase<Traits>, Traits> {
 public:
@@ -32,10 +34,17 @@ public:
       : base(std::forward<Args>(args)...),
         m_tangent(base::template add_output<tensor4>("tangent", &phase::compute)),
         m_fraction(base::template add_output<value_type>("volume_fraction")),
+        m_local(parse_edge(base::template get_parameter<std::string>("tangent_edge"))),
         m_tangent_source(base::template add_input<tensor4>(base::template get_parameter<std::string>("tangent_source"),
-                                                           base::template get_parameter<std::string>("tangent_property"), EdgeKind::Global)),
+                                                           base::template get_parameter<std::string>("tangent_property"),
+                                                           m_local ? EdgeKind::Local : EdgeKind::Global)),
         m_fraction_source(base::template add_input<value_type>(base::template get_parameter<std::string>("fraction_source"),
                                                                base::template get_parameter<std::string>("fraction_property"), EdgeKind::Global)) {
+    auto const &initial{base::template get_parameter<std::string>("initial_tangent_source")};
+    if (m_local != !initial.empty())
+      throw std::invalid_argument("phase '" + base::name() + "': initial_tangent_source goes with tangent_edge = local, and only then");
+    if (m_local)
+      m_initial_tangent = &base::template add_input<tensor4>(initial, base::template get_parameter<std::string>("initial_tangent_property"), EdgeKind::Global);
     auto const &eshelby{base::template get_parameter<std::string>("eshelby_source")};
     auto const &depolarisation{base::template get_parameter<std::string>("depolarisation_source")};
     if constexpr (Dim == 3) {
@@ -57,6 +66,9 @@ public:
     input_parameter_controller para{base::parameters()};
     required<std::string>(para, "tangent_source");
     optional<std::string>(para, "tangent_property", std::string{"tangent"});
+    optional<std::string>(para, "tangent_edge", std::string{"global"});
+    optional<std::string>(para, "initial_tangent_source", std::string{});
+    optional<std::string>(para, "initial_tangent_property", std::string{"tangent"});
     required<std::string>(para, "fraction_source");
     optional<std::string>(para, "fraction_property", std::string{"value"});
     optional<std::string>(para, "eshelby_source", std::string{});
@@ -66,9 +78,10 @@ public:
     return para;
   }
 
-  /// One callback for every output.
+  /// One callback for every output. Over a local edge the first update has no produced tangent yet.
   void compute() {
-    m_tangent = m_tangent_source.get();
+    m_tangent = m_local && m_first ? m_initial_tangent->get() : m_tangent_source.get();
+    m_first = false;
     m_fraction = m_fraction_source.get();
     if (!(m_fraction >= 0))
       throw std::invalid_argument("phase '" + base::name() + "': the volume fraction must be non-negative");
@@ -79,9 +92,20 @@ public:
   }
 
 private:
+  static bool parse_edge(std::string const &e) {
+    if (e == "global")
+      return false;
+    if (e == "local")
+      return true;
+    throw std::invalid_argument("phase: unknown tangent_edge '" + e + "' (global, local)");
+  }
+
   tensor4 &m_tangent;
   value_type &m_fraction;
+  bool const m_local; ///< the tangent of the previous pass
+  bool m_first{true};
   input_property<tensor4, property_traits> const &m_tangent_source;
+  input_property<tensor4, property_traits> const *m_initial_tangent{nullptr}; ///< with a local edge
   input_property<value_type, property_traits> const &m_fraction_source;
   tensor4 *m_eshelby{nullptr}; ///< null without an eshelby_source
   input_property<tensor4, property_traits> const *m_eshelby_source{nullptr};
