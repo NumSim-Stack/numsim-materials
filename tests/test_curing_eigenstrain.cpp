@@ -9,7 +9,7 @@
 #include "numsim-materials/materials/isotropic_tangent.h"
 #include "numsim-materials/materials/linear_stress.h"
 #include "numsim-materials/materials/linear_elasticity.h"
-#include "numsim-materials/materials/mean_field_tangent.h"
+#include "numsim-materials/materials/mean_field_composite_global.h"
 #include "numsim-materials/materials/phase.h"
 #include "numsim-materials/materials/scalar_complement_weight.h"
 #include "numsim-materials/materials/scalar_stepper.h"
@@ -85,10 +85,9 @@ std::unique_ptr<ctx_type> build() {
   ctx.create<nm::phase<policy>>(p);
   p.clear();
   p.insert<std::string>("name", "mf");
-  p.insert<std::string>("matrix", "matrix_phase");
-  p.insert<std::vector<std::string>>("phases", {"spheres"});
-  p.insert<std::string>("kernel", "mori_tanaka");
-  ctx.create<nm::mean_field_tangent<policy>>(p);
+  p.insert<std::vector<std::string>>("phases", {"matrix_phase", "spheres"});
+  p.insert<nm::object_spec<param_type>>("kernel", {"mori_tanaka", {}});
+  ctx.create<nm::mean_field_composite_global<policy>>(p);
   p.clear();
   p.insert<std::string>("name", "beta");
   p.insert<T>("value", beta);
@@ -144,7 +143,7 @@ TEST(CuringEigenstrain, FromJson) {
     {"type": "phase", "name": "spheres", "tangent_source": "i", "eshelby_source": "sphere", "fraction_source": "cure", "fraction_property": "state"},
     {"type": "scalar_complement_weight", "name": "cm", "source": "cure::state"},
     {"type": "phase", "name": "matrix", "tangent_source": "m", "fraction_source": "cm"},
-    {"type": "mean_field_tangent", "name": "mf", "matrix": "matrix", "phases": ["spheres"]},
+    {"type": "mean_field_composite_global", "name": "mf", "phases": ["matrix", "spheres"], "kernel": {"type": "mori_tanaka"}},
     {"type": "linear_stress", "name": "composite", "tangent_source": "mf", "strain_source": "strain"}]})")(ctx, {});
   ctx.get_mutable<T>("cure", "state") = 0.2;
   ctx.update();

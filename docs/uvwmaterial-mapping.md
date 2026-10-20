@@ -15,10 +15,10 @@ is a `*_source` parameter. `tools/convert_uvwmaterial_card.py` converts the old 
 | `neo_hookean_incompressible` | — | | #112 (formulation open) |
 | `hencky_strains_linear_elastic` (K, G), `_thermo_elastic`, `_thermo_chemo_elastic` | `hencky_elasticity` (+ `thermal_eigenstrain`) | `tangent_source` (an `isotropic_tangent` of produced K, G), `deformation_gradient_source`, optional `eigenstrain_source`; outputs P and dP/dF instead of S(ln C) and dS/dC | #141 |
 | `incremental_saint_venant_kirchhoff` | — | | #113 |
-| `small_strain_rule_of_mixture_composite` (`kernal` voigt / reuss / vrh) | `rule_of_mixture` + `linear_stress` | `phases` (phase nodes), `kernel` voigt / reuss / hill; a tangent producer, the stress is a `linear_stress` on it; nonlinear phases go through `mean_field_strain` (same kernels) and `mean_field_stress` | #130 |
+| `small_strain_rule_of_mixture_composite` (`kernal` voigt / reuss / vrh) | `mean_field_composite_global` + `linear_stress` | `phases` (phase nodes), `kernel` {`type`: voigt / reuss / hill}; a tangent producer, the stress is a `linear_stress` on it; nonlinear phases go through `mean_field_strain` (same kernels) and `mean_field_stress` | #130 |
 | `eshelby_tensor_solid_sphere`, `_cylinder_x1/x2/x3`, `_cylinder`, `_cylindrical_ellipsoid`, `_general_geometry` | `eshelby_sphere`, `eshelby_cylinder`, `eshelby_spheroid`, `eshelby_ellipsoid` | `nu_source` / `nu_property` (Poisson's ratio as a produced property: `poisson_ratio_from_moduli` of K and G, or `isotropic_moduli` of a tangent), `direction`, `aspect_ratio`, `semi_axes`; output `tensor` | #128 |
 | `inclusion` (a phase of any composite) | `phase` | produced properties only: `tangent_source`, `fraction_source` (a `constant_scalar` or a cure), optional `eshelby_source` / `depolarisation_source` (the nodes above); `tangent_edge` local for a nonlinear phase inside `mean_field_strain` | #130, #131, #137, #144 |
-| `small_strain_mean_field_composite` (`kernal` dilute / mori_tanaka / scs) | `mean_field_tangent` + `linear_stress` | `matrix`, `phases` (phase nodes, the matrix with its own Eshelby node for `self_consistent`), `kernel` dilute / mori_tanaka / self_consistent; self-consistent is a graph cycle over a local `nu_edge`, closed by the point's `residual` | #131 |
+| `small_strain_mean_field_composite` (`kernal` dilute / mori_tanaka / scs) | `mean_field_composite_global` + `linear_stress` | `phases` (phase nodes, the matrix first), `kernel` {`type`: dilute / mori_tanaka / self_consistent}; self-consistent carries the `shapes` of every phase in its kernel and converges inside the node | #131 |
 | `small_strain_short_fibre_composite` | `short_fibre_composite` + `linear_stress` | `matrix`, `fibre` (phases; the fibre's Eshelby node lies along x1), `orientation` (6 components), `precision`, `averaging` | #133 |
 | `small_strain_isotropic_damage` | `isotropic_damage` + `*_state_function` + `strain_threshold_yield` + a damage law | `elastic_source`, `damage_source`, `state_source`, `yield_source` | existing; report #138 |
 | propagation law `linear` | `linear_damage_law` | `K` | existing |
@@ -84,12 +84,12 @@ evaluation point of a report)
    {"type": "phase", "name": "mt_inclusion1", "tangent_source": "mt_inclusion1_material_C", "eshelby_source": "mt_inclusion1_shape", "fraction_source": "mt_inclusion1_c"},
    {"type": "constant_scalar", "name": "mt_matrix_c", "value": 0.5},
    {"type": "phase", "name": "mt_matrix", "tangent_source": "mt_matrix_material_C", "fraction_source": "mt_matrix_c"},
-   {"type": "mean_field_tangent", "name": "mt_tangent", "matrix": "mt_matrix", "phases": ["mt_inclusion1"], "kernel": "mori_tanaka"},
+   {"type": "mean_field_composite_global", "name": "mt_tangent", "phases": ["mt_matrix", "mt_inclusion1"], "kernel": {"type": "mori_tanaka"}},
    {"type": "linear_stress", "name": "mt", "tangent_source": "mt_tangent", "strain_source": "strain"}]},
  "point": {"strain_source": "strain", "stress_source": "mt", "tangent_source": "mt_tangent"}}
 ```
 
-Differences to know: shear strains are tensor components everywhere; every `eshelby_tensor` becomes its own node consuming the matrix Poisson ratio, with `aspec_ratio` and
+Differences to know: shear strains are tensor components everywhere; every `eshelby_tensor` becomes its own node consuming the matrix Poisson ratio (for `scs` a shape of the kernel), with `aspec_ratio` and
 `direction_vector` as its `aspect_ratio` and `direction`; the 9-component `fibre_orientation_tensor` becomes the
 6 symmetric components `orientation`; `vrh` is `hill`, `scs` is `self_consistent`; every volume fraction is a produced property (a `constant_scalar` for a fixed one); the matrix
 phase gets the fraction the inclusions leave; the point names the tangent producer (`tangent_source`) because the stress node has no tangent.

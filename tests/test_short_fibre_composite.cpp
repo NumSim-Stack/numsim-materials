@@ -10,7 +10,7 @@
 #include "numsim-materials/materials/isotropic_moduli.h"
 #include "numsim-materials/materials/isotropic_tangent.h"
 #include "numsim-materials/materials/linear_stress.h"
-#include "numsim-materials/materials/mean_field_tangent.h"
+#include "numsim-materials/materials/mean_field_composite_global.h"
 #include "numsim-materials/materials/phase.h"
 #include "numsim-materials/materials/short_fibre_composite.h"
 #include "numsim-materials/umat/external_state_source.h"
@@ -52,7 +52,7 @@ std::unique_ptr<ctx_type> build(std::vector<T> const &orientation, std::string c
     p.insert<std::string>("G_source", std::string{name} + "_G");
     ctx.create<nm::isotropic_tangent<policy>>(p);
   }
-  // the fibre shape along x1, shared by the unidirectional reference (a mean_field_tangent) and the composite
+  // the fibre shape along x1, shared by the unidirectional reference (a global Mori-Tanaka composite) and the composite
   p.clear();
   p.insert<std::string>("name", "moduli");
   p.insert<std::string>("tangent_source", "matrix_C");
@@ -79,10 +79,9 @@ std::unique_ptr<ctx_type> build(std::vector<T> const &orientation, std::string c
   ctx.create<nm::phase<policy>>(p);
   p.clear();
   p.insert<std::string>("name", "ud");
-  p.insert<std::string>("matrix", "m");
-  p.insert<std::vector<std::string>>("phases", {"spheroid"});
-  p.insert<std::string>("kernel", "mori_tanaka");
-  ctx.create<nm::mean_field_tangent<policy>>(p);
+  p.insert<std::vector<std::string>>("phases", {"m", "spheroid"});
+  p.insert<nm::object_spec<param_type>>("kernel", {"mori_tanaka", {}});
+  ctx.create<nm::mean_field_composite_global<policy>>(p);
   p.clear();
   p.insert<std::string>("name", "sf");
   p.insert<std::string>("matrix", "m");

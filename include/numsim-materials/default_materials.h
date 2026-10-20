@@ -32,10 +32,9 @@
 #include "numsim-materials/materials/isotropic_moduli.h"
 #include "numsim-materials/materials/poisson_ratio_from_moduli.h"
 #include "numsim-materials/materials/phase.h"
-#include "numsim-materials/materials/rule_of_mixture.h"
 #include "numsim-materials/materials/mean_field_strain.h"
 #include "numsim-materials/materials/mean_field_stress.h"
-#include "numsim-materials/materials/mean_field_tangent.h"
+#include "numsim-materials/materials/mean_field_composite_global.h"
 #include "numsim-materials/materials/short_fibre_composite.h"
 #include "numsim-materials/materials/incremental_linear_elasticity.h"
 #include "numsim-materials/materials/thermal_eigenstrain.h"
@@ -120,11 +119,10 @@ void register_default_materials() {
     factory.template register_type<depolarisation_cylinder<Traits>>("depolarisation_cylinder");
     factory.template register_type<depolarisation_spheroid<Traits>>("depolarisation_spheroid");
     factory.template register_type<depolarisation_ellipsoid<Traits>>("depolarisation_ellipsoid");
-    factory.template register_type<mean_field_tangent<Traits>>("mean_field_tangent");
+    factory.template register_type<mean_field_composite_global<Traits>>("mean_field_composite_global");
     factory.template register_type<mean_field_strain<Traits>>("mean_field_strain");
     factory.template register_type<short_fibre_composite<Traits>>("short_fibre_composite");
   }
-  factory.template register_type<rule_of_mixture<Traits>>("rule_of_mixture");
   factory.template register_type<phase<Traits>>("phase");
   factory.template register_type<mean_field_stress<Traits>>("mean_field_stress");
   factory.template register_type<incremental_linear_elasticity<Traits>>("incremental_linear_elasticity");
