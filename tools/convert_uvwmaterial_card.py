@@ -130,7 +130,7 @@ class Converter:
 
     def convert_small_strain_rule_of_mixture_composite(self, card, name):
         """Linear phases: mean_field_composite_global tangent + linear_stress. Nonlinear phases: mean_field_strain with the
-        kernel localises, every material reads its phase strain, mean_field_stress averages; a nonlinear phase
+        kernel localises, every material reads its phase strain, a mean_field_composite_local_* averages; a nonlinear phase
         reads its tangent over a local edge (not for Voigt, whose concentrations need no tangent) and the
         point closes the fixed point."""
         kernel = KERNELS[card["kernal"]]
@@ -144,43 +144,46 @@ class Converter:
             self.tangent_sources[name] = rom
             return self.add({"type": "linear_stress", "name": name, "tangent_source": rom, "strain_source": self.strain_source})
         strain_node = f"{name}_strain"
-        phases, stresses, tangents = [], [], []
+        phases, sources = [], []
         for key, spec in card["materials"].items():
             phase_name = f"{name}_{key}"
             phase = {"type": "phase", "name": phase_name, "fraction_source": self.fraction(spec["volume_fraction"], phase_name)}
+            local = False
             if spec["name"] == "linear_elasticity":
                 tangent, _, _ = self.phase_tangent(spec, f"{phase_name}_material")
                 stress = self.add({"type": "linear_stress", "name": f"{phase_name}_stress", "tangent_source": tangent,
                                    "strain_source": strain_node, "strain_property": f"strain_{phase_name}"})
                 phase["tangent_source"] = tangent
-                stresses.append((stress, "stress"))
-                tangents.append((tangent, "tangent"))
+                stress_of, tangent_of = f"{stress}::stress", f"{tangent}::tangent"
             else:
                 with self.local_strain(strain_node, f"strain_{phase_name}"):
                     material = self.convert(spec, f"{phase_name}_material")
                 tangent_property = TANGENT_PROPERTY.get(spec["name"], "tangent")
                 phase |= {"tangent_source": material, "tangent_property": tangent_property}
-                if kernel != "voigt":  # the concentrations need the algorithmic tangent: previous pass, from the elastic one
-                    if spec["name"] != "small_strain_isotropic_damage":
-                        raise ValueError(f"rule of mixture: no initial tangent known for {spec['name']} on a local edge; wire the phase by hand")
-                    phase |= {"tangent_edge": "local", "initial_tangent_source": f"{material}_elastic"}
-                stresses.append((material, STRESS_PROPERTY.get(spec["name"], "stress")))
-                tangents.append((material, tangent_property))
-            phases.append(self.add(phase))
+                # the phase node depends on the material, the material on the localisation: a local edge (previous
+                # pass, from the elastic tangent); only a scheme whose concentrations read tangents needs the residual
+                base = spec.get("base_material", {})
+                if spec["name"] != "small_strain_isotropic_damage" or base.get("name") != "linear_elasticity":
+                    raise ValueError(f"rule of mixture: no initial tangent known for {spec['name']} on a local edge; wire the phase by hand")
+                initial, _, _ = self.phase_tangent(base, f"{phase_name}_initial")  # strain-independent: no cycle
+                phase |= {"tangent_edge": "local", "initial_tangent_source": initial}
+                local = kernel != "voigt"
+                stress_of = f"{material}::{STRESS_PROPERTY.get(spec['name'], 'stress')}"
+                tangent_of = f"{material}::{tangent_property}"
+            phase_name = self.add(phase)
+            phases.append(phase_name)
+            source = {"concentration": f"{strain_node}::concentration_{phase_name}", "stress": stress_of, "tangent": tangent_of,
+                      "fraction": f"{phase_name}::volume_fraction"}
+            if local:
+                source["used_tangent"] = f"{phase_name}::tangent"
+            sources.append(source)
         self.add({"type": "mean_field_strain", "name": strain_node, "strain_source": self.strain_source,
                   "phases": phases, "kernel": {"type": kernel}})
-        if kernel != "voigt":
+        nonlinear = any("used_tangent" in src for src in sources)
+        if nonlinear:
             self.residual = f"{name}::residual"
-        if len({(sp, tp) for (_, sp), (_, tp) in zip(stresses[1:], tangents[1:])}) > 1:
-            raise ValueError("rule of mixture: the phases name their stress and tangent properties differently; wire mean_field_stress by hand")
-        doc = {"type": "mean_field_stress", "name": name, "concentration_source": strain_node, "matrix": phases[0], "phases": phases[1:],
-               "matrix_stress_source": stresses[0][0], "stress_sources": [n for n, _ in stresses[1:]],
-               "matrix_tangent_source": tangents[0][0], "tangent_sources": [n for n, _ in tangents[1:]]}
-        if (stresses[0][1], tangents[0][1]) != ("stress", "tangent"):
-            doc |= {"matrix_stress_property": stresses[0][1], "matrix_tangent_property": tangents[0][1]}
-        if len(stresses) > 1 and (stresses[1][1], tangents[1][1]) != ("stress", "tangent"):
-            doc |= {"stress_property": stresses[1][1], "tangent_property": tangents[1][1]}
-        return self.add(doc)
+        return self.add({"type": "mean_field_composite_local_nonlinear" if nonlinear else "mean_field_composite_local_linear",
+                         "name": name, "phases": sources})
 
     ESHELBY_DIRECTIONS = {"long_fibre_x1": [1, 0, 0], "long_fibre_x2": [0, 1, 0], "long_fibre_x3": [0, 0, 1]}
 

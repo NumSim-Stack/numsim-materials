@@ -12,6 +12,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <map>
 #include <variant>
 #include <vector>
 #include <numsim-core/input_parameter_controller.h>
@@ -137,6 +138,22 @@ json_reader_registry<JsonType> make_default_json_registry() {
 
   // Map type
   reg.template add<std::unordered_map<std::string, std::vector<std::string>>>();
+
+  // a list of objects of strings: the per-phase "material::property" sources of a local composite
+  reg.template add<std::vector<std::map<std::string, std::string>>>([](const JsonType& j, const std::string& key) -> std::any {
+    if (!adapter::is_array(j))
+      throw std::invalid_argument("'" + key + "' is a list of objects {role: \"material::property\"}");
+    std::vector<std::map<std::string, std::string>> result;
+    for (const auto& elem : j) {
+      if (!adapter::is_object(elem))
+        throw std::invalid_argument("'" + key + "' is a list of objects {role: \"material::property\"}");
+      auto& entry = result.emplace_back();
+      adapter::for_each_key(elem, [&](const std::string& role) {
+        entry.emplace(role, adapter::template get<std::string>(adapter::at(elem, role)));
+      });
+    }
+    return result;
+  });
 
   // scalar_or_property: number or {"class": "...", "property": "..."}
   using sop = std::variant<double, std::pair<std::string, std::string>>;

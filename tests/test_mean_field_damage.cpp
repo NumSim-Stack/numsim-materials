@@ -16,7 +16,8 @@
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/materials/linear_stress.h"
 #include "numsim-materials/materials/mean_field_strain.h"
-#include "numsim-materials/materials/mean_field_stress.h"
+#include "numsim-materials/materials/mean_field_composite_local_linear.h"
+#include "numsim-materials/materials/mean_field_composite_local_nonlinear.h"
 #include "numsim-materials/materials/phase.h"
 #include "numsim-materials/materials/strain_threshold_yield.h"
 #include "numsim-materials/materials/von_mises_state_function.h"
@@ -138,17 +139,13 @@ std::unique_ptr<ctx_type> build(bool nonlinear, std::string const &kernel = "mor
   ctx.create<nm::linear_stress<policy>>(p);
   p.clear();
   p.insert<std::string>("name", "mt");
-  p.insert<std::string>("concentration_source", "mt_strain");
-  p.insert<std::string>("matrix", "matrix");
-  p.insert<std::vector<std::string>>("phases", {"spheres"});
-  p.insert<std::string>("matrix_stress_source", nonlinear ? "damage" : "elastic");
-  p.insert<std::vector<std::string>>("stress_sources", {"stiff"});
-  p.insert<std::vector<std::string>>("tangent_sources", {"C_i"});
-  if (nonlinear) {
-    p.insert<std::string>("matrix_stress_property", "damaged_stress");
-    p.insert<std::string>("matrix_tangent_property", "damaged_tangent");
-  }
-  ctx.create<nm::mean_field_stress<policy>>(p);
+  p.insert<nm::phase_sources>("phases", {{{"concentration", "mt_strain::concentration_matrix"},
+                                          {"stress", nonlinear ? "damage::damaged_stress" : "elastic::stress"},
+                                          {"tangent", nonlinear ? "damage::damaged_tangent" : "elastic::tangent"},
+                                          {"fraction", "matrix::volume_fraction"}, {"used_tangent", "matrix::tangent"}},
+                                         {{"concentration", "mt_strain::concentration_spheres"}, {"stress", "stiff::stress"},
+                                          {"tangent", "C_i::tangent"}, {"fraction", "spheres::volume_fraction"}}});
+  ctx.create<nm::mean_field_composite_local_nonlinear<policy>>(p);
   ctx.finalize();
   return owner;
 }
@@ -333,13 +330,12 @@ std::unique_ptr<ctx_type> build_plastic() {
   ctx.create<nm::linear_stress<policy>>(p);
   p.clear();
   p.insert<std::string>("name", "mt");
-  p.insert<std::string>("concentration_source", "mt_strain");
-  p.insert<std::string>("matrix", "matrix");
-  p.insert<std::vector<std::string>>("phases", {"spheres"});
-  p.insert<std::string>("matrix_stress_source", "plastic");
-  p.insert<std::vector<std::string>>("stress_sources", {"stiff"});
-  p.insert<std::vector<std::string>>("tangent_sources", {"C_i"});
-  ctx.create<nm::mean_field_stress<policy>>(p);
+  p.insert<nm::phase_sources>("phases", {{{"concentration", "mt_strain::concentration_matrix"}, {"stress", "plastic::stress"},
+                                          {"tangent", "plastic::tangent"}, {"fraction", "matrix::volume_fraction"},
+                                          {"used_tangent", "matrix::tangent"}},
+                                         {{"concentration", "mt_strain::concentration_spheres"}, {"stress", "stiff::stress"},
+                                          {"tangent", "C_i::tangent"}, {"fraction", "spheres::volume_fraction"}}});
+  ctx.create<nm::mean_field_composite_local_nonlinear<policy>>(p);
   ctx.finalize();
   return owner;
 }
@@ -375,15 +371,12 @@ TEST(MeanFieldDamage, RejectsAnInconsistentWiring) {
     EXPECT_THROW(ctx.create<nm::phase<policy>>(p), std::invalid_argument);
   }
   {
-    ctx_type ctx; // stress sources not parallel to the phases
+    ctx_type ctx; // a nonlinear composite with nothing to compare: no phase names the tangent it was localised with
     param_type p;
     p.insert<std::string>("name", "mt");
-    p.insert<std::string>("concentration_source", "s");
-    p.insert<std::string>("matrix", "m");
-    p.insert<std::vector<std::string>>("phases", {"a", "b"});
-    p.insert<std::string>("matrix_stress_source", "m");
-    p.insert<std::vector<std::string>>("stress_sources", {"a"});
-    EXPECT_THROW(ctx.create<nm::mean_field_stress<policy>>(p), std::invalid_argument);
+    p.insert<nm::phase_sources>("phases", {{{"concentration", "s::concentration_m"}, {"stress", "m::stress"}, {"tangent", "m::tangent"},
+                                            {"fraction", "m::volume_fraction"}}});
+    EXPECT_THROW(ctx.create<nm::mean_field_composite_local_nonlinear<policy>>(p), std::invalid_argument);
   }
 }
 
@@ -409,9 +402,10 @@ TEST(MeanFieldDamage, FromJson) {
     {"type": "exponential_damage_law", "name": "law", "yield_source": "yield", "kappa_0": 0.002, "beta": 300.0},
     {"type": "isotropic_damage", "name": "damage", "elastic_source": "elastic", "damage_source": "law", "state_source": "state", "yield_source": "yield"},
     {"type": "linear_stress", "name": "stiff", "tangent_source": "C_i", "strain_source": "mt_strain", "strain_property": "strain_spheres"},
-    {"type": "mean_field_stress", "name": "mt", "concentration_source": "mt_strain", "matrix": "matrix", "phases": ["spheres"],
-     "matrix_stress_source": "damage", "matrix_stress_property": "damaged_stress", "matrix_tangent_property": "damaged_tangent",
-     "stress_sources": ["stiff"], "tangent_sources": ["C_i"]}]})")(ctx, {});
+    {"type": "mean_field_composite_local_nonlinear", "name": "mt", "phases": [
+      {"concentration": "mt_strain::concentration_matrix", "stress": "damage::damaged_stress", "tangent": "damage::damaged_tangent",
+       "fraction": "matrix::volume_fraction", "used_tangent": "matrix::tangent"},
+      {"concentration": "mt_strain::concentration_spheres", "stress": "stiff::stress", "tangent": "C_i::tangent", "fraction": "spheres::volume_fraction"}]}]})")(ctx, {});
   load(ctx, uniaxial(0.01), 10);
   EXPECT_GT(ctx.get<T>("law", "damage"), 0);
   EXPECT_NEAR(tmech::norm(tensor2{0.7 * ctx.get<tensor2>("mt_strain", "strain_matrix") + 0.3 * ctx.get<tensor2>("mt_strain", "strain_spheres") - uniaxial(0.01)}), 0, 1e-12);
