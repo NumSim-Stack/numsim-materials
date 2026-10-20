@@ -261,7 +261,8 @@ republished by `phase` as `depolarisation` (#110 for the composite nodes).
 ## 7. Reports and tests
 
 `docs/materials/mean_field_composite_global` (dilute, Mori–Tanaka, self-consistent, unidirectional fibres),
-`mean_field_composite_global_rule_of_mixture`, `short_fibre_composite`, `mean_field_damage` (the local pair with a
+`mean_field_composite_global_rule_of_mixture`, `short_fibre_composite`, `short_fibre_damage` (`orientation_phases` with
+damaging fibres, nonlinear against linear localisation), `mean_field_damage` (the local pair with a
 damaging matrix); tests `test_mean_field_kernels`, `test_mean_field_composite_global`, `test_rule_of_mixture`,
 `test_short_fibre_composite`, `test_mean_field_local`, `test_mean_field_damage`, `test_orientation_phases`,
 `test_json_expansions`, `test_scalar_split`,

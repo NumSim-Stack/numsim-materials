@@ -1,0 +1,77 @@
+{
+  "title": "orientation_phases: damaging short fibres at their local strains",
+  "include": ["../standard_small_strain.json"],
+  "notes": "Short fibres in an elastic matrix, orientation tensor diag(0.7, 0.25, 0.05), Lebedev degree 11: orientation_phases expands into 25 fibre phases (one per direction of the half rule), each with its own damage chain at its own local strain, Mori-Tanaka with an Eshelby spheroid per direction. sf localises with the current (damaged) tangents of the fibres (localisation nonlinear: the phase nodes read them over a local edge, the evaluator repeats the pass until sf::residual is below tolerance); sfl localises with the initial tangents (localisation linear: one pass); intact is short_fibre_composite without damage. Fibre 0 lies along x1, fibres 1 and 2 along x2 and x3. A softening fibre attracts strain under Mori-Tanaka, so the nonlinear localisation damages the fibres along the load earlier; under uniaxial strain it is also the softer composite (the linear localisation averages damaged stresses over strains formed with the intact concentrations, so no ordering holds in general). The published tangent sum c_r C_r : A_r holds the concentrations fixed, first order in the strain increment (see test_orientation_phases), so the central-difference tangent check is off.",
+  "parameters": {"Km": 3333.33, "Gm": 1153.85, "Kf": 166666.67, "Gf": 76923.08, "c": 0.2, "cm": 0.8, "aspect_ratio": 15.0, "kappa_0": 0.002, "beta": 30.0, "amplitude": 0.008, "tangent_every": 0},
+  "model": {"materials": [
+    {"type": "external_strain_source", "name": "strain"},
+    {"type": "constant_scalar", "name": "Km_", "value": "$Km"}, {"type": "constant_scalar", "name": "Gm_", "value": "$Gm"},
+    {"type": "constant_scalar", "name": "Kf_", "value": "$Kf"}, {"type": "constant_scalar", "name": "Gf_", "value": "$Gf"},
+    {"type": "constant_scalar", "name": "c_", "value": "$c"}, {"type": "constant_scalar", "name": "cm_", "value": "$cm"},
+    {"type": "isotropic_tangent", "name": "C_m", "K_source": "Km_", "G_source": "Gm_"},
+    {"type": "isotropic_tangent", "name": "C_f", "K_source": "Kf_", "G_source": "Gf_"},
+    {"type": "isotropic_moduli", "name": "moduli", "tangent_source": "C_m"},
+    {"type": "phase", "name": "matrix", "tangent_source": "C_m", "fraction_source": "cm_"},
+
+    {"type": "linear_elasticity", "name": "elastic_m", "strain_producer_name": "sf_strain", "strain_property": "strain_matrix", "K": "$Km", "G": "$Gm"},
+    {"type": "orientation_phases", "name": "sf", "localisation": "nonlinear", "strain_source": "strain", "matrix": "matrix",
+     "matrix_stress": "elastic_m::stress", "fraction_source": "c_", "orientation": [0.7, 0.25, 0.05, 0.0, 0.0, 0.0], "precision": 11,
+     "kernel": {"type": "mori_tanaka", "eshelby": {"type": "eshelby_spheroid", "aspect_ratio": "$aspect_ratio", "nu_source": "moduli", "nu_property": "poisson_ratio"}},
+     "phase": {"tangent_source": "fibre_{q}", "tangent_property": "damaged_tangent", "tangent_edge": "local", "initial_tangent_source": "C_f"},
+     "per_direction": [
+       {"type": "linear_elasticity", "name": "fe_{q}", "strain_producer_name": "sf_strain", "strain_property": "strain_sf_{q}", "K": "$Kf", "G": "$Gf"},
+       {"type": "von_mises_state_function", "name": "fs_{q}", "strain_source": "sf_strain", "strain_property": "strain_sf_{q}"},
+       {"type": "strain_threshold_yield", "name": "fy_{q}", "state_source": "fs_{q}", "kappa_critical": "$kappa_0"},
+       {"type": "exponential_damage_law", "name": "fl_{q}", "yield_source": "fy_{q}", "kappa_0": "$kappa_0", "beta": "$beta"},
+       {"type": "isotropic_damage", "name": "fibre_{q}", "elastic_source": "fe_{q}", "damage_source": "fl_{q}", "state_source": "fs_{q}", "yield_source": "fy_{q}"}],
+     "stress": "fibre_{q}::damaged_stress", "tangent": "fibre_{q}::damaged_tangent", "matrix_tangent": "elastic_m::tangent"},
+
+    {"type": "linear_elasticity", "name": "elastic_ml", "strain_producer_name": "sfl_strain", "strain_property": "strain_matrix", "K": "$Km", "G": "$Gm"},
+    {"type": "orientation_phases", "name": "sfl", "strain_source": "strain", "matrix": "matrix",
+     "matrix_stress": "elastic_ml::stress", "fraction_source": "c_", "orientation": [0.7, 0.25, 0.05, 0.0, 0.0, 0.0], "precision": 11,
+     "kernel": {"type": "mori_tanaka", "eshelby": {"type": "eshelby_spheroid", "aspect_ratio": "$aspect_ratio", "nu_source": "moduli", "nu_property": "poisson_ratio"}},
+     "phase": {"tangent_source": "C_f"},
+     "per_direction": [
+       {"type": "linear_elasticity", "name": "lfe_{q}", "strain_producer_name": "sfl_strain", "strain_property": "strain_sfl_{q}", "K": "$Kf", "G": "$Gf"},
+       {"type": "von_mises_state_function", "name": "lfs_{q}", "strain_source": "sfl_strain", "strain_property": "strain_sfl_{q}"},
+       {"type": "strain_threshold_yield", "name": "lfy_{q}", "state_source": "lfs_{q}", "kappa_critical": "$kappa_0"},
+       {"type": "exponential_damage_law", "name": "lfl_{q}", "yield_source": "lfy_{q}", "kappa_0": "$kappa_0", "beta": "$beta"},
+       {"type": "isotropic_damage", "name": "lfibre_{q}", "elastic_source": "lfe_{q}", "damage_source": "lfl_{q}", "state_source": "lfs_{q}", "yield_source": "lfy_{q}"}],
+     "stress": "lfibre_{q}::damaged_stress", "tangent": "lfibre_{q}::damaged_tangent", "matrix_tangent": "elastic_ml::tangent"},
+
+    {"type": "eshelby_spheroid", "name": "shape", "aspect_ratio": "$aspect_ratio", "nu_source": "moduli", "nu_property": "poisson_ratio"},
+    {"type": "phase", "name": "fibre", "tangent_source": "C_f", "fraction_source": "c_", "eshelby_source": "shape"},
+    {"type": "short_fibre_composite", "name": "intact_tangent", "matrix": "matrix", "fibre": "fibre", "orientation": [0.7, 0.25, 0.05, 0.0, 0.0, 0.0], "precision": 11},
+    {"type": "linear_stress", "name": "intact", "tangent_source": "intact_tangent", "strain_source": "strain"}
+  ]},
+  "point": {"strain_source": "strain", "stress_source": "sf", "residual": "sf::residual", "tolerance": 1e-10, "max_passes": 200},
+  "record": {"d_along": "fl_0::damage", "d_x2": "fl_1::damage", "d_x3": "fl_2::damage", "dl_along": "lfl_0::damage",
+             "res": "sf::residual", "sig_lin": "sfl::stress", "sig_intact": "intact::stress"},
+  "checks": [
+    {"name": "every step ends at the fixed point", "cases": "*", "value": "np.max(res)", "tolerance": 1e-10},
+    {"name": "before the fibres damage the composite is the intact short_fibre_composite", "case": "uniaxial_strain",
+     "value": "stress_11", "expected": "sig_intact_11", "where": "(strain_11 <= 0.001) & (np.arange(strain_11.size) <= np.argmax(strain_11))",
+     "tolerance": 1e-10, "relative": true},
+    {"name": "the fibres along the load damage", "case": "uniaxial_strain", "value": "np.max(d_along)", "expected": 0.5, "tolerance": 0.49,
+     "plot": {"x": "strain_11", "y": "d_along", "xlabel": "ε₁₁", "ylabel": "D (fibre along x1)"}},
+    {"name": "the fibres along the load damage before those across it", "case": "uniaxial_strain",
+     "value": "np.maximum(np.maximum(d_x2, d_x3) - d_along, 0)", "tolerance": 1e-12},
+    {"name": "the nonlinear localisation damages the fibres along the load at least as much as the linear one", "case": "uniaxial_strain",
+     "value": "np.maximum(dl_along - d_along, 0)", "tolerance": 1e-12},
+    {"name": "on first loading: nonlinear no stiffer than linear, linear no stiffer than intact", "case": "uniaxial_strain",
+     "value": "np.maximum(abs(stress_11) - abs(sig_lin_11), 0) + np.maximum(abs(sig_lin_11) - abs(sig_intact_11), 0)",
+     "where": "np.arange(strain_11.size) <= np.argmax(strain_11)", "tolerance": 1e-9}
+  ],
+  "figures": [
+    {"title": "Nonlinear against linear localisation of the damaging fibres", "panels": [
+      {"title": "composite stress, uniaxial strain", "case": "uniaxial_strain", "x": "strain_11", "xlabel": "ε₁₁", "ylabel": "σ₁₁",
+       "y": [{"expr": "stress_11", "label": "nonlinear localisation"}, {"expr": "sig_lin_11", "label": "linear localisation"},
+             {"expr": "sig_intact_11", "label": "intact short_fibre_composite"}]},
+      {"title": "fibre damage, uniaxial strain", "case": "uniaxial_strain", "x": "strain_11", "xlabel": "ε₁₁", "ylabel": "D",
+       "y": [{"expr": "d_along", "label": "along x1, nonlinear"}, {"expr": "dl_along", "label": "along x1, linear"},
+             {"expr": "d_x2", "label": "along x2, nonlinear"}]},
+      {"title": "composite stress, simple shear", "case": "simple_shear", "x": "strain_12", "xlabel": "ε₁₂", "ylabel": "σ₁₂",
+       "y": [{"expr": "stress_12", "label": "nonlinear localisation"}, {"expr": "sig_lin_12", "label": "linear localisation"},
+             {"expr": "sig_intact_12", "label": "intact short_fibre_composite"}]}]}
+  ]
+}
