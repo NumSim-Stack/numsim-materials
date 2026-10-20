@@ -41,29 +41,26 @@ class ConvertTest(unittest.TestCase):
         self.assertEqual((top["type"], top["tangent_source"], top["strain_source"]), ("linear_stress", "mt_tangent", "strain"))
         self.assertEqual(doc["point"], {"strain_source": "strain", "stress_source": "mt", "tangent_source": "mt_tangent"})
         mf = by_name(doc, "mt_tangent")
-        self.assertEqual((mf["type"], mf["kernel"]), ("mean_field_tangent", "mori_tanaka"))
-        inc = by_name(doc, mf["phases"][0])
+        self.assertEqual((mf["type"], mf["kernel"]), ("mean_field_composite_global", {"type": "mori_tanaka"}))
+        inc = by_name(doc, mf["phases"][1])  # the matrix first
         self.assertEqual(inc["type"], "phase")
         self.assertEqual(by_name(doc, inc["fraction_source"]), {"type": "constant_scalar", "name": inc["name"] + "_c", "value": 0.5})
         self.assertEqual(by_name(doc, inc["tangent_source"])["type"], "isotropic_tangent")
         shape = by_name(doc, inc["eshelby_source"])
         self.assertEqual((shape["type"], shape["nu_property"]), ("eshelby_sphere", "poisson_ratio"))
-        matrix = by_name(doc, mf["matrix"])
+        matrix = by_name(doc, mf["phases"][0])
         self.assertEqual((matrix["type"], by_name(doc, matrix["fraction_source"])["value"]), ("phase", 0.5))
         self.assertEqual(by_name(doc, shape["nu_source"]), {"type": "isotropic_moduli", "name": matrix["tangent_source"] + "_moduli", "tangent_source": matrix["tangent_source"]})
-        self.assertNotIn("nu_edge", shape)
 
-    def test_self_consistent_card_closes_its_cycle(self):
+    def test_self_consistent_card_carries_its_shapes(self):
         doc = convert({**MORI_TANAKA, "kernal": "scs"}, "sc")
         mf = by_name(doc, "sc_tangent")
-        self.assertEqual(mf["kernel"], "self_consistent")
-        matrix = by_name(doc, mf["matrix"])
-        shape = by_name(doc, matrix["eshelby_source"])  # the matrix has its own shape, nu of the effective medium over a local edge
-        self.assertEqual((shape["type"], shape["nu_edge"], shape["nu_source"]), ("eshelby_sphere", "local", "sc_tangent_moduli"))
-        self.assertAlmostEqual(shape["nu_initial"], 0.45)
-        self.assertEqual(by_name(doc, "sc_tangent_moduli")["tolerance"], 0)
-        self.assertEqual(doc["point"], {"strain_source": "strain", "stress_source": "sc", "tangent_source": "sc_tangent",
-                                        "residual": "sc_tangent::residual", "tolerance": 1e-10, "max_passes": 200})
+        matrix, inclusion = mf["phases"]
+        # every phase embedded in the effective medium: the shapes are kernel data, no Eshelby node, no residual
+        self.assertEqual(mf["kernel"], {"type": "self_consistent", "shapes": {matrix: {"type": "sphere"}, inclusion: {"type": "sphere"}}})
+        self.assertNotIn("eshelby_source", by_name(doc, inclusion))
+        self.assertFalse(any(m["type"].startswith("eshelby_") for m in doc["model"]["materials"]))
+        self.assertEqual(doc["point"], {"strain_source": "strain", "stress_source": "sc", "tangent_source": "sc_tangent"})
 
     def test_short_fibre_card(self):
         doc = convert(SHORT_FIBRE, "sf")
@@ -84,7 +81,7 @@ class ConvertTest(unittest.TestCase):
         doc = convert(LINEAR_ROM, "rom")
         self.assertEqual(by_name(doc, "rom")["type"], "linear_stress")
         rom = by_name(doc, "rom_tangent")
-        self.assertEqual((rom["type"], rom["kernel"]), ("rule_of_mixture", "hill"))
+        self.assertEqual((rom["type"], rom["kernel"]), ("mean_field_composite_global", {"type": "hill"}))
         self.assertEqual([by_name(doc, by_name(doc, p)["fraction_source"])["value"] for p in rom["phases"]], [0.3, 0.7])
         self.assertEqual(doc["point"]["tangent_source"], "rom_tangent")
 

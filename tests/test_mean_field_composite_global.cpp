@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <map>
 #include <memory>
 #include <stdexcept>
 #include <tmech/tmech.h>
@@ -14,7 +15,7 @@
 #include "numsim-materials/materials/isotropic_moduli.h"
 #include "numsim-materials/materials/isotropic_tangent.h"
 #include "numsim-materials/materials/linear_stress.h"
-#include "numsim-materials/materials/mean_field_tangent.h"
+#include "numsim-materials/materials/mean_field_composite_global.h"
 #include "numsim-materials/materials/phase.h"
 #include "numsim-materials/umat/external_state_source.h"
 #include "numsim-materials/umat/json_model.h"
@@ -54,13 +55,23 @@ void constant(ctx_type &ctx, std::string const &name, T value) {
   ctx.create<nm::constant_scalar<policy>>(p);
 }
 
-/// K, G -> isotropic tangents; nu of the matrix (dilute, Mori-Tanaka) or of the effective medium over a local
-/// edge (self-consistent) -> Eshelby nodes -> phases -> mean_field_tangent `kernel` -> linear_stress.
+nm::object_spec<param_type> kernel_of(std::string const &type, param_type p = {}) { return {type, std::move(p)}; }
+
+nm::object_spec<param_type> shape_of(std::string const &shape, T aspect_ratio, std::vector<T> const &direction) {
+  param_type p;
+  if (shape == "spheroid")
+    p.insert<T>("aspect_ratio", aspect_ratio);
+  if (shape != "sphere")
+    p.insert<std::vector<T>>("direction", direction);
+  return {shape, std::move(p)};
+}
+
+/// K, G -> isotropic tangents; nu of the matrix -> Eshelby nodes -> phases (matrix first) ->
+/// mean_field_composite_global `kernel` -> linear_stress. Self-consistent carries the shapes in its kernel.
 std::unique_ptr<ctx_type> build(std::string const &kernel, std::vector<phase_spec> const &inclusions,
                                 std::string const &matrix = "matrix") {
   auto owner{std::make_unique<ctx_type>()};
   auto &ctx{*owner};
-  bool const sc{kernel == "self_consistent"};
   param_type p;
   p.insert<std::string>("name", "strain");
   ctx.create<nm::external_strain_source<policy>>(p);
@@ -73,20 +84,15 @@ std::unique_ptr<ctx_type> build(std::string const &kernel, std::vector<phase_spe
     p.insert<std::string>("G_source", std::string{name} + "_G");
     ctx.create<nm::isotropic_tangent<policy>>(p);
   }
-  p.clear(); // Poisson's ratio as a produced property: of the matrix, or of the effective medium (previous pass)
+  p.clear();
   p.insert<std::string>("name", "moduli");
-  p.insert<std::string>("tangent_source", sc ? "mf" : matrix + "_C");
-  p.insert<T>("tolerance", sc ? 0.0 : 1e-8);
+  p.insert<std::string>("tangent_source", matrix + "_C");
   ctx.create<nm::isotropic_moduli<policy>>(p);
   auto shape = [&](std::string const &name, std::string const &shape, T aspect_ratio, std::vector<T> const &direction) {
     p.clear();
     p.insert<std::string>("name", name);
     p.insert<std::string>("nu_source", "moduli");
     p.insert<std::string>("nu_property", "poisson_ratio");
-    if (sc) {
-      p.insert<std::string>("nu_edge", "local");
-      p.insert<T>("nu_initial", nm::poisson_ratio(matrix == "matrix" ? Km : Ki, matrix == "matrix" ? Gm : Gi));
-    }
     p.insert<T>("aspect_ratio", aspect_ratio);
     p.insert<std::vector<T>>("direction", direction);
     if (shape == "sphere")
@@ -106,22 +112,27 @@ std::unique_ptr<ctx_type> build(std::string const &kernel, std::vector<phase_spe
       p.insert<std::string>("eshelby_source", eshelby);
     ctx.create<nm::phase<policy>>(p);
   };
-  std::vector<std::string> names;
+  std::vector<std::string> names{"m"};
+  std::map<std::string, nm::object_spec<param_type>> shapes{{"m", shape_of("sphere", 1, {})}};
   T cm{1};
   for (auto const &inc : inclusions) {
     shape(inc.name + "_shape", inc.shape, inc.aspect_ratio, inc.direction);
     phase(inc.name, inc.material, inc.fraction, inc.name + "_shape");
     names.push_back(inc.name);
+    shapes.emplace(inc.name, shape_of(inc.shape, inc.aspect_ratio, inc.direction));
     cm -= inc.fraction;
   }
-  shape("matrix_shape", "sphere", 1, {1, 0, 0}); // read by the self-consistent scheme only
-  phase("m", matrix, cm, "matrix_shape");
+  phase("m", matrix, cm, "");
+  param_type kp;
+  if (kernel == "self_consistent") {
+    kp.insert<std::map<std::string, nm::object_spec<param_type>>>("shapes", shapes);
+    kp.insert<T>("tolerance", 1e-13);
+  }
   p.clear();
   p.insert<std::string>("name", "mf");
-  p.insert<std::string>("matrix", "m");
   p.insert<std::vector<std::string>>("phases", names);
-  p.insert<std::string>("kernel", kernel);
-  ctx.create<nm::mean_field_tangent<policy>>(p);
+  p.insert<nm::object_spec<param_type>>("kernel", kernel_of(kernel, kp));
+  ctx.create<nm::mean_field_composite_global<policy>>(p);
   p.clear();
   p.insert<std::string>("name", "composite");
   p.insert<std::string>("tangent_source", "mf");
@@ -129,8 +140,6 @@ std::unique_ptr<ctx_type> build(std::string const &kernel, std::vector<phase_spe
   ctx.create<nm::linear_stress<policy>>(p);
   ctx.finalize();
   ctx.update();
-  for (int it{0}; sc && ctx.get<T>("mf", "residual") > 1e-11 && it < 500; ++it) // the fixed point, one pass per update
-    ctx.update();
   return owner;
 }
 
@@ -170,8 +179,9 @@ TEST(Phase, APhaseWithoutAShapeIsRejectedByTheMeanField) {
   p.clear();
   p.insert<std::string>("name", "mf");
   p.insert<std::string>("matrix", "m");
-  p.insert<std::vector<std::string>>("phases", {"s"});
-  ctx.create<nm::mean_field_tangent<policy>>(p);
+  p.insert<std::vector<std::string>>("phases", {"m", "s"});
+  p.insert<nm::object_spec<param_type>>("kernel", kernel_of("mori_tanaka"));
+  ctx.create<nm::mean_field_composite_global<policy>>(p);
   EXPECT_THROW(ctx.finalize(), std::runtime_error); // s::eshelby does not exist
 }
 
@@ -182,7 +192,6 @@ TEST(MeanField, MoriTanakaSpheresMatchTheAnalyticModuli) {
     EXPECT_NEAR(K, mori_tanaka_K(c), 1e-10 * mori_tanaka_K(c)) << c;
     EXPECT_NEAR(G, mori_tanaka_G(c), 1e-10 * mori_tanaka_G(c)) << c;
     EXPECT_NEAR(tmech::norm(tensor4{ctx->get<tensor4>("mf", "tangent") - nm::isotropic_stiffness<T, 3>(K, G)}), 0, 1e-10);
-    EXPECT_EQ(ctx->get<T>("mf", "residual"), 0);
   }
 }
 
@@ -215,9 +224,7 @@ TEST(MeanField, ConcentrationsAverageToIdentityAndStressIsOnTheTangent) {
   for (auto const *kernel : {"dilute", "mori_tanaka", "self_consistent"}) {
     auto ctx{build(kernel, {{"s", "stiff", "sphere", 0.3}})};
     tensor4 const A_sum{0.7 * ctx->get<tensor4>("mf", "concentration_m") + 0.3 * ctx->get<tensor4>("mf", "concentration_s")};
-    if (std::string{kernel} != "dilute") {
-      EXPECT_NEAR(tmech::norm(tensor4{A_sum - nm::sym_identity<T, 3>()}), 0, 1e-8) << kernel;
-    }
+    EXPECT_NEAR(tmech::norm(tensor4{A_sum - nm::sym_identity<T, 3>()}), 0, 1e-12) << kernel;
     tensor2 eps;
     eps(0, 0) = 1e-3;
     eps(1, 2) = eps(2, 1) = 5e-4;
@@ -230,7 +237,6 @@ TEST(MeanField, ConcentrationsAverageToIdentityAndStressIsOnTheTangent) {
 
 TEST(MeanField, SelfConsistentIsSymmetricInThePhasesAndStifferThanMoriTanaka) {
   auto scs{build("self_consistent", {{"s", "stiff", "sphere", 0.4}})};
-  EXPECT_LT(scs->get<T>("mf", "residual"), 1e-11);
   auto const [K, G]{nm::isotropize<T, 3>(scs->get<tensor4>("mf", "tangent"))};
   EXPECT_GT(K, mori_tanaka_K(0.4));
   EXPECT_GT(G, mori_tanaka_G(0.4));
@@ -240,12 +246,12 @@ TEST(MeanField, SelfConsistentIsSymmetricInThePhasesAndStifferThanMoriTanaka) {
               1e-8 * tmech::norm(scs->get<tensor4>("mf", "tangent")));
 }
 
-TEST(MeanField, SelfConsistentConvergesInAFewPasses) {
+// homogenisation once: the fixed point converges inside one update, so another changes nothing
+TEST(MeanField, SelfConsistentConvergesInOneUpdate) {
   auto ctx{build("self_consistent", {{"s", "stiff", "sphere", 0.3}})};
   tensor4 const C{ctx->get<tensor4>("mf", "tangent")};
-  ctx->update(); // converged: another pass changes nothing
-  EXPECT_NEAR(tmech::norm(tensor4{ctx->get<tensor4>("mf", "tangent") - C}), 0, 1e-10 * tmech::norm(C));
-  EXPECT_LT(ctx->get<T>("mf", "residual"), 1e-11);
+  ctx->update();
+  EXPECT_NEAR(tmech::norm(tensor4{ctx->get<tensor4>("mf", "tangent") - C}), 0, 1e-12 * tmech::norm(C));
 }
 
 TEST(MeanField, AlignedFibresAreTransverselyIsotropic) {
@@ -278,15 +284,15 @@ TEST(MeanField, FromJson) {
     {"type": "constant_scalar", "name": "cm", "value": 0.7},
     {"type": "phase", "name": "spheres", "tangent_source": "Ci", "fraction_source": "c", "eshelby_source": "sphere"},
     {"type": "phase", "name": "matrix", "tangent_source": "Cm", "fraction_source": "cm"},
-    {"type": "mean_field_tangent", "name": "mf", "matrix": "matrix", "phases": ["spheres"], "kernel": "mori_tanaka"},
+    {"type": "mean_field_composite_global", "name": "mf", "phases": ["matrix", "spheres"], "kernel": {"type": "mori_tanaka"}},
     {"type": "linear_stress", "name": "composite", "tangent_source": "mf", "strain_source": "strain"}]})")(ctx, {});
   ctx.update();
   auto const [K, G]{nm::isotropize<T, 3>(ctx.get<tensor4>("mf", "tangent"))};
   EXPECT_NEAR(K, mori_tanaka_K(0.3), 1e-10);
 }
 
-// the evaluator closes the fixed point: one host call, as many passes as the residual needs
-TEST(MeanField, EvaluatorRunsTheSelfConsistentFixedPointPerCall) {
+// self-consistent from a deck: the shapes are data of the kernel, no Eshelby node, no local edge
+TEST(MeanField, SelfConsistentFromJson) {
   ctx_type ctx;
   nm::umat::make_json_builder<policy>(R"({"materials": [
     {"type": "external_strain_source", "name": "strain"},
@@ -294,30 +300,17 @@ TEST(MeanField, EvaluatorRunsTheSelfConsistentFixedPointPerCall) {
     {"type": "constant_scalar", "name": "Ki", "value": 60.0}, {"type": "constant_scalar", "name": "Gi", "value": 30.0},
     {"type": "isotropic_tangent", "name": "Cm", "K_source": "Km", "G_source": "Gm"},
     {"type": "isotropic_tangent", "name": "Ci", "K_source": "Ki", "G_source": "Gi"},
-    {"type": "isotropic_moduli", "name": "moduli_eff", "tangent_source": "mf", "tolerance": 0},
-    {"type": "eshelby_sphere", "name": "sphere", "nu_source": "moduli_eff", "nu_property": "poisson_ratio", "nu_edge": "local", "nu_initial": 0.35},
     {"type": "constant_scalar", "name": "c", "value": 0.4},
     {"type": "constant_scalar", "name": "cm", "value": 0.6},
-    {"type": "phase", "name": "spheres", "tangent_source": "Ci", "fraction_source": "c", "eshelby_source": "sphere"},
-    {"type": "phase", "name": "matrix", "tangent_source": "Cm", "fraction_source": "cm", "eshelby_source": "sphere"},
-    {"type": "mean_field_tangent", "name": "mf", "matrix": "matrix", "phases": ["spheres"], "kernel": "self_consistent"},
+    {"type": "phase", "name": "spheres", "tangent_source": "Ci", "fraction_source": "c"},
+    {"type": "phase", "name": "matrix", "tangent_source": "Cm", "fraction_source": "cm"},
+    {"type": "mean_field_composite_global", "name": "mf", "phases": ["matrix", "spheres"],
+     "kernel": {"type": "self_consistent", "tolerance": 1e-13, "shapes": {"matrix": {"type": "sphere"}, "spheres": {"type": "sphere"}}}},
     {"type": "linear_stress", "name": "composite", "tangent_source": "mf", "strain_source": "strain"}]})")(ctx, {});
-  using evaluator = nm::umat::material_point_evaluator<policy>;
-  evaluator::config cfg;
-  cfg.strain_source = "strain";
-  cfg.stress_source = "composite";
-  cfg.tangent_source = "mf";
-  cfg.residual_property = "mf::residual";
-  cfg.residual_tolerance = 1e-11;
-  evaluator eval(ctx, cfg);
-  std::vector<T> statev(eval.nstatv(), 0.0);
-  T stran[6]{}, dstran[6]{1e-3, 0, 0, 0, 0, 0}, stress[6], ddsdde[36];
-  eval.evaluate({.stran = stran, .dstran = dstran, .stress = stress, .ddsdde = ddsdde, .statev = statev});
-  EXPECT_LT(ctx.get<T>("mf", "residual"), 1e-11);
+  ctx.update();
   auto reference{build("self_consistent", {{"s", "stiff", "sphere", 0.4}})};
   EXPECT_NEAR(tmech::norm(tensor4{ctx.get<tensor4>("mf", "tangent") - reference->get<tensor4>("mf", "tangent")}), 0,
-              1e-9 * tmech::norm(ctx.get<tensor4>("mf", "tangent")));
-  EXPECT_NEAR(stress[0], ctx.get<tensor4>("mf", "tangent")(0, 0, 0, 0) * 1e-3, 1e-12);
+              1e-10 * tmech::norm(ctx.get<tensor4>("mf", "tangent")));
 }
 
 } // namespace

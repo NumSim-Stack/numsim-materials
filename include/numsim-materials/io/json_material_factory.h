@@ -11,6 +11,7 @@
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/core/object_store.h"
 #include "numsim-materials/io/json_parameter_converter.h"
+#include "numsim-materials/io/object_readers.h"
 
 namespace numsim::materials {
 
@@ -109,7 +110,9 @@ material_interface<Traits>& create_from_json(
 
   parameter_handler params;
   try { // reader failures and the material's own checks name the entry too
-    json_to_parameters(json, schema, params);
+    auto readers = make_default_json_registry<JsonType>();
+    add_object_readers<Traits>(readers); // "kernel", "shapes": objects with their own schema
+    json_to_parameters(json, schema, params, readers);
     return ctx.create(type_name, params);
   } catch (const std::invalid_argument& e) {
     throw std::invalid_argument(located(e));

@@ -91,7 +91,8 @@ public:
   }
 };
 
-/// Every inclusion alone in the matrix (the first phase): A_m = I, A_r = T_r from the phase's Eshelby tensor.
+/// Every inclusion alone in the matrix (the first phase): A_r = T_r from the phase's Eshelby tensor and
+/// A_m = (I - sum_r c_r T_r) / c_m, so that the phase strains average to the composite strain.
 template <typename Traits>
 class dilute final : public kernel_base<dilute<Traits>, Traits> {
 public:
@@ -103,9 +104,12 @@ public:
   void concentrations(std::span<phase_view<value_type> const> phases, std::span<tensor4> A) override {
     auto const &Cm{*phases[0].tangent};
     tensor4 const Cm_inv{tmech::inv(Cm)};
-    A[0] = sym_identity<value_type, 3>();
-    for (std::size_t r{1}; r < phases.size(); ++r)
+    tensor4 rest{sym_identity<value_type, 3>()};
+    for (std::size_t r{1}; r < phases.size(); ++r) {
       A[r] = detail::dilute(*phases[r].eshelby, Cm_inv, Cm, *phases[r].tangent);
+      rest -= phases[r].fraction * A[r];
+    }
+    A[0] = rest / phases[0].fraction;
   }
 };
 

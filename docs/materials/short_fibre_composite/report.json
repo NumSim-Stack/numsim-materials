@@ -14,7 +14,7 @@
     {"type": "constant_scalar", "name": "cm_", "value": "$cm"},
     {"type": "phase", "name": "spheroid", "tangent_source": "C_fibre", "eshelby_source": "shape", "fraction_source": "c_"},
     {"type": "phase", "name": "matrix", "tangent_source": "C_matrix", "fraction_source": "cm_"},
-    {"type": "mean_field_tangent", "name": "ud", "matrix": "matrix", "phases": ["spheroid"], "kernel": "mori_tanaka"},
+    {"type": "mean_field_composite_global", "name": "ud", "phases": ["matrix", "spheroid"], "kernel": {"type": "mori_tanaka"}},
     {"type": "short_fibre_composite", "name": "aligned", "matrix": "matrix", "fibre": "spheroid",
      "orientation": [1, 0, 0, 0, 0, 0], "precision": "$precision"},
     {"type": "short_fibre_composite", "name": "injection", "matrix": "matrix", "fibre": "spheroid",

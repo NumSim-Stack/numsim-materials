@@ -1,13 +1,13 @@
 # Mean-field composites
 
 How the composite materials are put together in the property graph: `phase` nodes of produced properties,
-tangent producers for the linear schemes (`rule_of_mixture`, `mean_field_tangent`, `short_fibre_composite`),
+tangent producers for the linear schemes (`mean_field_composite_global`, `short_fibre_composite`),
 and the strain/stress pair `mean_field_strain` / `mean_field_stress` for phases that are materials in their own
 right. The Eshelby and depolarisation tensors are nodes of the same graph.
 
 The rule behind all of it: **a node consumes properties, never materials.** A composite reaches into no other
 object; the engine orders every evaluation, and when a producer changes (a curing matrix, a damaging phase,
-a self-consistent effective medium) the consumers follow.
+an evolving fraction) the consumers follow. A mean-field scheme is a **kernel object** that the nodes hold.
 
 ---
 
@@ -17,11 +17,10 @@ a self-consistent effective medium) the consumers follow.
 |---|---|---|
 | `poisson_ratio_from_moduli` | parameters `K`, `G` (once, at construction) | `value` |
 | `isotropic_moduli` | `tangent_source` / `tangent_property` | `K`, `G`, `poisson_ratio` |
-| `eshelby_sphere`, `eshelby_cylinder`, `eshelby_spheroid`, `eshelby_ellipsoid` | `nu_source` / `nu_property` (`nu_edge`, `nu_initial`) | `tensor` (rank 4) |
+| `eshelby_sphere`, `eshelby_cylinder`, `eshelby_spheroid`, `eshelby_ellipsoid` | `nu_source` / `nu_property` | `tensor` (rank 4) |
 | `depolarisation_sphere`, `_cylinder`, `_spheroid`, `_ellipsoid` | geometry only | `tensor` (rank 2, trace one) |
 | `phase` | `tangent_source`, `fraction_source`, optional `eshelby_source`, `depolarisation_source` (`tangent_edge`, `initial_tangent_source`) | `tangent`, `volume_fraction`, `eshelby`, `depolarisation` |
-| `rule_of_mixture` | `phases` | `tangent`, `concentration_<phase>` |
-| `mean_field_tangent` | `matrix`, `phases`, `kernel`, `relaxation` | `tangent`, `concentration_<phase>`, `residual` |
+| `mean_field_composite_global` | `phases` (matrix first), `kernel` {object} | `tangent`, `concentration_<phase>` |
 | `short_fibre_composite` | `matrix`, `fibre`, `orientation`, `precision`, `averaging` | `tangent`, `concentration_matrix`, `concentration_fibre` |
 | `mean_field_strain` | `strain_source` (history), `matrix`, `phases`, `kernel` (voigt, reuss, hill, dilute, mori_tanaka) | `strain_<phase>` (history), `concentration_<phase>` |
 | `mean_field_stress` | `concentration_source`, `matrix`, `phases`, `matrix_stress_source`, `stress_sources`, `tangent_sources` | `stress`, `tangent`, `residual` |
@@ -59,48 +58,58 @@ medium — `isotropic_moduli` on that tangent produces it per update and the Esh
 ## 3. Tangent homogenisation (global)
 
 The composite is a tangent producer; the phases are produced tangents. Nothing is evaluated at a wrong
-strain because no phase *material* exists in the graph.
+strain because no phase *material* exists in the graph. The homogenisation runs once per update, inside one
+node: `tangent` = Σ cᵣ ℂᵣ : Aᵣ with the concentrations Aᵣ of its kernel.
 
 ```json
 {"type": "constant_scalar", "name": "cm", "value": 0.7},
 {"type": "phase", "name": "matrix", "tangent_source": "Cm", "fraction_source": "cm"},
-{"type": "mean_field_tangent", "name": "mt", "matrix": "matrix", "phases": ["spheres"], "kernel": "mori_tanaka"},
+{"type": "mean_field_composite_global", "name": "mt", "phases": ["matrix", "spheres"], "kernel": {"type": "mori_tanaka"}},
 {"type": "linear_stress", "name": "composite", "tangent_source": "mt", "strain_source": "strain"}
 ```
 
-Kernels, with Tᵣ = (I + Sᵣ : ℂ_ref⁻¹ : (ℂᵣ − ℂ_ref))⁻¹:
+### Kernels
 
-| kernel | reference medium | concentrations | tangent |
-|---|---|---|---|
-| `dilute` | the matrix | A_m = I, Aᵣ = Tᵣ | ℂ_m + Σ cᵣ (ℂᵣ − ℂ_m) : Aᵣ |
-| `mori_tanaka` | the matrix | A_m = (c_m I + Σ cᵣ Tᵣ)⁻¹, Aᵣ = Tᵣ : A_m | ℂ_m + Σ cᵣ (ℂᵣ − ℂ_m) : Aᵣ |
-| `self_consistent` | the effective medium of the previous pass | Aᵣ = Tᵣ : (Σ cₛ Tₛ)⁻¹, matrix included | Σ cᵣ ℂᵣ : Aᵣ, relaxed |
+A kernel is an object: a deck writes `{"type": ..., ...}`, its parameters are checked like a material's, and
+`mean_field::kernel_registry` takes more (`add<K>("name")`). The same kernel classes serve the strain
+localisation of §4, so global and linear local agree by construction. With Tᵣ = (I + Sᵣ : ℂ_ref⁻¹ : (ℂᵣ − ℂ_ref))⁻¹
+and the matrix as the first phase:
 
-`rule_of_mixture` (`voigt`, `reuss`, `hill`) is the same shape without Eshelby tensors;
-`short_fibre_composite` averages the Mori–Tanaka of one `fibre` phase over its orientation distribution
-(`orientation` [a11, a22, a33, a12, a13, a23], Lebedev `precision`, `averaging` `concentration` | `stiffness`).
+| kernel | reads | concentrations |
+|---|---|---|
+| `voigt` | fractions | Aᵣ = I |
+| `reuss` | tangents | Aᵣ = ℂᵣ⁻¹ : ℂ_R, ℂ_R = (Σ cᵣ ℂᵣ⁻¹)⁻¹ |
+| `hill` | tangents | the mean of Voigt and Reuss |
+| `dilute` | tangents, `eshelby` of the inclusions | Aᵣ = Tᵣ in the matrix, A_m = (I − Σ cᵣ Tᵣ) / c_m |
+| `mori_tanaka` | tangents, `eshelby` of the inclusions | A_m = (c_m I + Σ cᵣ Tᵣ)⁻¹, Aᵣ = Tᵣ : A_m |
+| `self_consistent` | tangents; `shapes` of every phase as kernel data | Aᵣ = Tᵣ : (Σ cₛ Tₛ)⁻¹ in the effective medium |
+
+Every kernel satisfies Σ cᵣ Aᵣ = I: the phase strains average to the composite strain.
+
+`short_fibre_composite` is a node of its own: the Mori–Tanaka of one `fibre` phase averaged over its
+orientation distribution (`orientation` [a11, a22, a33, a12, a13, a23], Lebedev `precision`, `averaging`
+`concentration` | `stiffness`).
 
 Several inclusions: more `phase` entries in `phases`, each with its own Eshelby node. With different shapes
 or orientations the Mori–Tanaka tangent loses its major symmetry — a property of the scheme, not of the code.
 
-### The self-consistent cycle
+### Self-consistent
 
-The effective medium needs its own Poisson's ratio, which is an output of the composite — a cycle. It is
-closed by one **local edge**:
+The reference medium is the unknown effective medium, so its Eshelby tensors depend on the result. The kernel
+iterates the fixed point inside the node — relaxed steps from the last converged medium (Voigt at first) until
+‖ℂ_new − ℂ‖ / ‖ℂ_new‖ ≤ `tolerance` — and evaluates Sᵣ itself from its `shapes`:
 
 ```json
-{"type": "isotropic_moduli", "name": "moduli_eff", "tangent_source": "mt", "tolerance": 0},
-{"type": "eshelby_sphere", "name": "S", "nu_source": "moduli_eff", "nu_property": "poisson_ratio", "nu_edge": "local", "nu_initial": 0.35},
-{"type": "phase", "name": "matrix", "tangent_source": "Cm", "fraction_source": "cm", "eshelby_source": "S"},
-{"type": "phase", "name": "spheres", "tangent_source": "Ci", "fraction_source": "c", "eshelby_source": "S"},
-{"type": "mean_field_tangent", "name": "mt", "matrix": "matrix", "phases": ["spheres"], "kernel": "self_consistent", "relaxation": 0.5}
+{"type": "mean_field_composite_global", "name": "sc", "phases": ["matrix", "spheres"],
+ "kernel": {"type": "self_consistent", "relaxation": 0.5, "tolerance": 1e-10, "max_iterations": 100,
+            "shapes": {"matrix": {"type": "sphere"}, "spheres": {"type": "spheroid", "aspect_ratio": 3, "direction": [1, 0, 0]}}}}
 ```
 
-`EdgeKind::Local` imposes no ordering: the Eshelby nodes read the ν of the previous pass (`nu_initial` on the
-first), the matrix is a phase with its own shape, and one `update()` is one relaxed Picard step with
-`residual` = ‖ℂ_new − ℂ‖ / ‖ℂ_new‖. Whoever calls `update()` runs the fixed point — see §5. `tolerance: 0` on
-`isotropic_moduli` projects the effective tangent without the isotropy check; for an anisotropic effective
-medium (aligned fibres) the closed-form Eshelby tensors at that ν are an approximation.
+Shapes: `sphere`, `cylinder` (`direction`), `spheroid` (`aspect_ratio`, `direction`), `ellipsoid` (`semi_axes`).
+One update gives the converged tangent; it throws with the residual after `max_iterations`. The rule:
+**fixed points of the homogenisation converge inside a node, fixed points of the materials go through the
+graph** (§5). Sᵣ is the closed form at the Poisson's ratio of the isotropised effective tangent — exact for an
+isotropic medium, an approximation for an anisotropic one (aligned fibres).
 
 ---
 
@@ -160,8 +169,7 @@ local edge, starting from the elastic one:
 One `update()` is one pass with the tangent of the previous pass; `mean_field_stress::residual` is the largest
 relative difference between the tangent a phase node carried and its material's current one. The whole
 damage chain is evaluated at the matrix strain, with its own history. Isotropic damage keeps Poisson's ratio,
-so the Eshelby node reads ν of the undamaged tangent; an anisotropic algorithmic tangent would use
-`isotropic_moduli` with a local `nu_edge` the same way as §3.
+so the Eshelby node reads ν of the undamaged tangent.
 
 The published tangent Σ cᵣ ℂᵣ : Aᵣ is first order in Δε: exact as the step vanishes, not a central
 difference across a damage kink. The same holds for the localisation itself — a Reuss composite equalises the
@@ -184,8 +192,9 @@ Local edges make every pass acyclic; the fixed point is reached by repeating `up
   so that the returned stress is consistent for the given increment.
 - In a test: `while (ctx.get<T>("mt", "residual") > tol) ctx.update();`.
 
-It is a Picard iteration on the tangents — linear convergence, fine for damage with moderate softening and
-for self-consistent contrasts of order 10–100; near snap-back it can stall, which the residual then shows.
+It is a Picard iteration on the tangents — linear convergence, fine for damage with moderate softening; near
+snap-back it can stall, which the residual then shows. The self-consistent kernel needs none of this: its own
+fixed point converges inside the node (§3).
 
 ---
 
@@ -198,8 +207,9 @@ republished by `phase` as `depolarisation` (#110 for the composite nodes).
 
 ## 7. Reports and tests
 
-`docs/materials/rule_of_mixture`, `mean_field_tangent` (dilute, Mori–Tanaka, self-consistent, unidirectional
-fibres), `short_fibre_composite`, `mean_field_damage` (the local pair with a damaging matrix); tests
-`test_rule_of_mixture`, `test_mean_field_tangent`, `test_short_fibre_composite`, `test_mean_field_local`, `test_mean_field_damage`,
+`docs/materials/mean_field_composite_global` (dilute, Mori–Tanaka, self-consistent, unidirectional fibres),
+`mean_field_composite_global_rule_of_mixture`, `short_fibre_composite`, `mean_field_damage` (the local pair with a
+damaging matrix); tests `test_mean_field_kernels`, `test_mean_field_composite_global`, `test_rule_of_mixture`,
+`test_short_fibre_composite`, `test_mean_field_local`, `test_mean_field_damage`,
 `test_eshelby_materials`, `test_depolarisation_materials`, `test_scalar_producers`. The uvwmaterial cards
 map onto these nodes through `tools/convert_uvwmaterial_card.py` (see `uvwmaterial-mapping.md`).

@@ -14,7 +14,7 @@
 #include "numsim-materials/materials/linear_stress.h"
 #include "numsim-materials/materials/phase.h"
 #include "numsim-materials/materials/poisson_ratio_from_moduli.h"
-#include "numsim-materials/materials/rule_of_mixture.h"
+#include "numsim-materials/materials/mean_field_composite_global.h"
 #include "numsim-materials/umat/external_state_source.h"
 #include "numsim-materials/umat/json_model.h"
 
@@ -37,7 +37,8 @@ void constant(ctx_type &ctx, std::string const &name, T value) {
   ctx.create<nm::constant_scalar<policy>>(p);
 }
 
-/// K, G producers -> isotropic tangents -> phases with produced fractions -> rule of mixture `kernel` -> linear_stress.
+/// K, G producers -> isotropic tangents -> phases with produced fractions -> the global composite with a
+/// rule-of-mixture `kernel` -> linear_stress.
 std::unique_ptr<ctx_type> build(std::string const &kernel, std::vector<T> fractions = {c1, c2},
                                 std::vector<std::string> phases = {"stiff", "soft"}) {
   auto owner{std::make_unique<ctx_type>()};
@@ -65,8 +66,8 @@ std::unique_ptr<ctx_type> build(std::string const &kernel, std::vector<T> fracti
   p.clear();
   p.insert<std::string>("name", "rom");
   p.insert<std::vector<std::string>>("phases", phases);
-  p.insert<std::string>("kernel", kernel);
-  ctx.create<nm::rule_of_mixture<policy>>(p);
+  p.insert<nm::object_spec<param_type>>("kernel", {kernel, {}});
+  ctx.create<nm::mean_field_composite_global<policy>>(p);
   p.clear();
   p.insert<std::string>("name", "composite");
   p.insert<std::string>("tangent_source", "rom");
@@ -146,7 +147,7 @@ TEST(RuleOfMixture, FromJson) {
     {"type": "constant_scalar", "name": "cb", "value": 0.7},
     {"type": "phase", "name": "pa", "tangent_source": "Ca", "fraction_source": "ca"},
     {"type": "phase", "name": "pb", "tangent_source": "Cb", "fraction_source": "cb"},
-    {"type": "rule_of_mixture", "name": "rom", "phases": ["pa", "pb"], "kernel": "voigt"},
+    {"type": "mean_field_composite_global", "name": "rom", "phases": ["pa", "pb"], "kernel": {"type": "voigt"}},
     {"type": "linear_stress", "name": "composite", "tangent_source": "rom", "strain_source": "strain"}]})")(ctx, {});
   ctx.update();
   auto const [K, G]{nm::isotropize<T, 3>(ctx.get<tensor4>("rom", "tangent"))};
