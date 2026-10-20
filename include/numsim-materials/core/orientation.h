@@ -122,6 +122,20 @@ std::vector<std::pair<tmech::tensor<T, 3, 1>, T>> nodes(acg<T> const &d, std::si
   return out;
 }
 
+/// The nodes with one direction of each antipodal pair carrying both weights: n and -n are one fibre.
+template <typename T>
+std::vector<std::pair<tmech::tensor<T, 3, 1>, T>> half_nodes(acg<T> const &d, std::size_t precision) {
+  std::vector<std::pair<tmech::tensor<T, 3, 1>, T>> out;
+  for (auto const &[n, w] : nodes(d, precision)) {
+    auto const partner{std::ranges::find_if(out, [&](auto const &kept) { return tmech::norm(tmech::tensor<T, 3, 1>{kept.first + n}) < T{1e-12}; })};
+    if (partner == out.end())
+      out.emplace_back(n, w);
+    else
+      partner->second += w;
+  }
+  return out;
+}
+
 /// Mean of f(n) over the ACG distribution with orientation tensor A.
 template <typename T, typename F>
 auto average(tmech::tensor<T, 3, 2> const &A, std::size_t precision, F &&f) {

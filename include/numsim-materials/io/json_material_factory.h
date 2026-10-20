@@ -10,6 +10,7 @@
 
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/core/object_store.h"
+#include "numsim-materials/io/json_expansions.h"
 #include "numsim-materials/io/json_parameter_converter.h"
 #include "numsim-materials/io/object_readers.h"
 
@@ -54,6 +55,10 @@ inline std::string suggest_type(const std::vector<std::string>& known,
   return std::accumulate(sorted.begin(), sorted.end(), std::string{"Registered types are:"},
                          [](std::string all, const std::string& k) { return std::move(all) + " " + k; }) + ".";
 }
+
+template<typename Traits, typename JsonType>
+material_interface<Traits>& create_expanded(material_context<Traits>& ctx, const JsonType& json,
+                                            const std::string& type, const std::string& where);
 
 } // namespace detail
 
@@ -100,11 +105,17 @@ material_interface<Traits>& create_from_json(
 
   auto type_name = adapter::template get<std::string>(adapter::at(json, "type"));
 
-  if (!factory.contains(type_name)) // almost always a typo: offer the closest registered name
+  const auto& expansions = json_expansion_registry<JsonType>::instance();
+  if (expansions.contains(type_name))
+    return detail::create_expanded(ctx, json, type_name, where);
+
+  if (!factory.contains(type_name)) { // almost always a typo: offer the closest registered name
+    auto known = factory.registered_types();
+    std::ranges::copy(expansions.registered_types(), std::back_inserter(known));
     throw std::runtime_error("create_from_json: unknown material type '" +
                              type_name + "'" + where + ". " +
-                             detail::suggest_type(factory.registered_types(),
-                                                  type_name));
+                             detail::suggest_type(known, type_name));
+  }
 
   auto schema = factory.schema(type_name);
 
@@ -120,6 +131,39 @@ material_interface<Traits>& create_from_json(
     throw std::runtime_error(located(e));
   }
 }
+
+
+namespace detail {
+
+/// The entries of a registered expansion, created in turn; the one named like the entry is returned.
+template<typename Traits, typename JsonType>
+material_interface<Traits>& create_expanded(material_context<Traits>& ctx, const JsonType& json,
+                                            const std::string& type, const std::string& where) {
+  std::vector<JsonType> entries;
+  try {
+    entries = json_expansion_registry<JsonType>::instance().expand(type, json);
+  } catch (const std::invalid_argument& e) {
+    throw std::invalid_argument(std::string{e.what()} + where);
+  }
+  const std::string name = json.contains("name") ? json.at("name").template get<std::string>() : std::string{};
+  const std::string from = " (from " + type + " \"" + name + "\")";
+  material_interface<Traits>* head = nullptr;
+  for (const auto& entry : entries) {
+    try {
+      auto& material = create_from_json(ctx, entry);
+      if (material.name() == name) head = &material;
+    } catch (const std::invalid_argument& e) {
+      throw std::invalid_argument(e.what() + from);
+    } catch (const std::runtime_error& e) {
+      throw std::runtime_error(e.what() + from);
+    }
+  }
+  if (!head)
+    throw std::invalid_argument("create_from_json: expansion '" + type + "' made no entry named like itself" + where);
+  return *head;
+}
+
+} // namespace detail
 
 } // namespace numsim::materials
 
