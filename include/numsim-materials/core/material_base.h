@@ -1,7 +1,7 @@
 #ifndef MATERIAL_BASE_H
 #define MATERIAL_BASE_H
 
-#include <deque>
+#include <algorithm>
 #include <ranges>
 #include <stdexcept>
 #include <string>
@@ -111,6 +111,7 @@ protected:
   }
 
   /// A callback bound by add_callback() and the outputs it fills; constant() only when all are verifiable.
+  /// Used in the constructor: the declarations it makes live in the material.
   template <bool Verifiable>
   class callback_handle {
   public:
@@ -150,15 +151,15 @@ protected:
   /// One callback filling several outputs: references to outputs, pointers to them (null ones skipped) or
   /// ranges of such pointers, none with a callback of its own.
   template <typename... Outputs>
-  auto& add_callback(void (Derived::*callback)(), Outputs const&... outputs) {
-    auto& handle{callbacks<(detail::verifiable<detail::output_t<Outputs>> && ...)>().emplace_back(*this)};
+  auto add_callback(void (Derived::*callback)(), Outputs const&... outputs) {
+    callback_handle<(detail::verifiable<detail::output_t<Outputs>> && ...)> handle{*this};
     (collect_outputs(handle.m_outputs, outputs), ...);
     if (handle.m_outputs.empty())
       throw std::logic_error("add_callback(): material '" + base::m_name + "' bound a callback to no output");
-    for (auto const* output : handle.m_outputs)
-      if (base::has_callback(output))
-        throw std::logic_error("add_callback(): '" + base::m_name + "::" + base::output_name(output) +
-                               "' has a callback already");
+    if (auto const bound{std::ranges::find_if(handle.m_outputs, [this](void const* output) { return base::is_bound(output); })};
+        bound != handle.m_outputs.end())
+      throw std::logic_error("add_callback(): '" + base::m_name + "::" + base::output_name(*bound) +
+                             "' has a callback or a writer already");
     bind_callback(base::output_name(handle.m_outputs.front()), callback);
     for (auto const* output : handle.m_outputs | std::views::drop(1))
       base::declare_written_by(output, handle.m_outputs.front());
@@ -193,17 +194,6 @@ private:
     }
   }
 
-  template <bool Verifiable>
-  auto& callbacks() {
-    if constexpr (Verifiable)
-      return m_verifiable_callbacks;
-    else
-      return m_other_callbacks;
-  }
-
-  // deques: stable for the handles add_callback() returns
-  std::deque<callback_handle<true>> m_verifiable_callbacks;
-  std::deque<callback_handle<false>> m_other_callbacks;
 
   /// Bind a member function as the update callback for a property.
   /// The lambda captures a reference to the derived material — the material

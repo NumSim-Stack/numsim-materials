@@ -1,6 +1,8 @@
 /// Constant properties: an output declared a function of parameters and of reads that are constant too is
 /// computed once, not on every update; a write through set_parameter() or get_mutable() recomputes it.
 #include <gtest/gtest.h>
+#include <algorithm>
+#include <limits>
 #include <string>
 #include <tmech/tmech.h>
 #include <vector>
@@ -9,6 +11,14 @@
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/core/parameter_helpers.h"
 #include "numsim-materials/umat/external_state_source.h"
+
+#define EXPECT_THAT_MESSAGE(statement, exception, text)                                                       \
+  try {                                                                                                     \
+    statement;                                                                                              \
+    ADD_FAILURE() << #statement " did not throw";                                                           \
+  } catch (exception const &e) {                                                                            \
+    EXPECT_NE(std::string{e.what()}.find(text), std::string::npos) << e.what();                             \
+  }
 
 namespace {
 
@@ -21,7 +31,8 @@ using param_type = policy::ParameterHandler;
 /// "value" = factor * source (factor alone without a source), counting its callback. With "constant" it
 /// declares "value" constant; with "extra" it also writes an undeclared output from the same callback;
 /// "other" adds an input "value" does not use, "narrow" declares the read of "source" only; "hidden" adds the
-/// call count (state the declaration hides); "bogus" declares a parameter, "foreign" a read it does not own.
+/// call count (state the declaration hides); "bogus" declares a parameter, "foreign" a read it does not own;
+/// "late" declares from its callback, after finalize().
 template <typename Traits>
 class counter final : public nm::material_base<counter<Traits>, Traits> {
 public:
@@ -68,10 +79,13 @@ public:
     nm::optional<bool>(para, "hidden", false);
     nm::optional<bool>(para, "bogus", false);
     nm::optional<bool>(para, "foreign", false);
+    nm::optional<bool>(para, "late", false);
     return para;
   }
 
   void compute() {
+    if (base::template get_parameter<bool>("late"))
+      base::constant_output(m_value);
     ++calls;
     m_value = m_factor * (m_source ? m_source->get() : value_type{1}) + (m_hidden ? calls : 0);
     if (m_extra)
@@ -91,7 +105,8 @@ private:
 
 /// Two callbacks: "slow" = factor * source (declared constant), also writing "slow_extra"; "fast" = slow * x
 /// for the varying "x". "attribute" names "slow_extra" written by "slow"; "extra_constant" declares it constant;
-/// "orphan" names a writer without a callback.
+/// "orphan" names a writer without a callback; "loose" orders "plain", which has none; "rewrite" names a second
+/// writer of "old".
 template <typename Traits>
 class two_callbacks final : public nm::material_base<two_callbacks<Traits>, Traits> {
 public:
@@ -122,6 +137,10 @@ public:
     base::runs_after(m_fast, m_slow);
     if (base::template get_parameter<bool>("cycle"))
       base::runs_after(m_slow, m_fast);
+    if (base::template get_parameter<bool>("loose"))
+      base::runs_after(m_plain, m_slow);
+    if (base::template get_parameter<bool>("rewrite"))
+      base::written_by(m_old, m_slow);
   }
 
   static input_parameter_controller parameters() {
@@ -133,6 +152,8 @@ public:
     nm::optional<bool>(para, "extra_constant", true);
     nm::optional<bool>(para, "orphan", false);
     nm::optional<bool>(para, "cycle", false);
+    nm::optional<bool>(para, "loose", false);
+    nm::optional<bool>(para, "rewrite", false);
     return para;
   }
 
@@ -156,7 +177,8 @@ private:
 };
 
 /// One callback filling "first", "second" and the optional "third" (a null pointer otherwise) from "source";
-/// "constant" declares the group, "taken" gives "first" its own callback before, "empty" adds a group of none.
+/// "constant" declares the group, "taken" gives "first" its own callback before, "empty" adds a group of none,
+/// "again" puts "second" into a second group.
 template <typename Traits>
 class grouped final : public nm::material_base<grouped<Traits>, Traits> {
 public:
@@ -176,9 +198,11 @@ public:
       m_third = &base::template add_output<value_type>("third");
     if (base::template get_parameter<bool>("empty"))
       base::add_callback(&grouped::compute);
-    auto &group{base::add_callback(&grouped::compute, m_first, m_second, m_third)};
+    auto group{base::add_callback(&grouped::compute, m_first, m_second, m_third)};
     if (base::template get_parameter<bool>("constant"))
       group.constant({&m_source, nullptr});
+    if (base::template get_parameter<bool>("again"))
+      base::add_callback(&grouped::compute, m_second);
   }
 
   static input_parameter_controller parameters() {
@@ -188,6 +212,7 @@ public:
     nm::optional<bool>(para, "constant", true);
     nm::optional<bool>(para, "taken", false);
     nm::optional<bool>(para, "empty", false);
+    nm::optional<bool>(para, "again", false);
     return para;
   }
 
@@ -492,7 +517,7 @@ TEST(ConstantProperties, ACycleOfRunsAfterIsRejected) {
   param_type p;
   p.insert<bool>("cycle", true);
   two_callbacks_setup s{p};
-  EXPECT_THROW(s.ctx.finalize(), std::runtime_error);
+  EXPECT_THAT_MESSAGE(s.ctx.finalize(), std::runtime_error, "runs_after");
 }
 
 TEST(ConstantProperties, AWriterNeedsACallback) {
@@ -574,4 +599,69 @@ TEST(ConstantProperties, OnlyComparableTypesCanBeConstant) {
   static_assert(!g::group_declarable<opaque> && !g::group_declarable<opaque *>);
   static_assert(!g::group_declarable<std::vector<opaque *>>);
   static_assert(g::groupable<opaque> && g::groupable<std::vector<opaque *>>); // a group that is not constant
+}
+
+TEST(ConstantProperties, VerificationToleranceIsRelative) {
+  using nm::detail::same_value;
+  EXPECT_TRUE(same_value(T{0}, T{0}));
+  EXPECT_TRUE(same_value(T{1e5}, T{1e5} * (1 + 1e-12)));
+  EXPECT_TRUE(same_value(T{1e-5}, T{1e-5} * (1 + 1e-12)));
+  EXPECT_FALSE(same_value(T{1e-5}, T{1e-5} * (1 + 1e-3))); // a compliance in 1/MPa
+  tmech::tensor<T, 3, 4> S, S_changed;
+  S(0, 0, 0, 0) = S_changed(0, 0, 0, 0) = 1e-5;
+  S_changed(0, 0, 0, 0) *= 1 + 1e-3;
+  EXPECT_FALSE(same_value(S, S_changed));
+}
+
+TEST(ConstantProperties, VerificationReportsANonFiniteConstant) {
+  ctx_type ctx;
+  ctx.verify_constants(true);
+  param_type p;
+  p.insert<T>("factor", std::numeric_limits<T>::quiet_NaN());
+  make(ctx, "a", p);
+  ctx.finalize();
+  ctx.update();
+  EXPECT_THAT_MESSAGE(ctx.update(), std::logic_error, "not finite");
+}
+
+// ties are broken by creation order: the order does not depend on hashing
+TEST(ConstantProperties, IndependentPropertiesRunInCreationOrder) {
+  ctx_type ctx;
+  std::vector<std::string> const names{"d", "b", "e", "a", "c", "g", "f"};
+  for (auto const &name : names)
+    make(ctx, name);
+  ctx.finalize();
+  std::vector<std::string> owners;
+  for (auto const *prop : ctx.property_execution_order())
+    owners.push_back(prop->traits().id.owner);
+  EXPECT_EQ(owners, names);
+}
+
+TEST(ConstantProperties, OnlyCallbacksCanBeOrdered) {
+  param_type p;
+  p.insert<bool>("loose", true);
+  EXPECT_THROW(two_callbacks_setup{p}, std::logic_error);
+}
+
+TEST(ConstantProperties, AnOutputHasOneWriter) {
+  {
+    param_type p;
+    p.insert<bool>("rewrite", true);
+    EXPECT_THROW(two_callbacks_setup{p}, std::logic_error);
+  }
+  ctx_type ctx;
+  make(ctx, "a");
+  param_type p;
+  p.insert<std::string>("source", "a");
+  p.insert<bool>("again", true);
+  EXPECT_THROW(make_grouped(ctx, p), std::logic_error);
+}
+
+TEST(ConstantProperties, NoDeclarationAfterFinalize) {
+  ctx_type ctx;
+  param_type p;
+  p.insert<bool>("late", true);
+  make(ctx, "a", p);
+  ctx.finalize();
+  EXPECT_THROW(ctx.update(), std::logic_error);
 }
