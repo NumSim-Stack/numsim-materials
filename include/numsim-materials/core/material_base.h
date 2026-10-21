@@ -17,6 +17,19 @@ namespace numsim::materials {
 namespace detail {
 template <typename A>
 concept pointer_range = std::ranges::range<A const> && std::is_pointer_v<std::ranges::range_value_t<A const>>;
+
+/// The output type behind an add_callback() argument: a reference, a pointer or a range of pointers.
+template <typename A>
+auto output_of() {
+  if constexpr (std::is_pointer_v<A>)
+    return std::type_identity<std::remove_cv_t<std::remove_pointer_t<A>>>{};
+  else if constexpr (pointer_range<A>)
+    return std::type_identity<std::remove_cv_t<std::remove_pointer_t<std::ranges::range_value_t<A const>>>>{};
+  else
+    return std::type_identity<A>{};
+}
+template <typename A>
+using output_t = typename decltype(output_of<A>())::type;
 } // namespace detail
 
 /// CRTP material base — provides parameter validation, output/history
@@ -86,42 +99,50 @@ protected:
 
   /// `output` (as add_output returned it) is a function of the parameters and of the material's inputs only:
   /// once they are constant too (over global edges), the engine computes it once instead of on every update.
-  template <typename T>
+  template <detail::verifiable T>
   void constant_output(T const& output) {
     base::declare_constant(&output, std::nullopt);
   }
 
   /// As above, reading only `reads` of the inputs.
-  template <typename T>
+  template <detail::verifiable T>
   void constant_output(T const& output, std::vector<input_wire_base const*> reads) {
     base::declare_constant(&output, std::move(reads));
   }
 
-  /// A callback bound by add_callback() and the outputs it fills.
+  /// A callback bound by add_callback() and the outputs it fills; constant() only when all are verifiable.
+  template <bool Verifiable>
   class callback_handle {
   public:
     explicit callback_handle(material_base& owner) : m_owner(owner) {}
 
     /// The outputs are functions of the parameters and of all inputs, or of `reads` (null ones skipped).
-    callback_handle& constant() {
+    callback_handle& constant()
+      requires Verifiable
+    {
       for (auto const* output : m_outputs)
         m_owner.declare_constant(output, std::nullopt);
       return *this;
     }
-    callback_handle& constant(std::vector<input_wire_base const*> const& reads) {
+    callback_handle& constant(std::vector<input_wire_base const*> const& reads)
+      requires Verifiable
+    {
       for (auto const* output : m_outputs)
         m_owner.declare_constant(output, reads);
       return *this;
     }
 
     /// Runs after the callback of `earlier`.
-    callback_handle& runs_after(callback_handle const& earlier) {
+    template <bool V>
+    callback_handle& runs_after(callback_handle<V> const& earlier) {
       m_owner.declare_order(m_outputs.front(), earlier.m_outputs.front());
       return *this;
     }
 
   private:
     friend class material_base;
+    template <bool>
+    friend class callback_handle;
     material_base& m_owner;
     std::vector<void const*> m_outputs;
   };
@@ -129,8 +150,8 @@ protected:
   /// One callback filling several outputs: references to outputs, pointers to them (null ones skipped) or
   /// ranges of such pointers, none with a callback of its own.
   template <typename... Outputs>
-  callback_handle& add_callback(void (Derived::*callback)(), Outputs const&... outputs) {
-    auto& handle{m_callbacks.emplace_back(*this)};
+  auto& add_callback(void (Derived::*callback)(), Outputs const&... outputs) {
+    auto& handle{callbacks<(detail::verifiable<detail::output_t<Outputs>> && ...)>().emplace_back(*this)};
     (collect_outputs(handle.m_outputs, outputs), ...);
     if (handle.m_outputs.empty())
       throw std::logic_error("add_callback(): material '" + base::m_name + "' bound a callback to no output");
@@ -172,7 +193,17 @@ private:
     }
   }
 
-  std::deque<callback_handle> m_callbacks; ///< stable for the handles add_callback() returns
+  template <bool Verifiable>
+  auto& callbacks() {
+    if constexpr (Verifiable)
+      return m_verifiable_callbacks;
+    else
+      return m_other_callbacks;
+  }
+
+  // deques: stable for the handles add_callback() returns
+  std::deque<callback_handle<true>> m_verifiable_callbacks;
+  std::deque<callback_handle<false>> m_other_callbacks;
 
   /// Bind a member function as the update callback for a property.
   /// The lambda captures a reference to the derived material — the material
