@@ -259,6 +259,8 @@ protected:
     if (it->second.property->is_history())
       throw std::logic_error("constant_output(): '" + m_name + "::" + it->second.name + "' is history, never constant");
     if (reads)
+      std::erase(*reads, nullptr); // an absent optional input
+    if (reads)
       for (auto const* read : *reads)
         if (std::ranges::none_of(m_typed_inputs, [read](auto const& input) { return input.get() == read; }))
           throw std::logic_error("constant_output(): '" + m_name + "::" + it->second.name +
@@ -274,6 +276,11 @@ protected:
     if (!by->second.property->traits().update)
       throw std::logic_error("written_by(): '" + m_name + "::" + by->second.name + "' has no callback to write with");
     m_written_by.emplace_back(out->second.property, by->second.property);
+  }
+
+  const std::string& output_name(void const* output) const { return output_entry_of("add_callback", output)->second.name; }
+  bool has_callback(void const* output) const {
+    return static_cast<bool>(output_entry_of("add_callback", output)->second.property->traits().update);
   }
 
   void declare_order(void const* later, void const* earlier) {

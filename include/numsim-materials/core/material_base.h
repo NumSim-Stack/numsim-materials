@@ -1,13 +1,23 @@
 #ifndef MATERIAL_BASE_H
 #define MATERIAL_BASE_H
 
+#include <deque>
+#include <ranges>
+#include <stdexcept>
 #include <string>
+#include <type_traits>
+#include <vector>
 #include <numsim-core/input_parameter_controller.h>
 #include <numsim-core/wrapper.h>
 
 #include "numsim-materials/core/material_interface.h"
 
 namespace numsim::materials {
+
+namespace detail {
+template <typename A>
+concept pointer_range = std::ranges::range<A const> && std::is_pointer_v<std::ranges::range_value_t<A const>>;
+} // namespace detail
 
 /// CRTP material base — provides parameter validation, output/history
 /// property creation with callback binding, and material registration.
@@ -87,6 +97,53 @@ protected:
     base::declare_constant(&output, std::move(reads));
   }
 
+  /// A callback bound by add_callback() and the outputs it fills.
+  class callback_handle {
+  public:
+    explicit callback_handle(material_base& owner) : m_owner(owner) {}
+
+    /// The outputs are functions of the parameters and of all inputs, or of `reads` (null ones skipped).
+    callback_handle& constant() {
+      for (auto const* output : m_outputs)
+        m_owner.declare_constant(output, std::nullopt);
+      return *this;
+    }
+    callback_handle& constant(std::vector<input_wire_base const*> const& reads) {
+      for (auto const* output : m_outputs)
+        m_owner.declare_constant(output, reads);
+      return *this;
+    }
+
+    /// Runs after the callback of `earlier`.
+    callback_handle& runs_after(callback_handle const& earlier) {
+      m_owner.declare_order(m_outputs.front(), earlier.m_outputs.front());
+      return *this;
+    }
+
+  private:
+    friend class material_base;
+    material_base& m_owner;
+    std::vector<void const*> m_outputs;
+  };
+
+  /// One callback filling several outputs: references to outputs, pointers to them (null ones skipped) or
+  /// ranges of such pointers, none with a callback of its own.
+  template <typename... Outputs>
+  callback_handle& add_callback(void (Derived::*callback)(), Outputs const&... outputs) {
+    auto& handle{m_callbacks.emplace_back(*this)};
+    (collect_outputs(handle.m_outputs, outputs), ...);
+    if (handle.m_outputs.empty())
+      throw std::logic_error("add_callback(): material '" + base::m_name + "' bound a callback to no output");
+    for (auto const* output : handle.m_outputs)
+      if (base::has_callback(output))
+        throw std::logic_error("add_callback(): '" + base::m_name + "::" + base::output_name(output) +
+                               "' has a callback already");
+    bind_callback(base::output_name(handle.m_outputs.front()), callback);
+    for (auto const* output : handle.m_outputs | std::views::drop(1))
+      base::declare_written_by(output, handle.m_outputs.front());
+    return handle;
+  }
+
   /// `output` has no callback of its own: the callback of `writer` fills it. Lets the engine skip a constant
   /// callback while another callback of the material keeps running.
   template <typename T, typename U>
@@ -101,6 +158,22 @@ protected:
   }
 
 private:
+  template <typename A>
+  static void collect_outputs(std::vector<void const*>& to, A const& output) {
+    if constexpr (std::is_pointer_v<A>) {
+      if (output)
+        to.push_back(output);
+    } else if constexpr (detail::pointer_range<A>) {
+      for (auto const* p : output)
+        if (p)
+          to.push_back(p);
+    } else {
+      to.push_back(&output);
+    }
+  }
+
+  std::deque<callback_handle> m_callbacks; ///< stable for the handles add_callback() returns
+
   /// Bind a member function as the update callback for a property.
   /// The lambda captures a reference to the derived material — the material
   /// must outlive its properties. This is guaranteed by material_context's

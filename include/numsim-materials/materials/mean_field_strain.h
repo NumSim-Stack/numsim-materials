@@ -47,28 +47,18 @@ public:
       throw std::invalid_argument("mean_field_strain '" + base::name() + "': needs at least one phase");
     m_kernel->bind(names);
     auto const needs{m_kernel->needs()};
+    std::vector<input_wire_base const *> phase_reads;
     for (std::size_t r{0}; r < names.size(); ++r) {
       m_C.push_back(needs.tangents ? &base::template add_input<tensor4>(names[r], "tangent", EdgeKind::Global) : nullptr);
       m_c.push_back(&base::template add_input<value_type>(names[r], "volume_fraction", EdgeKind::Global));
       m_S.push_back(needs.eshelby && r > 0 ? &base::template add_input<tensor4>(names[r], "eshelby", EdgeKind::Global) : nullptr);
-      m_A.push_back(&base::template add_output<tensor4>("concentration_" + names[r], r == 0 ? &mean_field_strain::compute_concentrations : nullptr));
-      m_eps.push_back(&base::template add_history_output<tensor2>("strain_" + names[r], r == 0 ? &mean_field_strain::compute_strains : nullptr));
+      phase_reads.insert(phase_reads.end(), {m_C[r], m_c[r], m_S[r]});
+      m_A.push_back(&base::template add_output<tensor4>("concentration_" + names[r]));
+      m_eps.push_back(&base::template add_history_output<tensor2>("strain_" + names[r]));
     }
     // constant phases: the concentrations are computed once, the strains on every update
-    std::vector<input_wire_base const *> reads;
-    for (std::size_t r{0}; r < names.size(); ++r)
-      for (input_wire_base const *read : {static_cast<input_wire_base const *>(m_C[r]), static_cast<input_wire_base const *>(m_c[r]),
-                                          static_cast<input_wire_base const *>(m_S[r])})
-        if (read)
-          reads.push_back(read);
-    for (std::size_t r{0}; r < names.size(); ++r) {
-      base::constant_output(*m_A[r], reads);
-      if (r > 0) {
-        base::written_by(*m_A[r], *m_A[0]);
-        base::written_by(*m_eps[r], *m_eps[0]);
-      }
-    }
-    base::runs_after(*m_eps[0], *m_A[0]);
+    auto &concentrations{base::add_callback(&mean_field_strain::compute_concentrations, m_A).constant(phase_reads)};
+    base::add_callback(&mean_field_strain::compute_strains, m_eps).runs_after(concentrations);
   }
 
   static input_parameter_controller parameters() {

@@ -156,6 +156,59 @@ private:
   nm::input_property<value_type, nm::property_traits> const &m_source, &m_x;
 };
 
+/// One callback filling "first", "second" and the optional "third" (a null pointer otherwise) from "source";
+/// "constant" declares the group, "taken" gives "first" its own callback before, "empty" adds a group of none.
+template <typename Traits>
+class grouped final : public nm::material_base<grouped<Traits>, Traits> {
+public:
+  using base = nm::material_base<grouped<Traits>, Traits>;
+  using value_type = typename base::value_type;
+  using input_parameter_controller = typename base::input_parameter_controller;
+
+  template <typename... Args>
+  explicit grouped(Args &&...args)
+      : base(std::forward<Args>(args)...),
+        m_first(base::template add_output<value_type>(
+            "first", base::template get_parameter<bool>("taken") ? &grouped::compute : nullptr)),
+        m_second({&base::template add_output<value_type>("second")}),
+        m_source(base::template add_input<value_type>(base::template get_parameter<std::string>("source"), "value",
+                                                      nm::EdgeKind::Global)) {
+    if (base::template get_parameter<bool>("third"))
+      m_third = &base::template add_output<value_type>("third");
+    if (base::template get_parameter<bool>("empty"))
+      base::add_callback(&grouped::compute);
+    auto &group{base::add_callback(&grouped::compute, m_first, m_second, m_third)};
+    if (base::template get_parameter<bool>("constant"))
+      group.constant({&m_source, nullptr});
+  }
+
+  static input_parameter_controller parameters() {
+    input_parameter_controller para{base::parameters()};
+    nm::required<std::string>(para, "source");
+    nm::optional<bool>(para, "third", false);
+    nm::optional<bool>(para, "constant", true);
+    nm::optional<bool>(para, "taken", false);
+    nm::optional<bool>(para, "empty", false);
+    return para;
+  }
+
+  void compute() {
+    ++calls;
+    m_first = m_source.get();
+    *m_second[0] = 2 * m_source.get();
+    if (m_third)
+      *m_third = 3 * m_source.get();
+  }
+
+  int calls{0};
+
+private:
+  value_type &m_first;
+  std::vector<value_type *> m_second;
+  value_type *m_third{nullptr};
+  nm::input_property<value_type, nm::property_traits> const &m_source;
+};
+
 counter<policy> &make(ctx_type &ctx, std::string const &name, param_type p = {}) {
   p.insert<std::string>("name", name);
   return ctx.create<counter<policy>>(p);
@@ -439,4 +492,62 @@ TEST(ConstantProperties, AHistoryOutputCannotBeConstant) {
   param_type p;
   p.insert<bool>("history", true);
   EXPECT_THROW(two_callbacks_setup{p}, std::logic_error);
+}
+
+namespace {
+
+grouped<policy> &make_grouped(ctx_type &ctx, param_type p) {
+  p.insert<std::string>("name", "g");
+  return ctx.create<grouped<policy>>(p);
+}
+
+} // namespace
+
+TEST(ConstantProperties, ACallbackFillsAGroupOfOutputs) {
+  ctx_type ctx;
+  ctx.verify_constants(false); // counts the calls
+  make(ctx, "a");
+  param_type p;
+  p.insert<std::string>("source", "a");
+  p.insert<bool>("third", true);
+  auto &g{make_grouped(ctx, p)};
+  ctx.finalize();
+  auto const &order{ctx.property_execution_order()};
+  auto const at{[&](std::string const &name) { return std::ranges::find(order, ctx.find_property("g", name)) - order.begin(); }};
+  EXPECT_LT(at("first"), at("second"));
+  EXPECT_LT(at("first"), at("third"));
+  for (int i{0}; i < 3; ++i)
+    ctx.update();
+  EXPECT_EQ(g.calls, 1); // a constant group runs once
+  EXPECT_EQ(ctx.get<T>("g", "third"), 3.0);
+}
+
+TEST(ConstantProperties, ANullOutputIsLeftOutOfTheGroup) {
+  ctx_type ctx;
+  make(ctx, "a");
+  param_type p;
+  p.insert<std::string>("source", "a");
+  make_grouped(ctx, p); // "third" is a null pointer
+  ctx.finalize();
+  ctx.update();
+  EXPECT_EQ(ctx.find_property("g", "third"), nullptr);
+  EXPECT_EQ(ctx.get<T>("g", "second"), 2.0);
+}
+
+TEST(ConstantProperties, AnOutputWithACallbackCannotJoinAGroup) {
+  ctx_type ctx;
+  make(ctx, "a");
+  param_type p;
+  p.insert<std::string>("source", "a");
+  p.insert<bool>("taken", true);
+  EXPECT_THROW(make_grouped(ctx, p), std::logic_error);
+}
+
+TEST(ConstantProperties, AGroupNeedsAnOutput) {
+  ctx_type ctx;
+  make(ctx, "a");
+  param_type p;
+  p.insert<std::string>("source", "a");
+  p.insert<bool>("empty", true);
+  EXPECT_THROW(make_grouped(ctx, p), std::logic_error);
 }

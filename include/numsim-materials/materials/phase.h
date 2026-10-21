@@ -32,7 +32,7 @@ public:
   template <typename... Args>
   explicit phase(Args &&...args)
       : base(std::forward<Args>(args)...),
-        m_tangent(base::template add_output<tensor4>("tangent", &phase::compute)),
+        m_tangent(base::template add_output<tensor4>("tangent")),
         m_fraction(base::template add_output<value_type>("volume_fraction")),
         m_local(parse_edge(base::template get_parameter<std::string>("tangent_edge"))),
         m_tangent_source(base::template add_input<tensor4>(base::template get_parameter<std::string>("tangent_source"),
@@ -60,6 +60,7 @@ public:
     } else if (!eshelby.empty() || !depolarisation.empty()) {
       throw std::invalid_argument("phase '" + base::name() + "': Eshelby and depolarisation tensors are three-dimensional");
     }
+    base::add_callback(&phase::compute, m_tangent, m_fraction, m_eshelby, m_depolarisation);
     if (!m_local) // over a local edge the tangent is the previous pass's
       base::constant_output(m_tangent, {&m_tangent_source});
     base::constant_output(m_fraction, {&m_fraction_source});

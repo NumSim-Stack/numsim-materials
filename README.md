@@ -49,6 +49,9 @@ material_context (facade)
   only on parameters and those inputs (all inputs of the material by default): when they are constant too
   (global edges), it is computed once, not on every update; `set_parameter()` and `get_mutable()` recompute
   the constants. Debug builds rerun them and throw when one changes (`ctx.verify_constants(bool)`)
+- `add_callback(&callback, outputs...)` — one callback filling a group of outputs (references, pointers, null
+  skipped, or ranges of pointers); the handle declares the group `.constant([reads])` and orders it
+  `.runs_after(other)`. Built on the two declarations below
 - `written_by(output, writer)` — an output without a callback is filled by the callback of `writer`; it is
   ordered after that callback and only keeps that one from being skipped (undeclared: after, and against,
   every callback of the material)
