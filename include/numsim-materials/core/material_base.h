@@ -74,10 +74,17 @@ protected:
     return ref;
   }
 
-  /// `output` is a function of the parameters and of `reads` only: once every read is constant too (over a
-  /// global edge), the engine computes it once instead of on every update.
-  void constant_output(std::string const& output, std::vector<input_wire_base const*> reads = {}) {
-    base::declare_constant(output, std::move(reads));
+  /// `output` (as add_output returned it) is a function of the parameters and of the material's inputs only:
+  /// once they are constant too (over global edges), the engine computes it once instead of on every update.
+  template <typename T>
+  void constant_output(T const& output) {
+    base::declare_constant(&output, std::nullopt);
+  }
+
+  /// As above, reading only `reads` of the inputs.
+  template <typename T>
+  void constant_output(T const& output, std::vector<input_wire_base const*> reads) {
+    base::declare_constant(&output, std::move(reads));
   }
 
 private:

@@ -1,15 +1,22 @@
 #ifndef MATERIAL_INTERFACE_H
 #define MATERIAL_INTERFACE_H
 
+#include <algorithm>
 #include <any>
+#include <cmath>
+#include <concepts>
 #include <cstddef>
 #include <functional>
+#include <limits>
+#include <optional>
 #include <stdexcept>
 #include <type_traits>
 #include <memory>
 #include <string>
 #include <typeinfo>
+#include <unordered_map>
 #include <vector>
+#include <tmech/tmech.h>
 
 #include "numsim-materials/core/property_traits.h"
 #include "numsim-materials/core/property.h"
@@ -31,6 +38,22 @@ std::string parameter_type_label() {
   else if constexpr (std::is_same_v<T, std::string>) return "a string";
   else if constexpr (requires { typename T::value_type; typename T::iterator; }) return "a list";
   else return std::string{"of type "} + typeid(T).name();
+}
+
+/// Whether a recomputed value equals the stored one (to sqrt(eps) relative); unknown types pass.
+template <typename T>
+bool same_value(T const& a, T const& b) {
+  using std::abs;
+  if constexpr (std::is_arithmetic_v<T>) {
+    return abs(a - b) <= std::sqrt(std::numeric_limits<T>::epsilon()) * std::max({T{1}, abs(a), abs(b)});
+  } else if constexpr (requires { tmech::norm(a - b); }) {
+    auto const tol{std::sqrt(std::numeric_limits<std::decay_t<decltype(tmech::norm(a))>>::epsilon())};
+    return tmech::norm(a - b) <= tol * std::max({decltype(tol){1}, tmech::norm(a), tmech::norm(b)});
+  } else if constexpr (std::equality_comparable<T>) {
+    return a == b;
+  } else {
+    return true;
+  }
 }
 } // namespace detail
 
@@ -164,10 +187,17 @@ public:
     return m_typed_inputs;
   }
 
-  /// An output declared a function of the parameters and of `reads` (material_base::constant_output).
+  using property_base_type = numsim_core::property_base<property_traits>;
+  /// Copies a value; the returned check tells whether it is still the same.
+  using snapshot = std::function<std::function<bool()>()>;
+
+  /// An output declared a function of the parameters and of `reads`, all inputs when unset
+  /// (material_base::constant_output).
   struct constant_declaration {
-    std::string output;
-    std::vector<input_wire_base const*> reads;
+    property_base_type const* output;
+    std::string name;
+    std::optional<std::vector<input_wire_base const*>> reads;
+    snapshot take;
   };
   const std::vector<constant_declaration>& constant_outputs() const noexcept { return m_constant_outputs; }
 
@@ -177,8 +207,14 @@ public:
 protected:
   template <typename T>
   T& add_property(std::string const& property_name, T&& data = T()) {
-    return m_property_handler.template add_property<T>(
-        name(), property_name, std::forward<T>(data));
+    T& value{m_property_handler.template add_property<T>(name(), property_name, std::forward<T>(data))};
+    m_outputs[&value] = {*m_property_handler.find(name(), property_name), property_name, [&value] {
+                           if constexpr (std::copy_constructible<T>)
+                             return std::function<bool()>{[&value, copy = value] { return detail::same_value(copy, value); }};
+                           else
+                             return std::function<bool()>{[] { return true; }};
+                         }};
+    return value;
   }
 
   template <typename T>
@@ -208,8 +244,17 @@ protected:
     return ref;
   }
 
-  void declare_constant(std::string output, std::vector<input_wire_base const*> reads) {
-    m_constant_outputs.push_back({std::move(output), std::move(reads)});
+  /// `output` is the value add_property() returned, its address identifies the property.
+  void declare_constant(void const* output, std::optional<std::vector<input_wire_base const*>> reads) {
+    auto const it{m_outputs.find(output)};
+    if (it == m_outputs.end())
+      throw std::logic_error("constant_output(): material '" + m_name + "' declared a value that is not one of its outputs");
+    if (reads)
+      for (auto const* read : *reads)
+        if (std::ranges::none_of(m_typed_inputs, [read](auto const& input) { return input.get() == read; }))
+          throw std::logic_error("constant_output(): '" + m_name + "::" + it->second.name +
+                                 "' declares a read that is not an input of the material");
+    m_constant_outputs.push_back({it->second.property, it->second.name, std::move(reads), it->second.take});
   }
 
   /// Add a lazy reference to another material, resolved at finalize().
@@ -228,6 +273,12 @@ protected:
 private:
   std::vector<std::unique_ptr<input_wire_base>> m_typed_inputs;
   std::vector<std::unique_ptr<material_ref_base<Traits>>> m_material_refs;
+  struct output_entry {
+    property_base_type const* property;
+    std::string name;
+    snapshot take;
+  };
+  std::unordered_map<void const*, output_entry> m_outputs; ///< value address -> property
   std::vector<constant_declaration> m_constant_outputs;
   std::size_t* m_revision{nullptr};
 };

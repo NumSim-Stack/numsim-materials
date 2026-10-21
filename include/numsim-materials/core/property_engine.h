@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <numsim-core/print.h>
 #include <queue>
@@ -67,6 +68,9 @@ public:
 
   /// Bumped by every write outside the graph (set_parameter, get_mutable): constants are recomputed.
   std::size_t* revision() noexcept { return m_revision.get(); }
+
+  /// Rerun the constant callbacks on every update and throw when an output changes (on in debug builds).
+  void verify_constants(bool on) noexcept { m_verify = on; }
 
   void commit() {
     for (auto* hp : m_history_properties)
@@ -254,37 +258,49 @@ private:
   /// reads first). A callback runs once only when the outputs of its material without a callback of their own
   /// (written by some callback of it) are constant as well.
   void find_constants(property_handler& properties, const std::vector<material_interface_type*>& interfaces) {
-    std::unordered_map<const property_base*, const std::vector<numsim_core::input_wire_base const*>*> declared;
+    using declaration = typename material_interface_type::constant_declaration;
+    std::unordered_map<const property_base*, std::pair<material_interface_type const*, declaration const*>> declared;
     for (auto* mat : interfaces)
-      for (auto& d : mat->constant_outputs()) {
-        auto* p = find_property(properties, std::string(mat->name()), d.output);
-        if (!p)
-          throw std::logic_error("constant_output(): '" + std::string(mat->name()) + "::" + d.output +
-                                 "' is not an output of the material");
-        declared[p] = &d.reads;
-      }
+      for (auto& d : mat->constant_outputs())
+        declared[d.output] = {mat, &d};
+    auto const reads_constant{[&](auto const* read) {
+      if (read->edge_kind() != EdgeKind::Global)
+        return false;
+      auto* source = find_in_graph(read->source_owner(), read->source_name());
+      return source && m_constant.contains(source);
+    }};
     m_constant.clear();
     for (auto* prop : m_property_execution_order) {
       auto it = declared.find(prop);
       if (it == declared.end() || prop->is_history())
         continue;
-      bool const reads_constants{std::ranges::all_of(*it->second, [&](auto const* read) {
-        if (read->edge_kind() != EdgeKind::Global)
-          return false;
-        auto* source = find_in_graph(read->source_owner(), read->source_name());
-        return source && m_constant.contains(source);
-      })};
-      if (reads_constants)
+      auto const& [mat, d]{it->second};
+      bool const constant{d->reads ? std::ranges::all_of(*d->reads, reads_constant)
+                                   : std::ranges::all_of(mat->typed_inputs(), [&](auto const& input) {
+                                       return reads_constant(input.get());
+                                     })};
+      if (constant)
         m_constant.insert(prop);
     }
     m_once.clear();
-    for (auto& [owner, props] : properties.data()) {
+    m_checks.clear();
+    for (auto* mat : interfaces) {
+      auto pos = properties.data().find(std::string(mat->name()));
+      if (pos == properties.data().end())
+        continue;
+      auto& props{pos->second};
       bool const quiet_constant{std::ranges::all_of(props, [&](auto const& entry) {
         return entry.second->traits().update || m_constant.contains(entry.second.get());
       })};
+      std::vector<declaration const*> outputs;
+      for (auto& d : mat->constant_outputs())
+        if (m_constant.contains(d.output))
+          outputs.push_back(&d);
       for (auto& [name, prop] : props)
-        if (quiet_constant && prop->traits().update && m_constant.contains(prop.get()))
+        if (quiet_constant && prop->traits().update && m_constant.contains(prop.get())) {
           m_once.insert(prop.get());
+          m_checks[prop.get()] = {std::string(mat->name()), outputs};
+        }
     }
     m_done.clear();
   }
@@ -301,11 +317,27 @@ private:
     if (!update)
       return;
     bool const once{m_once.contains(prop)};
-    if (once && m_done.contains(prop))
+    if (once && m_done.contains(prop)) {
+      if (m_verify)
+        verify(prop);
       return;
+    }
     update();
     if (once)
       m_done.insert(prop);
+  }
+
+  /// Reruns a constant callback and throws when one of its material's constant outputs changes.
+  void verify(property_base* prop) {
+    auto const& [owner, outputs]{m_checks.at(prop)};
+    std::vector<std::function<bool()>> checks;
+    for (auto const* d : outputs)
+      checks.push_back(d->take());
+    prop->traits().update();
+    for (std::size_t i{0}; i < checks.size(); ++i)
+      if (!checks[i]())
+        throw std::logic_error("constant_output(): '" + owner + "::" + outputs[i]->name +
+                               "' changed although constant: it reads more than its parameters and declared inputs");
   }
 
   void collect_history_properties(property_handler& properties) {
@@ -350,6 +382,15 @@ private:
   std::unordered_set<const property_base*> m_done; ///< ... and already run since the last revision
   std::unique_ptr<std::size_t> m_revision{std::make_unique<std::size_t>(0)}; ///< stable address for the materials
   std::size_t m_seen_revision{0};
+  /// once-callback -> its material and that material's constant outputs, for verify()
+  std::unordered_map<const property_base*,
+                     std::pair<std::string, std::vector<typename material_interface_type::constant_declaration const*>>>
+      m_checks;
+#ifdef NDEBUG
+  bool m_verify{false};
+#else
+  bool m_verify{true};
+#endif
 };
 
 } // namespace numsim::materials

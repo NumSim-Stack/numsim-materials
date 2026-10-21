@@ -42,7 +42,7 @@ public:
             base::template get_parameter<std::string>("G_source"),
             base::template get_parameter<std::string>("G_property"),
             EdgeKind::Global)) {
-    base::constant_output("tangent", {&m_K, &m_G});
+    base::constant_output(m_C);
   }
 
   static input_parameter_controller parameters() {

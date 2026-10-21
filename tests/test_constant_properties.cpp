@@ -17,7 +17,9 @@ using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
 
 /// "value" = factor * source (factor alone without a source), counting its callback. With "constant" it
-/// declares "value" constant; with "extra" it also writes an undeclared output from the same callback.
+/// declares "value" constant; with "extra" it also writes an undeclared output from the same callback;
+/// "other" adds an input "value" does not use, "narrow" declares the read of "source" only; "hidden" adds the
+/// call count (state the declaration hides); "bogus" declares a parameter, "foreign" a read it does not own.
 template <typename Traits>
 class counter final : public nm::material_base<counter<Traits>, Traits> {
 public:
@@ -36,11 +38,18 @@ public:
                                                                                                    : nm::EdgeKind::Global);
     if (base::template get_parameter<bool>("extra"))
       m_extra = &base::template add_output<value_type>("extra");
+    auto const &other{base::template get_parameter<std::string>("other")};
+    if (!other.empty())
+      base::template add_input<value_type>(other, "state", nm::EdgeKind::Global);
+    if (base::template get_parameter<bool>("bogus"))
+      base::constant_output(m_factor);
+    if (base::template get_parameter<bool>("foreign"))
+      base::constant_output(m_value, {&m_foreign});
     if (base::template get_parameter<bool>("constant")) {
-      if (m_source)
-        base::constant_output("value", {m_source});
+      if (base::template get_parameter<bool>("narrow"))
+        base::constant_output(m_value, {m_source});
       else
-        base::constant_output("value");
+        base::constant_output(m_value);
     }
   }
 
@@ -52,12 +61,17 @@ public:
     nm::optional<bool>(para, "local", false);
     nm::optional<bool>(para, "constant", true);
     nm::optional<bool>(para, "extra", false);
+    nm::optional<std::string>(para, "other", std::string{});
+    nm::optional<bool>(para, "narrow", false);
+    nm::optional<bool>(para, "hidden", false);
+    nm::optional<bool>(para, "bogus", false);
+    nm::optional<bool>(para, "foreign", false);
     return para;
   }
 
   void compute() {
     ++calls;
-    m_value = m_factor * (m_source ? m_source->get() : value_type{1});
+    m_value = m_factor * (m_source ? m_source->get() : value_type{1}) + (m_hidden ? calls : 0);
     if (m_extra)
       *m_extra = m_value;
   }
@@ -69,6 +83,8 @@ private:
   value_type const &m_factor;
   nm::input_property<value_type, nm::property_traits> const *m_source{nullptr};
   value_type *m_extra{nullptr};
+  bool const &m_hidden{base::template get_parameter<bool>("hidden")};
+  nm::input_property<value_type, nm::property_traits> m_foreign{"elsewhere", "value", nm::EdgeKind::Global};
 };
 
 counter<policy> &make(ctx_type &ctx, std::string const &name, param_type p = {}) {
@@ -89,6 +105,7 @@ T value_of(ctx_type &ctx, std::string const &name) { return ctx.get<T>(name, "va
 
 TEST(ConstantProperties, AConstantChainIsComputedOnce) {
   ctx_type ctx;
+  ctx.verify_constants(false); // counts the calls
   param_type p;
   p.insert<T>("factor", 2.0);
   auto &a{make(ctx, "a", p)};
@@ -105,6 +122,7 @@ TEST(ConstantProperties, AConstantChainIsComputedOnce) {
 
 TEST(ConstantProperties, AReadOfAVaryingPropertyKeepsTheOutputInTheLoop) {
   ctx_type ctx;
+  ctx.verify_constants(false); // counts the calls
   param_type p;
   p.insert<std::string>("name", "x");
   auto &x{ctx.create<nm::external_scalar_source<policy>>(p)};
@@ -120,6 +138,7 @@ TEST(ConstantProperties, AReadOfAVaryingPropertyKeepsTheOutputInTheLoop) {
 
 TEST(ConstantProperties, AnUndeclaredOutputIsNeverConstant) {
   ctx_type ctx;
+  ctx.verify_constants(false); // counts the calls
   param_type p;
   p.insert<bool>("constant", false);
   auto &a{make(ctx, "a", p)};
@@ -133,6 +152,7 @@ TEST(ConstantProperties, AnUndeclaredOutputIsNeverConstant) {
 
 TEST(ConstantProperties, ALocalEdgeIsNeverConstant) {
   ctx_type ctx;
+  ctx.verify_constants(false); // counts the calls
   make(ctx, "a");
   auto p{reading("a")};
   p.insert<bool>("local", true);
@@ -145,6 +165,7 @@ TEST(ConstantProperties, ALocalEdgeIsNeverConstant) {
 
 TEST(ConstantProperties, ACallbackRunsWhileAnOutputItWritesVaries) {
   ctx_type ctx;
+  ctx.verify_constants(false); // counts the calls
   param_type p;
   p.insert<bool>("extra", true); // "extra" is written by the same callback but not declared
   auto &a{make(ctx, "a", p)};
@@ -156,6 +177,7 @@ TEST(ConstantProperties, ACallbackRunsWhileAnOutputItWritesVaries) {
 
 TEST(ConstantProperties, SetParameterRecomputesTheConstants) {
   ctx_type ctx;
+  ctx.verify_constants(false); // counts the calls
   auto &a{make(ctx, "a")};
   auto &b{make(ctx, "b", reading("a"))};
   ctx.finalize();
@@ -172,6 +194,7 @@ TEST(ConstantProperties, SetParameterRecomputesTheConstants) {
 
 TEST(ConstantProperties, AMutableWriteRecomputesTheConstants) {
   ctx_type ctx;
+  ctx.verify_constants(false); // counts the calls
   auto &a{make(ctx, "a")};
   auto &b{make(ctx, "b", reading("a"))};
   ctx.finalize();
@@ -184,6 +207,7 @@ TEST(ConstantProperties, AMutableWriteRecomputesTheConstants) {
 
 TEST(ConstantProperties, UpdatePropertyComputesAConstantNotYetEvaluated) {
   ctx_type ctx;
+  ctx.verify_constants(false); // counts the calls
   auto &a{make(ctx, "a")};
   auto p{reading("a")};
   p.insert<T>("factor", 5.0);
@@ -195,4 +219,64 @@ TEST(ConstantProperties, UpdatePropertyComputesAConstantNotYetEvaluated) {
   ctx.update_property("b", "value");
   EXPECT_EQ(a.calls, 1);
   EXPECT_EQ(b.calls, 1);
+}
+
+TEST(ConstantProperties, AllInputsAreReadByDefault) {
+  ctx_type ctx;
+  ctx.verify_constants(false);
+  param_type p;
+  p.insert<std::string>("name", "x");
+  auto &x{ctx.create<nm::external_scalar_source<policy>>(p)};
+  make(ctx, "a");
+  auto p_b{reading("a")};
+  p_b.insert<std::string>("other", "x"); // not used by "value", but an input
+  auto &b{make(ctx, "b", p_b)};
+  auto p_c{p_b};
+  p_c.insert<std::string>("name", "c");
+  p_c.insert<bool>("narrow", true);
+  auto &c{ctx.create<counter<policy>>(p_c)};
+  ctx.finalize();
+  for (int i{0}; i < 3; ++i) {
+    x.bind(0.0, static_cast<T>(i));
+    ctx.update();
+  }
+  EXPECT_EQ(b.calls, 3);
+  EXPECT_EQ(c.calls, 1);
+}
+
+TEST(ConstantProperties, OnlyAnOutputCanBeDeclared) {
+  ctx_type ctx;
+  param_type p;
+  p.insert<bool>("bogus", true);
+  EXPECT_THROW(make(ctx, "a", p), std::logic_error);
+}
+
+TEST(ConstantProperties, OnlyAnInputCanBeADeclaredRead) {
+  ctx_type ctx;
+  param_type p;
+  p.insert<bool>("foreign", true);
+  EXPECT_THROW(make(ctx, "a", p), std::logic_error);
+}
+
+TEST(ConstantProperties, VerificationCatchesHiddenState) {
+  ctx_type ctx;
+  ctx.verify_constants(true);
+  param_type p;
+  p.insert<bool>("hidden", true);
+  make(ctx, "a", p);
+  ctx.finalize();
+  ctx.update();
+  EXPECT_THROW(ctx.update(), std::logic_error);
+}
+
+TEST(ConstantProperties, VerificationPassesATrueConstant) {
+  ctx_type ctx;
+  ctx.verify_constants(true);
+  auto &a{make(ctx, "a")};
+  make(ctx, "b", reading("a"));
+  ctx.finalize();
+  for (int i{0}; i < 3; ++i)
+    ctx.update();
+  EXPECT_EQ(a.calls, 3); // the first run and two verifying reruns
+  EXPECT_EQ(value_of(ctx, "b"), 1.0);
 }

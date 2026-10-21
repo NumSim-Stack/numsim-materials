@@ -161,6 +161,9 @@ public:
 
   void dump() const { m_engine.dump(); }
 
+  /// Rerun the constant callbacks on every update and throw when an output changes; on in debug builds.
+  void verify_constants(bool on) noexcept { m_engine.verify_constants(on); }
+
   std::vector<material_property_info> build_property_infos() const {
     std::vector<material_property_info> infos;
     for (auto* mat : m_store.interfaces()) {

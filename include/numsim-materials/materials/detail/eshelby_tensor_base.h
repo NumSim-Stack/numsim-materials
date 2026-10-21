@@ -43,7 +43,7 @@ protected:
   /// Called by the shape's own constructor: binding the update needs the most-derived object.
   void register_output() {
     m_S = &base::template add_output<tensor4>("tensor", &eshelby_tensor_base::compute);
-    base::constant_output("tensor", {&m_nu});
+    base::constant_output(*m_S);
   }
 
 private:

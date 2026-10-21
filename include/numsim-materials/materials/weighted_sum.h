@@ -81,7 +81,7 @@ public:
       tangent_reads.push_back(w);
       tangent_reads.push_back(C);
     }
-    base::constant_output("tangent", std::move(tangent_reads));
+    base::constant_output(m_tangent, std::move(tangent_reads));
   }
 
   static input_parameter_controller parameters() {

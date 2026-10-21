@@ -283,6 +283,7 @@ TEST(MeanField, ConstantPhasesAreHomogenisedOnce) {
   ASSERT_TRUE(registered);
   counting_mori_tanaka<policy>::calls = 0;
   auto ctx{build("counting_mori_tanaka", {{"s", "stiff", "sphere", 0.3}})};
+  ctx->verify_constants(false); // counts the kernel calls
   auto reference{build("mori_tanaka", {{"s", "stiff", "sphere", 0.3}})};
   for (int i{1}; i <= 4; ++i) {
     tensor2 eps;

@@ -49,16 +49,9 @@ public:
       m_A.push_back(&base::template add_output<tensor4>("concentration_" + names[r]));
     }
     // constant phases: the kernel runs once
-    std::vector<input_wire_base const *> reads;
-    for (std::size_t r{0}; r < names.size(); ++r) {
-      reads.push_back(m_C[r]);
-      reads.push_back(m_c[r]);
-      if (m_S[r])
-        reads.push_back(m_S[r]);
-    }
-    base::constant_output("tangent", reads);
-    for (auto const &name : names)
-      base::constant_output("concentration_" + name, reads);
+    base::constant_output(m_tangent);
+    for (auto const *A : m_A)
+      base::constant_output(*A);
   }
 
   static input_parameter_controller parameters() {

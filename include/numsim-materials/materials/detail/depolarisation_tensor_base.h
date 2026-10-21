@@ -21,7 +21,7 @@ public:
   template <typename... Args>
   explicit depolarisation_tensor_base(Args &&...args)
       : base(std::forward<Args>(args)...), m_N(base::template add_output<tensor2>("tensor")) {
-    base::constant_output("tensor");
+    base::constant_output(m_N);
   }
 
   static input_parameter_controller parameters() { return base::parameters(); }

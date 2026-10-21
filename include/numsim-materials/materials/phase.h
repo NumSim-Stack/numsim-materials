@@ -61,12 +61,12 @@ public:
       throw std::invalid_argument("phase '" + base::name() + "': Eshelby and depolarisation tensors are three-dimensional");
     }
     if (!m_local) // over a local edge the tangent is the previous pass's
-      base::constant_output("tangent", {&m_tangent_source});
-    base::constant_output("volume_fraction", {&m_fraction_source});
+      base::constant_output(m_tangent, {&m_tangent_source});
+    base::constant_output(m_fraction, {&m_fraction_source});
     if (m_eshelby)
-      base::constant_output("eshelby", {m_eshelby_source});
+      base::constant_output(*m_eshelby, {m_eshelby_source});
     if (m_depolarisation)
-      base::constant_output("depolarisation", {m_depolarisation_source});
+      base::constant_output(*m_depolarisation, {m_depolarisation_source});
   }
 
   static input_parameter_controller parameters() {
