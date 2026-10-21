@@ -45,7 +45,18 @@ material_context (facade)
 **Core API:**
 - `add_output<T>("name", &callback)` — produce a property
 - `add_input<T>(source, prop, EdgeKind)` — consume a property (wired at `finalize()`)
-- `ctx.update()` — execute all properties in topological order
+- `constant_output(output[, {&input, ...}])` — the output (the reference `add_output` returned) depends
+  only on parameters and those inputs (all inputs of the material by default): when they are constant too
+  (global edges), it is computed once, not on every update; `set_parameter()` and `get_mutable()` recompute
+  the constants. Debug builds rerun them and throw when one changes (`ctx.verify_constants(bool)`)
+- `add_callback(&callback, outputs...)` — one callback filling a group of outputs (references, pointers, null
+  skipped, or ranges of pointers); the handle declares the group `.constant([reads])` and orders it
+  `.runs_after(other)`. Built on the two declarations below
+- `written_by(output, writer)` — an output without a callback is filled by the callback of `writer`; it is
+  ordered after that callback and only keeps that one from being skipped (undeclared: after, and against,
+  every callback of the material)
+- `runs_after(output, earlier)` — the callback of `output` runs after the callback of `earlier` (same material)
+- `ctx.update()` — execute all properties in topological order (the constant ones until they have run)
 - `ctx.update_property("mat", "prop")` — selective upstream update
 - `ctx.commit()` / `ctx.revert()` — timestep history management
 - `ctx.save_state("checkpoint.bin")` / `ctx.load_state(...)` — binary checkpoint/restart

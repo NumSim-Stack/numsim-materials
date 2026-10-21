@@ -2,6 +2,9 @@
 #define PROPERTY_ENGINE_H
 
 #include <algorithm>
+#include <cstddef>
+#include <functional>
+#include <memory>
 #include <numsim-core/print.h>
 #include <queue>
 #include <stdexcept>
@@ -30,14 +33,14 @@ public:
              const std::vector<material_interface_type*>& interfaces) {
     compute_execution_order(properties, interfaces);
     collect_history_properties(properties);
+    find_constants(properties, interfaces);
   }
 
-  /// Run all property update callbacks in topological order.
+  /// Run all property update callbacks in topological order; a constant one only until it has run.
   void update() {
-    for (auto* prop : m_property_execution_order) {
-      if (prop->traits().update)
-        prop->traits().update();
-    }
+    refresh_constants();
+    for (auto* prop : m_property_execution_order)
+      run(prop);
   }
 
   /// Update a single property and all its upstream dependencies.
@@ -52,13 +55,22 @@ public:
   /// Update a single property (by pointer) and all its upstream dependencies.
   void update_property(const property_base* target,
                        const std::unordered_set<const property_base*>& exclude = {}) {
+    refresh_constants();
     auto subgraph = collect_upstream(target);
     for (auto* prop : m_property_execution_order) {
-      if (subgraph.contains(prop) && prop->traits().update
-          && !exclude.contains(prop))
-        prop->traits().update();
+      if (subgraph.contains(prop) && !exclude.contains(prop))
+        run(prop);
     }
   }
+
+  /// A property computed once: declared constant (material_base::constant_output) and reading only constants.
+  bool is_constant(const property_base* prop) const { return m_constant.contains(prop); }
+
+  /// Bumped by every write outside the graph (set_parameter, get_mutable): constants are recomputed.
+  std::size_t* revision() noexcept { return m_revision.get(); }
+
+  /// Rerun the constant callbacks on every update and throw when an output changes (on in debug builds).
+  void verify_constants(bool on) noexcept { m_verify = on; }
 
   void commit() {
     for (auto* hp : m_history_properties)
@@ -101,6 +113,7 @@ public:
   template<typename T>
   T& get_mutable(property_handler& properties,
                  const std::string& material, const std::string& prop_name) {
+    ++*m_revision; // the caller may write anything, a constant included
     auto* p = find_property(properties, material, prop_name);
     if (!p)
       throw std::runtime_error("property_engine::get_mutable(): property '" +
@@ -125,8 +138,8 @@ public:
     numsim_core::println(stderr, "=== Property execution order ({} properties) ===",
                  m_property_execution_order.size());
     for (auto* prop : m_property_execution_order)
-      numsim_core::println(stderr, "  {}::{}{}", prop->traits().id.owner, prop->traits().id.name,
-                   prop->traits().update ? "" : " (no callback)");
+      numsim_core::println(stderr, "  {}::{}{}{}", prop->traits().id.owner, prop->traits().id.name,
+                   prop->traits().update ? "" : " (no callback)", is_constant(prop) ? " (constant)" : "");
   }
 
 private:
@@ -199,6 +212,16 @@ private:
       }
     }
 
+    // within a material: declared callback order, and an output without a callback after its writers
+    // (cannot close a cycle: the material's global inputs already reach every output)
+    for (auto* mat : interfaces) {
+      for (auto const& [earlier, later] : mat->callback_order())
+        add_edge(prop_key(earlier->traits().id), prop_key(later->traits().id));
+      for (auto const& [output, writers] : writers_of(properties, *mat))
+        for (auto const* writer : writers)
+          add_edge(prop_key(writer->traits().id), prop_key(output->traits().id));
+    }
+
     // --- Topological sort ---
     std::queue<std::string> ready;
     for (auto& [key, deg] : indegree)
@@ -241,6 +264,114 @@ private:
     }
   }
 
+  /// Outputs of `mat` without a callback -> the callbacks that may write them: the declared writer
+  /// (written_by), else every callback of the material.
+  std::unordered_map<const property_base*, std::vector<const property_base*>> writers_of(property_handler& properties,
+                                                                                        const material_interface_type& mat) const {
+    std::unordered_map<const property_base*, std::vector<const property_base*>> writers;
+    auto pos = properties.data().find(std::string(mat.name()));
+    if (pos == properties.data().end())
+      return writers;
+    std::vector<const property_base*> callbacks;
+    for (auto& [name, prop] : pos->second)
+      if (prop->traits().update)
+        callbacks.push_back(prop.get());
+    for (auto& [name, prop] : pos->second)
+      if (!prop->traits().update)
+        writers[prop.get()] = callbacks;
+    for (auto const& [output, by] : mat.written_outputs())
+      writers[output] = {by};
+    return writers;
+  }
+
+  /// Constant: declared, not history, every read a global edge from a constant (the topological order has the
+  /// reads first). A constant callback runs once when every output it may write (writers_of) is constant.
+  void find_constants(property_handler& properties, const std::vector<material_interface_type*>& interfaces) {
+    using declaration = typename material_interface_type::constant_declaration;
+    std::unordered_map<const property_base*, std::pair<material_interface_type const*, declaration const*>> declared;
+    for (auto* mat : interfaces)
+      for (auto& d : mat->constant_outputs())
+        declared[d.output] = {mat, &d};
+    auto const reads_constant{[&](auto const* read) {
+      if (read->edge_kind() != EdgeKind::Global)
+        return false;
+      auto* source = find_in_graph(read->source_owner(), read->source_name());
+      return source && m_constant.contains(source);
+    }};
+    m_constant.clear();
+    for (auto* prop : m_property_execution_order) {
+      auto it = declared.find(prop);
+      if (it == declared.end() || prop->is_history())
+        continue;
+      auto const& [mat, d]{it->second};
+      bool const constant{d->reads ? std::ranges::all_of(*d->reads, reads_constant)
+                                   : std::ranges::all_of(mat->typed_inputs(), [&](auto const& input) {
+                                       return reads_constant(input.get());
+                                     })};
+      if (constant)
+        m_constant.insert(prop);
+    }
+    m_once.clear();
+    m_checks.clear();
+    for (auto* mat : interfaces) {
+      auto pos = properties.data().find(std::string(mat->name()));
+      if (pos == properties.data().end())
+        continue;
+      auto& props{pos->second};
+      auto const writers{writers_of(properties, *mat)};
+      auto const writes_constants{[&](const property_base* callback) {
+        return std::ranges::all_of(writers, [&](auto const& w) {
+          return m_constant.contains(w.first) || std::ranges::find(w.second, callback) == w.second.end();
+        });
+      }};
+      std::vector<declaration const*> outputs;
+      for (auto& d : mat->constant_outputs())
+        if (m_constant.contains(d.output))
+          outputs.push_back(&d);
+      for (auto& [name, prop] : props)
+        if (prop->traits().update && m_constant.contains(prop.get()) && writes_constants(prop.get())) {
+          m_once.insert(prop.get());
+          m_checks[prop.get()] = {std::string(mat->name()), outputs};
+        }
+    }
+    m_done.clear();
+  }
+
+  void refresh_constants() {
+    if (*m_revision != m_seen_revision) {
+      m_done.clear();
+      m_seen_revision = *m_revision;
+    }
+  }
+
+  void run(property_base* prop) {
+    auto& update = prop->traits().update;
+    if (!update)
+      return;
+    bool const once{m_once.contains(prop)};
+    if (once && m_done.contains(prop)) {
+      if (m_verify)
+        verify(prop);
+      return;
+    }
+    update();
+    if (once)
+      m_done.insert(prop);
+  }
+
+  /// Reruns a constant callback and throws when one of its material's constant outputs changes.
+  void verify(property_base* prop) {
+    auto const& [owner, outputs]{m_checks.at(prop)};
+    std::vector<std::function<bool()>> checks;
+    for (auto const* d : outputs)
+      checks.push_back(d->take());
+    prop->traits().update();
+    for (std::size_t i{0}; i < checks.size(); ++i)
+      if (!checks[i]())
+        throw std::logic_error("constant_output(): '" + owner + "::" + outputs[i]->name +
+                               "' changed although constant: it reads more than its parameters and declared inputs");
+  }
+
   void collect_history_properties(property_handler& properties) {
     m_history_properties.clear();
     for (auto& [owner, props] : properties.data())
@@ -278,6 +409,20 @@ private:
   std::unordered_map<std::string, property_base*> m_key_to_prop;  // for string-based find
   std::unordered_map<property_base*, std::vector<property_base*>> m_reverse_edges;  // pointer-based
   std::vector<property_base*> m_history_properties;
+  std::unordered_set<const property_base*> m_constant;
+  std::unordered_set<const property_base*> m_once; ///< callbacks run once
+  std::unordered_set<const property_base*> m_done; ///< ... and already run since the last revision
+  std::unique_ptr<std::size_t> m_revision{std::make_unique<std::size_t>(0)}; ///< stable address for the materials
+  std::size_t m_seen_revision{0};
+  /// once-callback -> its material and that material's constant outputs, for verify()
+  std::unordered_map<const property_base*,
+                     std::pair<std::string, std::vector<typename material_interface_type::constant_declaration const*>>>
+      m_checks;
+#ifdef NDEBUG
+  bool m_verify{false};
+#else
+  bool m_verify{true};
+#endif
 };
 
 } // namespace numsim::materials
