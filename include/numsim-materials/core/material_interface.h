@@ -46,19 +46,33 @@ template <typename T>
 concept verifiable = std::copy_constructible<T> &&
                      (std::is_arithmetic_v<T> || requires(T const& a) { tmech::norm(a - a); } || std::equality_comparable<T>);
 
-/// Whether a recomputed value equals the stored one (to sqrt(eps) relative).
+/// Whether a recomputed value equals the stored one, to sqrt(eps) relative: independent of the units.
 template <verifiable T>
 bool same_value(T const& a, T const& b) {
   using std::abs;
   if constexpr (std::is_arithmetic_v<T>) {
-    return abs(a - b) <= std::sqrt(std::numeric_limits<T>::epsilon()) * std::max({T{1}, abs(a), abs(b)});
+    return abs(a - b) <= std::sqrt(std::numeric_limits<T>::epsilon()) * std::max(abs(a), abs(b));
   } else if constexpr (requires { tmech::norm(a - b); }) {
     auto const tol{std::sqrt(std::numeric_limits<std::decay_t<decltype(tmech::norm(a))>>::epsilon())};
-    return tmech::norm(a - b) <= tol * std::max({decltype(tol){1}, tmech::norm(a), tmech::norm(b)});
+    return tmech::norm(a - b) <= tol * std::max(tmech::norm(a), tmech::norm(b));
   } else {
     return a == b;
   }
 }
+
+/// Whether a value is finite; types without a norm are.
+template <verifiable T>
+bool is_finite(T const& a) {
+  if constexpr (std::is_floating_point_v<T>)
+    return std::isfinite(a);
+  else if constexpr (!std::is_arithmetic_v<T> && requires { tmech::norm(a - a); })
+    return std::isfinite(tmech::norm(a));
+  else
+    return true;
+}
+
+/// A rerun constant compared with its stored value.
+enum class verdict { same, changed, not_finite };
 } // namespace detail
 
 /// Virtual base for all materials: property registration, typed input wiring and material references;
@@ -192,14 +206,13 @@ public:
   }
 
   using property_base_type = numsim_core::property_base<property_traits>;
-  /// Copies a value; the returned check tells whether it is still the same. Empty for types never constant.
-  using snapshot = std::function<std::function<bool()>()>;
+  /// Copies a value; the returned check compares it with the current one. Empty for types never constant.
+  using snapshot = std::function<std::function<detail::verdict()>()>;
 
   /// An output declared a function of the parameters and of `reads`, all inputs when unset
   /// (material_base::constant_output).
   struct constant_declaration {
     property_base_type const* output;
-    std::string name;
     std::optional<std::vector<input_wire_base const*>> reads;
     snapshot take;
   };
@@ -219,15 +232,20 @@ protected:
     T& value{m_property_handler.template add_property<T>(name(), property_name, std::forward<T>(data))};
     snapshot take;
     if constexpr (detail::verifiable<T>)
-      take = [&value] { return std::function<bool()>{[&value, copy = value] { return detail::same_value(copy, value); }}; };
-    m_outputs[&value] = {*m_property_handler.find(name(), property_name), property_name, std::move(take)};
+      take = [&value] {
+        return std::function<detail::verdict()>{[&value, copy = value] {
+          using enum detail::verdict;
+          return !detail::is_finite(value) ? not_finite : detail::same_value(copy, value) ? same : changed;
+        }};
+      };
+    m_outputs[&value] = {*m_property_handler.find(name(), property_name), std::move(take)};
     return value;
   }
 
   template <typename T>
   history_property<T>& add_history(std::string const& property_name, T&& data = T()) {
     auto& value{m_property_handler.template add_history<T>(name(), property_name, std::forward<T>(data))};
-    m_outputs[&value] = {*m_property_handler.find(name(), property_name), property_name, {}}; // never constant
+    m_outputs[&value] = {*m_property_handler.find(name(), property_name), {}}; // never constant
     return value;
   }
 
@@ -254,39 +272,48 @@ protected:
 
   /// `output` is the value add_property() returned, its address identifies the property.
   void declare_constant(void const* output, std::optional<std::vector<input_wire_base const*>> reads) {
-    auto const it{output_entry_of("constant_output", output)};
-    if (it->second.property->is_history())
-      throw std::logic_error("constant_output(): '" + m_name + "::" + it->second.name + "' is history, never constant");
-    if (!it->second.take)
-      throw std::logic_error("constant_output(): '" + m_name + "::" + it->second.name + "' has a type that cannot be compared");
-    if (reads)
+    auto const& entry{output_entry_of("constant_output", output)};
+    if (entry.property->is_history())
+      throw std::logic_error("constant_output(): '" + key_of(entry) + "' is history, never constant");
+    if (!entry.take)
+      throw std::logic_error("constant_output(): '" + key_of(entry) + "' has a type that cannot be compared");
+    if (reads) {
       std::erase(*reads, nullptr); // an absent optional input
-    if (reads)
-      for (auto const* read : *reads)
-        if (std::ranges::none_of(m_typed_inputs, [read](auto const& input) { return input.get() == read; }))
-          throw std::logic_error("constant_output(): '" + m_name + "::" + it->second.name +
-                                 "' declares a read that is not an input of the material");
-    m_constant_outputs.push_back({it->second.property, it->second.name, std::move(reads), it->second.take});
+      auto const is_input{[this](input_wire_base const* read) {
+        return std::ranges::contains(m_typed_inputs, read, [](auto const& input) { return input.get(); });
+      }};
+      if (!std::ranges::all_of(*reads, is_input))
+        throw std::logic_error("constant_output(): '" + key_of(entry) + "' declares a read that is not an input of the material");
+    }
+    m_constant_outputs.push_back({entry.property, std::move(reads), entry.take});
   }
 
   void declare_written_by(void const* output, void const* writer) {
-    auto const out{output_entry_of("written_by", output)};
-    auto const by{output_entry_of("written_by", writer)};
-    if (out->second.property->traits().update)
-      throw std::logic_error("written_by(): '" + m_name + "::" + out->second.name + "' has a callback of its own");
-    if (!by->second.property->traits().update)
-      throw std::logic_error("written_by(): '" + m_name + "::" + by->second.name + "' has no callback to write with");
-    m_written_by.emplace_back(out->second.property, by->second.property);
+    auto const& out{output_entry_of("written_by", output)};
+    auto const& by{output_entry_of("written_by", writer)};
+    if (has_callback(out) || has_writer(out))
+      throw std::logic_error("written_by(): '" + key_of(out) + "' has a callback or a writer already");
+    if (!has_callback(by))
+      throw std::logic_error("written_by(): '" + key_of(by) + "' has no callback to write with");
+    m_written_by.emplace_back(out.property, by.property);
   }
 
-  const std::string& output_name(void const* output) const { return output_entry_of("add_callback", output)->second.name; }
-  bool has_callback(void const* output) const {
-    return static_cast<bool>(output_entry_of("add_callback", output)->second.property->traits().update);
+  const std::string& output_name(void const* output) const {
+    return output_entry_of("add_callback", output).property->traits().id.name;
+  }
+  /// Whether something fills the output already: its own callback or a declared writer.
+  bool is_bound(void const* output) const {
+    auto const& entry{output_entry_of("add_callback", output)};
+    return has_callback(entry) || has_writer(entry);
   }
 
   void declare_order(void const* later, void const* earlier) {
-    m_callback_order.emplace_back(output_entry_of("runs_after", earlier)->second.property,
-                                  output_entry_of("runs_after", later)->second.property);
+    auto const& first{output_entry_of("runs_after", earlier)};
+    auto const& second{output_entry_of("runs_after", later)};
+    for (auto const* entry : {&first, &second})
+      if (!has_callback(*entry))
+        throw std::logic_error("runs_after(): '" + key_of(*entry) + "' has no callback of its own to order");
+    m_callback_order.emplace_back(first.property, second.property);
   }
 
   /// Add a lazy reference to another material, resolved at finalize().
@@ -307,18 +334,25 @@ private:
   std::vector<std::unique_ptr<material_ref_base<Traits>>> m_material_refs;
   struct output_entry {
     property_base_type const* property;
-    std::string name;
     snapshot take;
   };
   std::unordered_map<void const*, output_entry> m_outputs; ///< value address -> property
   std::vector<constant_declaration> m_constant_outputs;
   std::vector<std::pair<property_base_type const*, property_base_type const*>> m_written_by, m_callback_order;
 
-  auto output_entry_of(char const* what, void const* output) const {
+  /// The entry of an output of this material; declarations end at finalize(), when the engine reads them.
+  output_entry const& output_entry_of(char const* what, void const* output) const {
+    if (m_revision)
+      throw std::logic_error(std::string{what} + "(): material '" + m_name + "' declares after finalize()");
     auto const it{m_outputs.find(output)};
     if (it == m_outputs.end())
       throw std::logic_error(std::string{what} + "(): material '" + m_name + "' named a value that is not one of its outputs");
-    return it;
+    return it->second;
+  }
+  std::string key_of(output_entry const& entry) const { return m_name + "::" + entry.property->traits().id.name; }
+  static bool has_callback(output_entry const& entry) { return static_cast<bool>(entry.property->traits().update); }
+  bool has_writer(output_entry const& entry) const {
+    return std::ranges::contains(m_written_by, entry.property, &decltype(m_written_by)::value_type::first);
   }
   std::size_t* m_revision{nullptr};
 };
