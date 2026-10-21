@@ -66,7 +66,7 @@ public:
         m_mode(static_cast<system_mode>(base::get_parameter<int>("mode"))),
         m_a(base::get_parameter<T>("a")),
         m_b(base::get_parameter<T>("b")),
-        m_eps(base::get_parameter<T>("eps")),
+        m_perturbation(base::get_parameter<T>("perturbation")),
         m_solver(base::get_parameter<std::string>("solver_name")),
         m_x(base::add_input<T>(m_solver, "x", EdgeKind::Local)),
         m_y(base::add_input<T>(m_solver, "y", EdgeKind::Local)) {}
@@ -77,9 +77,8 @@ public:
     para.insert<int>("mode").add<set_default>(0);
     para.insert<T>("a").add<set_default>(T{0});
     para.insert<T>("b").add<set_default>(T{0});
-    // Perturbation for near_singular; a parameter so the window the
-    // backward-error guard covers can be swept rather than asserted in prose.
-    para.insert<T>("eps").add<set_default>(T{1e-13});
+    // near_singular only; a parameter so the guard's window can be swept.
+    para.insert<T>("perturbation").add<set_default>(T{1e-13});
     return para;
   }
 
@@ -112,12 +111,11 @@ public:
         m_ry = x + 3 * y - m_b;   m_jyx = 1;  m_jyy = 3;
         break;
       case system_mode::near_singular:
-        // cond2(J) ~ 4/eps: sigma_max ~ 2, sigma_min ~ eps/2. At the default
-        // eps = 1e-13 that is 4.0e13, where partialPivLu returns a FINITE dx of
-        // order 1e10 -- allFinite() lets it through and only the backward-error
-        // check sees that J*dx does not reproduce R.
-        m_rx = x + y - m_a;                   m_jxx = 1;  m_jxy = 1;
-        m_ry = x + (1 + m_eps) * y - m_b;     m_jyx = 1;  m_jyy = 1 + m_eps;
+        // cond2(J) ~ 4/perturbation; at the default 1e-13 the LU returns a
+        // FINITE dx ~ 1e10 that only the backward-error check can reject.
+        m_rx = x + y - m_a;                      m_jxx = 1;  m_jxy = 1;
+        m_ry = x + (1 + m_perturbation) * y - m_b;
+        m_jyx = 1;  m_jyy = 1 + m_perturbation;
         break;
     }
   }
@@ -128,7 +126,7 @@ private:
   system_mode m_mode;
   const T& m_a;
   const T& m_b;
-  const T& m_eps;
+  const T& m_perturbation;
   const std::string& m_solver;
   const input_property<T, property_traits>& m_x;
   const input_property<T, property_traits>& m_y;
@@ -140,7 +138,7 @@ struct scalar_fixture {
   solver_type* solver{nullptr};
 
   scalar_fixture(system_mode mode, T a, T b, int max_iter = 50,
-                 T linear_tolerance = T{1e-8}, T eps = T{1e-13}) {
+                 T linear_tolerance = T{1e-8}, T perturbation = T{1e-13}) {
     param_type p;
 
     p.clear();
@@ -158,7 +156,7 @@ struct scalar_fixture {
     p.insert<int>("mode", static_cast<int>(mode));
     p.insert<T>("a", a);
     p.insert<T>("b", b);
-    p.insert<T>("eps", eps);
+    p.insert<T>("perturbation", perturbation);
     ctx.create<scalar_system_2>(p);
 
     ctx.finalize();
@@ -276,34 +274,13 @@ TEST(VectorNewton, SingularJacobianReportsFailure) {
       << "and must not scatter NaN/inf into the state";
 }
 
-/// The backward-error guard, which had no test and was suspected unreachable.
-///
-/// It is reachable, in a window allFinite() cannot cover. Measured on the
-/// near_singular system below (cond2 ~ 4/eps), partialPivLu, default
-/// linear_tolerance = 1e-8:
-///
-///     eps     cond2     |dx|inf   finite   back_err/|R|   fires
-///     1e-8    4.0e+08   1.0e+05   yes      3.8e-12        no  (the solve is fine)
-///     1e-12   4.0e+12   1.0e+09   yes      4.7e-08        backward-error
-///     1e-13   4.0e+13   1.0e+10   yes      5.5e-07        backward-error  <- default
-///     1e-15   3.6e+15   9.0e+11   yes      2.3e-05        backward-error
-///     2e-16   2.6e+16   4.5e+12   YES      2.3e-05        backward-error
-///     1e-16   inf       inf       no       nan            allFinite
-///
-/// Note the 2e-16 row: at cond 2.6e16 dx is still FINITE and it is the
-/// backward-error check that fires. The boundary between the two guards is not
-/// a condition number -- it is fl(1 + eps) == 1.0 making the pivot exactly
-/// zero, which happens between eps = 1.5e-16 and 1e-16 for double.
-///
-/// What the guard must do is not merely report failure -- an unguarded solve
-/// also ends up not converged, by exhausting max_iter. It must decline to APPLY
-/// the step.
-///
-/// Read this as covering the RESIDUAL check, not ill-conditioning. The same
-/// system at scale 1e3 has the same cond and the same 8e-4 forward error in its
-/// step, and the guard does not fire there, because 1.001*1000 is exactly
-/// representable and the sub-ULP residual noise disappears. See the table in
-/// vector_newton.h. The constants here are load-bearing for that reason.
+/// The backward-error guard (#21 suspected it unreachable). It fires where
+/// partialPivLu returns a FINITE dx that does not solve the system: here at
+/// perturbation 1e-13 the relative residual is 5.5e-7 against a 1e-8
+/// tolerance (sweep in #53). Convergence alone cannot pin this -- an unguarded
+/// solve also fails, by exhausting max_iter -- so the test asserts the step
+/// was not APPLIED. The residual is round-off: with FMA (-march=native,
+/// AArch64) it is exactly zero and the guard does not fire.
 TEST(VectorNewton, ANearSingularJacobianStopsWithoutMovingTheIterate) {
   scalar_fixture f(system_mode::near_singular, 1.0, 1.001);
   f.solver->solve();
@@ -311,52 +288,30 @@ TEST(VectorNewton, ANearSingularJacobianStopsWithoutMovingTheIterate) {
   EXPECT_FALSE(f.solver->converged())
       << "a linear solve this badly conditioned must not be reported converged";
 
-  // solve() cold-starts, and the guard fires on the first update, so the
-  // iterate is EXACTLY the seed. An approximate bound would also admit a
-  // damped step, which is not what this guard does.
+  // Cold start and a first-update stop: the iterate is EXACTLY the seed.
   EXPECT_EQ(f.ctx.get<T>("solver", "x"), 0.0)
       << "the rejected step was applied anyway";
   EXPECT_EQ(f.ctx.get<T>("solver", "y"), 0.0)
       << "the rejected step was applied anyway";
 }
 
-/// Which guard fired, established by moving the threshold rather than inferred.
-///
-/// The assertions above are satisfied identically whether allFinite() or the
-/// backward-error check stopped the solve, so on their own they do not prove
-/// the test covers the guard it names. Raising linear_tolerance past the
-/// measured back_err/|R| of 5.5e-07 -- and changing nothing else -- must let
-/// the same step through. If it does, dx was finite (so allFinite did not fire)
-/// and the stop above was keyed on linear_tolerance.
+/// Which guard fired: raising linear_tolerance above the measured 5.5e-7 and
+/// changing nothing else must let the same step through. Then dx was finite,
+/// allFinite() did not fire, and the sibling test covers the guard it names.
 TEST(VectorNewton, TheBackwardErrorCheckIsWhatStopsTheNearSingularSolve) {
   scalar_fixture f(system_mode::near_singular, 1.0, 1.001, /*max_iter=*/1,
                    /*linear_tolerance=*/1e-4);
   f.solver->solve();
 
   EXPECT_FALSE(f.solver->converged());
-  EXPECT_LT(f.ctx.get<T>("solver", "x"), -1e9)
-      << "with the threshold raised the step must be APPLIED -- if it still "
-         "stops, allFinite() is what fires and the sibling test covers the "
-         "wrong guard";
-  EXPECT_TRUE(std::isfinite(f.ctx.get<T>("solver", "x")));
+  const T x = f.ctx.get<T>("solver", "x");
+  EXPECT_TRUE(std::isfinite(x));
+  EXPECT_NE(x, 0.0) << "with the threshold raised the step must be APPLIED";
 }
 
-// NOT TESTED, deliberately: that the guard is RELATIVE to the residual.
-//
-// back_err > m_lin_tol * rn. Dropping the '* rn' leaves every test in this file
-// passing, and the obvious fix -- a well-conditioned system at stress magnitude
-// -- does not work. Measured inside the solver with J = [1 1; 1 1+1e-8] and
-// R = (-1e9, -1.001e9): back_err is EXACTLY 0, so neither form fires and the
-// test passes either way. A standalone program with the same J, R and
-// decomposition gives 1.19e-07 for the same quantity; backward-stable LU lands
-// on either side of zero by rounding, so a test built on it would be a flake
-// rather than a check.
-//
-// The scaling still matters for a real model -- an absolute threshold would
-// abort a healthy solve whose residual is in stress units -- so this is an
-// acknowledged gap, not a decision that it is unimportant. Closing it needs a
-// system whose backward error is reliably nonzero and healthy, which none of
-// the fixtures here provide.
+// Not tested: that the threshold is RELATIVE to |R|. Dropping '* rn' passes
+// every test here, and a well-conditioned system at stress magnitude gives a
+// residual of exactly 0 or ~1e-7 depending on rounding, so it would flake.
 
 TEST(VectorNewton, MaxIterExhaustedReportsFailure) {
   scalar_fixture f(system_mode::nonlinear, 3.0, 5.0, /*max_iter=*/0);
@@ -1189,20 +1144,12 @@ TEST(VectorNewtonJson, RejectsAZeroBlocksEntryThatIsNotAPair) {
       ADD_FAILURE() << "accepted a malformed zero_blocks entry: " << blocks;
     } catch (const std::exception& e) {
       const std::string msg = e.what();
-      // Weak on its own: json_reader_registry wraps EVERY reader failure as
-      // "failed to read parameter 'zero_blocks'", so this passes for an
-      // nlohmann type error too. The assertion below is the one with teeth.
+      // Weak alone: the registry names the parameter for EVERY reader failure.
       EXPECT_NE(msg.find("zero_blocks"), std::string::npos)
           << "the error must name the parameter: " << msg;
-      // Deliberate coupling to the word "pair": it is the only token the
-      // parse-time check emits that the solver's name check does not, so it is
-      // what distinguishes them. Rewording the converter's message will break
-      // this -- that is the cost of the discrimination, not an oversight.
-      //
-      // The check also prevents undefined behaviour, not just a worse message:
-      // without it, names[1] on a one-element entry is an out-of-bounds vector
-      // read, and removing it makes the ["x"] and [[]] cases abort the binary
-      // with heap corruption rather than fail cleanly.
+      // "pair" is the one token only the parse-time check emits; rewording
+      // the converter breaks this on purpose. Without that check names[1] on
+      // a one-element entry is an out-of-bounds read.
       EXPECT_NE(msg.find("pair"), std::string::npos)
           << "rejected by the solver's name check rather than at parse time, "
              "so the message points at the wrong problem: " << msg;
