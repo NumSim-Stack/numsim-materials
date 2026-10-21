@@ -57,7 +57,8 @@ public:
         m_max_iter(base::template get_parameter<int>("max_iter")),
         m_strain_derivative(
             base::template get_parameter<bool>("strain_derivative")),
-        m_verify_zeros(base::template get_parameter<bool>("verify_zero_blocks"))
+        m_verify_zeros(base::template get_parameter<bool>("verify_zero_blocks")),
+        m_graph_driven(base::template get_parameter<bool>("graph_driven"))
   {
     const auto& specs =
         base::template get_parameter<std::vector<unknown_spec>>("unknowns");
@@ -119,9 +120,12 @@ public:
 
     // Graph-driven mode: bind solve() to the first unknown so that a downstream
     // update_source() on it drives the iteration, as backward_euler does with
-    // "delta".
-    if (auto p = base::m_property_handler.find(base::m_name, specs.front().name))
-      (*p)->traits().update = [this]() { this->update(); };
+    // "delta". A return map that holds the solver by material_ref and solves
+    // only when the trial state yields turns this off, or the graph would run a
+    // second, cold-start solve at every point including the elastic ones.
+    if (m_graph_driven)
+      if (auto p = base::m_property_handler.find(base::m_name, specs.front().name))
+        (*p)->traits().update = [this]() { this->update(); };
   }
 
   static input_parameter_controller parameters() {
@@ -144,6 +148,10 @@ public:
     // they really are zero. Turn it on once while developing a model.
     para.template insert<bool>("verify_zero_blocks")
         .template add<set_default>(false);
+    // Opt-out: false leaves the unknowns without an update callback, so the
+    // solver runs only when a material calls solve() through a material_ref
+    // (docs/plasticity.md, section 9). j2_kinematic_plasticity requires it.
+    para.template insert<bool>("graph_driven").template add<set_default>(true);
     return para;
   }
 
@@ -222,6 +230,24 @@ public:
   }
 
   bool converged() const noexcept { return m_converged; }
+
+  /// Zero every unknown and mark the solver not converged, without solving.
+  ///
+  /// For a return map that did not enter the solve, zero IS the solution of
+  /// the local system: no plastic increment. The alternative is to leave the
+  /// previous point's converged values in the output properties, where the
+  /// engine's own pass over the function material's callbacks would read them
+  /// as this point's -- the same point-to-point leak the cold start in solve()
+  /// exists to prevent.
+  void reset() {
+    m_converged = false;
+    m_x.setZero(m_N);
+    scatter_state(m_x);
+  }
+
+  /// Whether ctx.update() reaches solve() through the graph. False means a
+  /// material drives the solver explicitly and nothing else does.
+  bool graph_driven() const noexcept { return m_graph_driven; }
 
   /// Size of the flat system.
   std::size_t size() const noexcept { return m_N; }
@@ -515,6 +541,7 @@ private:
   vector_t m_x, m_R, m_dx;
   matrix_t m_J;
   const bool m_verify_zeros;
+  const bool m_graph_driven;
   /// (row, col) of every block declared zero, for verify mode.
   std::vector<std::pair<std::size_t, std::size_t>> m_zero_ij;
   matrix_t m_dR_de, m_dx_de;
