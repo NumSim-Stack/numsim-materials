@@ -60,8 +60,10 @@ medium — `isotropic_moduli` on that tangent produces it per update and the Esh
 ## 3. Tangent homogenisation (global)
 
 The composite is a tangent producer; the phases are produced tangents. Nothing is evaluated at a wrong
-strain because no phase *material* exists in the graph. The homogenisation runs once per update, inside one
-node: `tangent` = Σ cᵣ ℂᵣ : Aᵣ with the concentrations Aᵣ of its kernel.
+strain because no phase *material* exists in the graph. The homogenisation runs inside one node: `tangent` =
+Σ cᵣ ℂᵣ : Aᵣ with the concentrations Aᵣ of its kernel. With constant phases (tangents, fractions and Eshelby
+tensors from parameters) the tangent and the concentrations are constant properties, computed once; a phase
+whose tangent changes keeps them in the update loop.
 
 ```json
 {"type": "constant_scalar", "name": "cm", "value": 0.7},

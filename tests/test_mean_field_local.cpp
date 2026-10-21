@@ -117,6 +117,10 @@ std::unique_ptr<ctx_type> build(std::string const &kernel = "mori_tanaka") {
   return owner;
 }
 
+struct policy_2d : policy {
+  static constexpr std::size_t Dim = 2;
+};
+
 tensor2 uniaxial(T e) {
   tensor2 eps;
   eps(0, 0) = e;
@@ -307,3 +311,59 @@ TEST(MeanFieldLocal, FromJson) {
 }
 
 } // namespace
+
+TEST(Phase, RejectsInconsistentParameters) {
+  auto const make{[](std::initializer_list<std::pair<char const *, char const *>> extra) {
+    ctx_type ctx;
+    constant(ctx, "c", 0.3);
+    param_type p;
+    p.insert<std::string>("name", "p");
+    p.insert<std::string>("tangent_source", "x");
+    p.insert<std::string>("fraction_source", "c");
+    for (auto const &[key, value] : extra)
+      p.insert<std::string>(key, value);
+    ctx.create<nm::phase<policy>>(p);
+  }};
+  EXPECT_NO_THROW(make({}));
+  EXPECT_THROW(make({{"initial_tangent_source", "x"}}), std::invalid_argument); // only with a local edge
+  EXPECT_THROW(make({{"tangent_edge", "sideways"}}), std::invalid_argument);
+  EXPECT_THROW(make({{"tangent_source", ""}}), std::invalid_argument);
+  EXPECT_THROW(make({{"fraction_source", ""}}), std::invalid_argument);
+  {
+    nm::material_context<policy_2d> ctx2; // the Eshelby tensor of a 2D phase
+    param_type p;
+    p.insert<std::string>("name", "p");
+    p.insert<std::string>("tangent_source", "x");
+    p.insert<std::string>("fraction_source", "c");
+    p.insert<std::string>("eshelby_source", "s");
+    EXPECT_THROW(ctx2.create<nm::phase<policy_2d>>(p), std::invalid_argument);
+  }
+}
+
+TEST(Phase, RejectsANegativeFraction) {
+  ctx_type ctx;
+  constant(ctx, "c", -0.1);
+  constant(ctx, "x", 1.0);
+  param_type p;
+  p.insert<std::string>("name", "p");
+  p.insert<std::string>("tangent_source", "C_x");
+  p.insert<std::string>("fraction_source", "c");
+  ctx.create<nm::phase<policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "C_x");
+  p.insert<std::string>("K_source", "x");
+  p.insert<std::string>("G_source", "x");
+  ctx.create<nm::isotropic_tangent<policy>>(p);
+  ctx.finalize();
+  EXPECT_THROW(ctx.update(), std::invalid_argument);
+}
+
+TEST(Phase, RelaysItsSourcesAndOnlyTheWiredTensors) {
+  auto ctx{build()};
+  ctx->update();
+  EXPECT_EQ(tmech::norm(tensor4{ctx->get<tensor4>("spheres", "tangent") - ctx->get<tensor4>("C_i", "tangent")}), 0);
+  EXPECT_EQ(ctx->get<T>("spheres", "volume_fraction"), c);
+  EXPECT_EQ(tmech::norm(tensor4{ctx->get<tensor4>("spheres", "eshelby") - ctx->get<tensor4>("sphere", "tensor")}), 0);
+  EXPECT_EQ(ctx->find_property("matrix", "eshelby"), nullptr);
+  EXPECT_EQ(ctx->find_property("spheres", "depolarisation"), nullptr);
+}
