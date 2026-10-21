@@ -32,36 +32,20 @@ public:
   template <typename... Args>
   explicit phase(Args &&...args)
       : base(std::forward<Args>(args)...),
-        m_tangent(base::template add_output<tensor4>("tangent")),
-        m_fraction(base::template add_output<value_type>("volume_fraction")),
-        m_local(parse_edge(base::template get_parameter<std::string>("tangent_edge"))),
-        m_tangent_source(base::template add_input<tensor4>(base::template get_parameter<std::string>("tangent_source"),
-                                                           base::template get_parameter<std::string>("tangent_property"),
-                                                           m_local ? EdgeKind::Local : EdgeKind::Global)),
-        m_fraction_source(base::template add_input<value_type>(base::template get_parameter<std::string>("fraction_source"),
-                                                               base::template get_parameter<std::string>("fraction_property"), EdgeKind::Global)) {
-    auto const &initial{base::template get_parameter<std::string>("initial_tangent_source")};
-    if (m_local != !initial.empty())
+        m_tangent{&base::template add_output<tensor4>("tangent"),
+                  input<tensor4>("tangent", parse_edge(base::template get_parameter<std::string>("tangent_edge")))},
+        m_initial_tangent(input<tensor4>("initial_tangent")),
+        m_fraction{&base::template add_output<value_type>("volume_fraction"), input<value_type>("fraction")},
+        m_eshelby(optional_relay<tensor4>("eshelby")),
+        m_depolarisation(optional_relay<tensor2>("depolarisation")) {
+    if (!m_tangent.source || !m_fraction.source)
+      throw std::invalid_argument("phase '" + base::name() + "': needs a tangent_source and a fraction_source");
+    if ((m_tangent.source->edge_kind() == EdgeKind::Local) != (m_initial_tangent != nullptr))
       throw std::invalid_argument("phase '" + base::name() + "': initial_tangent_source goes with tangent_edge = local, and only then");
-    if (m_local)
-      m_initial_tangent = &base::template add_input<tensor4>(initial, base::template get_parameter<std::string>("initial_tangent_property"), EdgeKind::Global);
-    auto const &eshelby{base::template get_parameter<std::string>("eshelby_source")};
-    auto const &depolarisation{base::template get_parameter<std::string>("depolarisation_source")};
-    if constexpr (Dim == 3) {
-      if (!eshelby.empty()) {
-        m_eshelby = &base::template add_output<tensor4>("eshelby");
-        m_eshelby_source = &base::template add_input<tensor4>(eshelby, base::template get_parameter<std::string>("eshelby_property"), EdgeKind::Global);
-      }
-      if (!depolarisation.empty()) {
-        m_depolarisation = &base::template add_output<tensor2>("depolarisation");
-        m_depolarisation_source = &base::template add_input<tensor2>(depolarisation, base::template get_parameter<std::string>("depolarisation_property"),
-                                                                     EdgeKind::Global);
-      }
-    } else if (!eshelby.empty() || !depolarisation.empty()) {
+    if (Dim != 3 && (m_eshelby.output || m_depolarisation.output))
       throw std::invalid_argument("phase '" + base::name() + "': Eshelby and depolarisation tensors are three-dimensional");
-    }
     // constant unless the tangent comes over a local edge (the previous pass's)
-    base::add_callback(&phase::compute, m_tangent, m_fraction, m_eshelby, m_depolarisation).constant();
+    base::add_callback(&phase::compute, m_tangent.output, m_fraction.output, m_eshelby.output, m_depolarisation.output).constant();
   }
 
   static input_parameter_controller parameters() {
@@ -82,37 +66,57 @@ public:
 
   /// One callback for every output. Over a local edge the first update has no produced tangent yet.
   void compute() {
-    m_tangent = m_local && m_first ? m_initial_tangent->get() : m_tangent_source.get();
+    *m_tangent.output = m_initial_tangent && m_first ? m_initial_tangent->get() : m_tangent.source->get();
     m_first = false;
-    m_fraction = m_fraction_source.get();
-    if (!(m_fraction >= 0))
+    m_fraction.copy();
+    if (!(*m_fraction.output >= 0))
       throw std::invalid_argument("phase '" + base::name() + "': the volume fraction must be non-negative");
-    if (m_eshelby)
-      *m_eshelby = m_eshelby_source->get();
-    if (m_depolarisation)
-      *m_depolarisation = m_depolarisation_source->get();
+    m_eshelby.copy();
+    m_depolarisation.copy();
   }
 
 private:
-  static bool parse_edge(std::string const &e) {
+  /// An output republishing an input; both null when the input is not wired.
+  template <typename T>
+  struct relay {
+    T *output{nullptr};
+    input_property<T, property_traits> const *source{nullptr};
+    void copy() const {
+      if (output)
+        *output = source->get();
+    }
+  };
+
+  /// The input named by the parameters "<key>_source" and "<key>_property"; null without a source.
+  template <typename T>
+  input_property<T, property_traits> const *input(std::string const &key, EdgeKind edge = EdgeKind::Global) {
+    auto const &source{base::template get_parameter<std::string>(key + "_source")};
+    if (source.empty())
+      return nullptr;
+    return &base::template add_input<T>(source, base::template get_parameter<std::string>(key + "_property"), edge);
+  }
+
+  /// The output "<key>" republishing input(key), when that is wired.
+  template <typename T>
+  relay<T> optional_relay(std::string const &key) {
+    auto const *source{input<T>(key)};
+    return {source ? &base::template add_output<T>(key) : nullptr, source};
+  }
+
+  static EdgeKind parse_edge(std::string const &e) {
     if (e == "global")
-      return false;
+      return EdgeKind::Global;
     if (e == "local")
-      return true;
+      return EdgeKind::Local;
     throw std::invalid_argument("phase: unknown tangent_edge '" + e + "' (global, local)");
   }
 
-  tensor4 &m_tangent;
-  value_type &m_fraction;
-  bool const m_local; ///< the tangent of the previous pass
+  relay<tensor4> m_tangent;
+  input_property<tensor4, property_traits> const *m_initial_tangent; ///< with a local edge only
+  relay<value_type> m_fraction;
+  relay<tensor4> m_eshelby;
+  relay<tensor2> m_depolarisation;
   bool m_first{true};
-  input_property<tensor4, property_traits> const &m_tangent_source;
-  input_property<tensor4, property_traits> const *m_initial_tangent{nullptr}; ///< with a local edge
-  input_property<value_type, property_traits> const &m_fraction_source;
-  tensor4 *m_eshelby{nullptr}; ///< null without an eshelby_source
-  input_property<tensor4, property_traits> const *m_eshelby_source{nullptr};
-  tensor2 *m_depolarisation{nullptr}; ///< null without a depolarisation_source
-  input_property<tensor2, property_traits> const *m_depolarisation_source{nullptr};
 };
 
 } // namespace numsim::materials
