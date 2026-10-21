@@ -665,3 +665,30 @@ TEST(ConstantProperties, NoDeclarationAfterFinalize) {
   ctx.finalize();
   EXPECT_THROW(ctx.update(), std::logic_error);
 }
+
+TEST(ConstantProperties, UpdatePropertyAfterSetParameterRecomputesOnce) {
+  ctx_type ctx;
+  ctx.verify_constants(false); // counts the calls
+  auto &a{make(ctx, "a")};
+  auto &b{make(ctx, "b", reading("a"))};
+  ctx.finalize();
+  ctx.update();
+  a.set_parameter<T>("factor", 4.0);
+  ctx.update_property("b", "value");
+  EXPECT_EQ(value_of(ctx, "b"), 4.0);
+  ctx.update();
+  ctx.update();
+  EXPECT_EQ(a.calls, 2);
+  EXPECT_EQ(b.calls, 2);
+}
+
+TEST(ConstantProperties, AConstantComputedByUpdatePropertyIsVerified) {
+  ctx_type ctx;
+  ctx.verify_constants(true);
+  param_type p;
+  p.insert<bool>("hidden", true);
+  make(ctx, "a", p);
+  ctx.finalize();
+  ctx.update_property("a", "value");
+  EXPECT_THROW(ctx.update(), std::logic_error);
+}

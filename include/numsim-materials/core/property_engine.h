@@ -40,11 +40,14 @@ public:
     find_constants(interfaces, writers);
   }
 
-  /// Run all property update callbacks in topological order; a constant one only until it has run.
+  /// Run the callbacks still to run, in topological order: a constant one only until it has run.
   void update() {
     refresh_constants();
-    for (auto* prop : m_property_execution_order)
-      run(prop);
+    if (m_verify)
+      std::ranges::for_each(m_retired, [this](property_base* prop) { verify(prop); });
+    for (auto* prop : m_active)
+      prop->traits().update();
+    retire([](property_base*) { return true; });
   }
 
   /// Update a single property and all its upstream dependencies.
@@ -60,11 +63,14 @@ public:
   void update_property(const property_base* target,
                        const std::unordered_set<const property_base*>& exclude = {}) {
     refresh_constants();
-    auto subgraph = collect_upstream(target);
-    for (auto* prop : m_property_execution_order) {
-      if (subgraph.contains(prop) && !exclude.contains(prop))
-        run(prop);
-    }
+    auto const subgraph = collect_upstream(target);
+    auto const runs{[&](property_base* prop) { return subgraph.contains(prop) && !exclude.contains(prop); }};
+    if (m_verify)
+      for (auto* prop : m_retired | std::views::filter(runs))
+        verify(prop);
+    for (auto* prop : m_active | std::views::filter(runs))
+      prop->traits().update();
+    retire(runs);
   }
 
   /// A property computed once: declared constant (material_base::constant_output) and reading only constants.
@@ -338,29 +344,35 @@ private:
           m_checks[prop] = {mat, outputs};
         }
     }
-    m_done.clear();
+    m_callbacks = m_property_execution_order |
+                  std::views::filter([](auto const* prop) { return static_cast<bool>(prop->traits().update); }) |
+                  std::ranges::to<std::vector>();
+    reactivate();
+  }
+
+  /// Every callback runs again, the constant ones once more.
+  void reactivate() {
+    m_active = m_callbacks;
+    m_retired.clear();
   }
 
   void refresh_constants() {
     if (*m_revision != m_seen_revision) {
-      m_done.clear();
+      reactivate();
       m_seen_revision = *m_revision;
     }
   }
 
-  void run(property_base* prop) {
-    auto& update = prop->traits().update;
-    if (!update)
+  /// Moves the once-callbacks that `ran` out of the loop; only after reactivate() is there any left.
+  template <typename Ran>
+  void retire(Ran const& ran) {
+    if (m_retired.size() == m_once.size())
       return;
-    bool const once{m_once.contains(prop)};
-    if (once && m_done.contains(prop)) {
-      if (m_verify)
-        verify(prop);
-      return;
-    }
-    update();
-    if (once)
-      m_done.insert(prop);
+    auto const done{std::ranges::stable_partition(m_active, [&](property_base* prop) {
+      return !(m_once.contains(prop) && ran(prop));
+    })};
+    m_retired.insert(m_retired.end(), done.begin(), done.end());
+    m_active.erase(done.begin(), done.end());
   }
 
   /// Reruns a constant callback and throws when one of its material's constant outputs changes.
@@ -415,7 +427,9 @@ private:
   using declaration = typename material_interface_type::constant_declaration;
   std::unordered_set<const property_base*> m_constant;
   std::unordered_set<const property_base*> m_once; ///< callbacks run once
-  std::unordered_set<const property_base*> m_done; ///< ... and already run since the last revision
+  std::vector<property_base*> m_callbacks;          ///< every callback, in topological order
+  std::vector<property_base*> m_active;             ///< ... still to run on every update
+  std::vector<property_base*> m_retired;            ///< ... constant and done: verified in debug builds
   std::unique_ptr<std::size_t> m_revision{std::make_unique<std::size_t>(0)}; ///< stable address for the materials
   std::size_t m_seen_revision{0};
   /// once-callback -> its material and that material's constant outputs, for verify()
