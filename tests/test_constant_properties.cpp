@@ -2,6 +2,8 @@
 /// computed once, not on every update; a write through set_parameter() or get_mutable() recomputes it.
 #include <gtest/gtest.h>
 #include <string>
+#include <tmech/tmech.h>
+#include <vector>
 
 #include "numsim-materials/core/material_base.h"
 #include "numsim-materials/core/material_context.h"
@@ -89,7 +91,7 @@ private:
 
 /// Two callbacks: "slow" = factor * source (declared constant), also writing "slow_extra"; "fast" = slow * x
 /// for the varying "x". "attribute" names "slow_extra" written by "slow"; "extra_constant" declares it constant;
-/// "orphan" names a writer without a callback; "history" declares a history output constant.
+/// "orphan" names a writer without a callback.
 template <typename Traits>
 class two_callbacks final : public nm::material_base<two_callbacks<Traits>, Traits> {
 public:
@@ -117,8 +119,6 @@ public:
       base::written_by(m_slow_extra, m_slow);
     if (base::template get_parameter<bool>("orphan"))
       base::written_by(m_slow_extra, m_plain);
-    if (base::template get_parameter<bool>("history"))
-      base::constant_output(m_old);
     base::runs_after(m_fast, m_slow);
     if (base::template get_parameter<bool>("cycle"))
       base::runs_after(m_slow, m_fast);
@@ -132,7 +132,6 @@ public:
     nm::optional<bool>(para, "attribute", true);
     nm::optional<bool>(para, "extra_constant", true);
     nm::optional<bool>(para, "orphan", false);
-    nm::optional<bool>(para, "history", false);
     nm::optional<bool>(para, "cycle", false);
     return para;
   }
@@ -202,11 +201,25 @@ public:
 
   int calls{0};
 
+  /// Whether an output of type U can be declared constant, alone or in a group.
+  template <typename U>
+  static constexpr bool declarable{requires(grouped &m, U const &u) { m.constant_output(u); }};
+  template <typename U>
+  static constexpr bool groupable{requires(grouped &m, U const &u) { m.add_callback(&grouped::compute, u); }};
+  template <typename U>
+  static constexpr bool group_declarable{
+      requires(grouped &m, U const &u) { m.add_callback(&grouped::compute, u).constant(); }};
+
 private:
   value_type &m_first;
   std::vector<value_type *> m_second;
   value_type *m_third{nullptr};
   nm::input_property<value_type, nm::property_traits> const &m_source;
+};
+
+/// Neither arithmetic, nor a tensor, nor comparable with ==.
+struct opaque {
+  int bits;
 };
 
 counter<policy> &make(ctx_type &ctx, std::string const &name, param_type p = {}) {
@@ -489,9 +502,8 @@ TEST(ConstantProperties, AWriterNeedsACallback) {
 }
 
 TEST(ConstantProperties, AHistoryOutputCannotBeConstant) {
-  param_type p;
-  p.insert<bool>("history", true);
-  EXPECT_THROW(two_callbacks_setup{p}, std::logic_error);
+  static_assert(!grouped<policy>::declarable<nm::history_property<T>>);
+  static_assert(!grouped<policy>::group_declarable<nm::history_property<T>>);
 }
 
 namespace {
@@ -550,4 +562,16 @@ TEST(ConstantProperties, AGroupNeedsAnOutput) {
   p.insert<std::string>("source", "a");
   p.insert<bool>("empty", true);
   EXPECT_THROW(make_grouped(ctx, p), std::logic_error);
+}
+
+// debug builds compare a rerun constant with the stored value: a type that cannot be compared is a compile error
+TEST(ConstantProperties, OnlyComparableTypesCanBeConstant) {
+  using g = grouped<policy>;
+  static_assert(g::declarable<T> && g::declarable<tmech::tensor<T, 3, 2>> && g::declarable<tmech::tensor<T, 3, 4>>);
+  static_assert(g::declarable<std::string>);
+  static_assert(!g::declarable<opaque>);
+  static_assert(g::group_declarable<T *> && g::group_declarable<std::vector<tmech::tensor<T, 3, 4> *>>);
+  static_assert(!g::group_declarable<opaque> && !g::group_declarable<opaque *>);
+  static_assert(!g::group_declarable<std::vector<opaque *>>);
+  static_assert(g::groupable<opaque> && g::groupable<std::vector<opaque *>>); // a group that is not constant
 }
