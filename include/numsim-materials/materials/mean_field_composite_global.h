@@ -35,7 +35,7 @@ public:
   template <typename... Args>
   explicit mean_field_composite_global(Args &&...args)
       : base(std::forward<Args>(args)...),
-        m_tangent(base::template add_output<tensor4>("tangent", &mean_field_composite_global::compute)),
+        m_tangent(base::template add_output<tensor4>("tangent")),
         m_kernel(mean_field::kernel_registry<Traits>::instance().make(base::template get_parameter<spec>("kernel"))) {
     auto const &names{base::template get_parameter<std::vector<std::string>>("phases")};
     if (names.empty())
@@ -48,6 +48,8 @@ public:
       m_S.push_back(eshelby && r > 0 ? &base::template add_input<tensor4>(names[r], "eshelby", EdgeKind::Global) : nullptr);
       m_A.push_back(&base::template add_output<tensor4>("concentration_" + names[r]));
     }
+    // constant phases: the kernel runs once
+    base::add_callback(&mean_field_composite_global::compute, m_tangent, m_A).constant();
   }
 
   static input_parameter_controller parameters() {
