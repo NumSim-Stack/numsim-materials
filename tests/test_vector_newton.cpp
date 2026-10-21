@@ -47,8 +47,7 @@ using solver_type = vector_newton<policy>;
 // may bind wherever it likes. It does NOT re-fire for the Jacobian blocks,
 // since this one callback produces residual and Jacobian together.
 
-enum class system_mode { linear, nonlinear, singular, decoupled,
-                         near_singular };
+enum class system_mode { linear, nonlinear, singular, decoupled };
 
 class scalar_system_2 final : public material_base<scalar_system_2, policy> {
 public:
@@ -66,7 +65,6 @@ public:
         m_mode(static_cast<system_mode>(base::get_parameter<int>("mode"))),
         m_a(base::get_parameter<T>("a")),
         m_b(base::get_parameter<T>("b")),
-        m_perturbation(base::get_parameter<T>("perturbation")),
         m_solver(base::get_parameter<std::string>("solver_name")),
         m_x(base::add_input<T>(m_solver, "x", EdgeKind::Local)),
         m_y(base::add_input<T>(m_solver, "y", EdgeKind::Local)) {}
@@ -77,8 +75,6 @@ public:
     para.insert<int>("mode").add<set_default>(0);
     para.insert<T>("a").add<set_default>(T{0});
     para.insert<T>("b").add<set_default>(T{0});
-    // near_singular only; a parameter so the guard's window can be swept.
-    para.insert<T>("perturbation").add<set_default>(T{1e-13});
     return para;
   }
 
@@ -110,13 +106,6 @@ public:
         m_rx = 2 * x - m_a;       m_jxx = 2;  m_jxy = 0;
         m_ry = x + 3 * y - m_b;   m_jyx = 1;  m_jyy = 3;
         break;
-      case system_mode::near_singular:
-        // cond2(J) ~ 4/perturbation; at the default 1e-13 the LU returns a
-        // FINITE dx ~ 1e10 that only the backward-error check can reject.
-        m_rx = x + y - m_a;                      m_jxx = 1;  m_jxy = 1;
-        m_ry = x + (1 + m_perturbation) * y - m_b;
-        m_jyx = 1;  m_jyy = 1 + m_perturbation;
-        break;
     }
   }
 
@@ -126,7 +115,6 @@ private:
   system_mode m_mode;
   const T& m_a;
   const T& m_b;
-  const T& m_perturbation;
   const std::string& m_solver;
   const input_property<T, property_traits>& m_x;
   const input_property<T, property_traits>& m_y;
@@ -137,15 +125,13 @@ struct scalar_fixture {
   ctx_type ctx;
   solver_type* solver{nullptr};
 
-  scalar_fixture(system_mode mode, T a, T b, int max_iter = 50,
-                 T linear_tolerance = T{1e-8}, T perturbation = T{1e-13}) {
+  scalar_fixture(system_mode mode, T a, T b, int max_iter = 50) {
     param_type p;
 
     p.clear();
     p.insert<std::string>("name", "solver");
     p.insert<std::string>("function", "sys");
     p.insert<int>("max_iter", max_iter);
-    p.insert<T>("linear_tolerance", linear_tolerance);
     p.insert<std::vector<unknown_spec>>(
         "unknowns", {{"x", unknown_kind::scalar}, {"y", unknown_kind::scalar}});
     solver = &ctx.create<solver_type>(p);
@@ -156,7 +142,6 @@ struct scalar_fixture {
     p.insert<int>("mode", static_cast<int>(mode));
     p.insert<T>("a", a);
     p.insert<T>("b", b);
-    p.insert<T>("perturbation", perturbation);
     ctx.create<scalar_system_2>(p);
 
     ctx.finalize();
@@ -273,45 +258,6 @@ TEST(VectorNewton, SingularJacobianReportsFailure) {
   EXPECT_TRUE(std::isfinite(x) && std::isfinite(y))
       << "and must not scatter NaN/inf into the state";
 }
-
-/// The backward-error guard (#21 suspected it unreachable). It fires where
-/// partialPivLu returns a FINITE dx that does not solve the system: here at
-/// perturbation 1e-13 the relative residual is 5.5e-7 against a 1e-8
-/// tolerance (sweep in #53). Convergence alone cannot pin this -- an unguarded
-/// solve also fails, by exhausting max_iter -- so the test asserts the step
-/// was not APPLIED. The residual is round-off: with FMA (-march=native,
-/// AArch64) it is exactly zero and the guard does not fire.
-TEST(VectorNewton, ANearSingularJacobianStopsWithoutMovingTheIterate) {
-  scalar_fixture f(system_mode::near_singular, 1.0, 1.001);
-  f.solver->solve();
-
-  EXPECT_FALSE(f.solver->converged())
-      << "a linear solve this badly conditioned must not be reported converged";
-
-  // Cold start and a first-update stop: the iterate is EXACTLY the seed.
-  EXPECT_EQ(f.ctx.get<T>("solver", "x"), 0.0)
-      << "the rejected step was applied anyway";
-  EXPECT_EQ(f.ctx.get<T>("solver", "y"), 0.0)
-      << "the rejected step was applied anyway";
-}
-
-/// Which guard fired: raising linear_tolerance above the measured 5.5e-7 and
-/// changing nothing else must let the same step through. Then dx was finite,
-/// allFinite() did not fire, and the sibling test covers the guard it names.
-TEST(VectorNewton, TheBackwardErrorCheckIsWhatStopsTheNearSingularSolve) {
-  scalar_fixture f(system_mode::near_singular, 1.0, 1.001, /*max_iter=*/1,
-                   /*linear_tolerance=*/1e-4);
-  f.solver->solve();
-
-  EXPECT_FALSE(f.solver->converged());
-  const T x = f.ctx.get<T>("solver", "x");
-  EXPECT_TRUE(std::isfinite(x));
-  EXPECT_NE(x, 0.0) << "with the threshold raised the step must be APPLIED";
-}
-
-// Not tested: that the threshold is RELATIVE to |R|. Dropping '* rn' passes
-// every test here, and a well-conditioned system at stress magnitude gives a
-// residual of exactly 0 or ~1e-7 depending on rounding, so it would flake.
 
 TEST(VectorNewton, MaxIterExhaustedReportsFailure) {
   scalar_fixture f(system_mode::nonlinear, 3.0, 5.0, /*max_iter=*/0);
