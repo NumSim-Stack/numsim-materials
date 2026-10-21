@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include <map>
 #include <memory>
+#include <span>
 #include <stdexcept>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/elastic_constants.h"
@@ -18,6 +19,7 @@
 #include "numsim-materials/materials/phase.h"
 #include "numsim-materials/umat/external_state_source.h"
 #include "numsim-materials/umat/json_model.h"
+#include "numsim-materials/mean_field/kernel_registry.h"
 
 namespace {
 
@@ -119,6 +121,24 @@ std::unique_ptr<ctx_type> build(std::string const &kernel = "mori_tanaka") {
 
 struct policy_2d : policy {
   static constexpr std::size_t Dim = 2;
+};
+
+/// Mori-Tanaka counting its calls.
+template <typename Traits>
+class counting_mori_tanaka final : public nm::mean_field::kernel_base<counting_mori_tanaka<Traits>, Traits> {
+public:
+  using base = nm::mean_field::kernel_base<counting_mori_tanaka<Traits>, Traits>;
+  using value_type = typename Traits::value_type;
+  explicit counting_mori_tanaka(typename base::parameter_handler p) : base(p), m_kernel(std::move(p)) {}
+  [[nodiscard]] nm::mean_field::kernel_needs needs() const noexcept override { return m_kernel.needs(); }
+  void concentrations(std::span<nm::mean_field::phase_view<value_type> const> phases, std::span<tensor4> A) override {
+    ++calls;
+    m_kernel.concentrations(phases, A);
+  }
+  static inline int calls{0};
+
+private:
+  nm::mean_field::mori_tanaka<Traits> m_kernel;
 };
 
 tensor2 uniaxial(T e) {
@@ -311,6 +331,26 @@ TEST(MeanFieldLocal, FromJson) {
 }
 
 } // namespace
+
+// constant phases: the localisation computes its concentrations once, the strains on every update
+TEST(MeanFieldLocal, ConstantPhasesAreLocalisedWithConcentrationsComputedOnce) {
+  static bool const registered{[] {
+    nm::mean_field::kernel_registry<policy>::instance().template add<counting_mori_tanaka<policy>>("counting_mori_tanaka_local");
+    return true;
+  }()};
+  ASSERT_TRUE(registered);
+  counting_mori_tanaka<policy>::calls = 0;
+  auto ctx{build("counting_mori_tanaka_local")};
+  ctx->verify_constants(false); // counts the kernel calls
+  auto reference{build()};
+  load(*ctx, uniaxial(1e-3), 5);
+  load(*reference, uniaxial(1e-3), 5);
+  EXPECT_EQ(counting_mori_tanaka<policy>::calls, 1);
+  EXPECT_EQ(tmech::norm(tensor2{ctx->get<tensor2>("mt", "stress") - reference->get<tensor2>("mt", "stress")}), 0);
+  EXPECT_EQ(tmech::norm(tensor2{ctx->get<tensor2>("mt_strain", "strain_spheres") -
+                                reference->get<tensor2>("mt_strain", "strain_spheres")}),
+            0);
+}
 
 TEST(Phase, RejectsInconsistentParameters) {
   auto const make{[](std::initializer_list<std::pair<char const *, char const *>> extra) {
