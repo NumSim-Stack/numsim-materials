@@ -41,8 +41,13 @@ std::string parameter_type_label() {
   else return std::string{"of type "} + typeid(T).name();
 }
 
-/// Whether a recomputed value equals the stored one (to sqrt(eps) relative); unknown types pass.
+/// Types whose recomputed value same_value() can compare with the stored one; only these can be constant.
 template <typename T>
+concept verifiable = std::copy_constructible<T> &&
+                     (std::is_arithmetic_v<T> || requires(T const& a) { tmech::norm(a - a); } || std::equality_comparable<T>);
+
+/// Whether a recomputed value equals the stored one (to sqrt(eps) relative).
+template <verifiable T>
 bool same_value(T const& a, T const& b) {
   using std::abs;
   if constexpr (std::is_arithmetic_v<T>) {
@@ -50,10 +55,8 @@ bool same_value(T const& a, T const& b) {
   } else if constexpr (requires { tmech::norm(a - b); }) {
     auto const tol{std::sqrt(std::numeric_limits<std::decay_t<decltype(tmech::norm(a))>>::epsilon())};
     return tmech::norm(a - b) <= tol * std::max({decltype(tol){1}, tmech::norm(a), tmech::norm(b)});
-  } else if constexpr (std::equality_comparable<T>) {
-    return a == b;
   } else {
-    return true;
+    return a == b;
   }
 }
 } // namespace detail
@@ -189,7 +192,7 @@ public:
   }
 
   using property_base_type = numsim_core::property_base<property_traits>;
-  /// Copies a value; the returned check tells whether it is still the same.
+  /// Copies a value; the returned check tells whether it is still the same. Empty for types never constant.
   using snapshot = std::function<std::function<bool()>()>;
 
   /// An output declared a function of the parameters and of `reads`, all inputs when unset
@@ -214,21 +217,17 @@ protected:
   template <typename T>
   T& add_property(std::string const& property_name, T&& data = T()) {
     T& value{m_property_handler.template add_property<T>(name(), property_name, std::forward<T>(data))};
-    m_outputs[&value] = {*m_property_handler.find(name(), property_name), property_name, [&value] {
-                           if constexpr (std::copy_constructible<T>)
-                             return std::function<bool()>{[&value, copy = value] { return detail::same_value(copy, value); }};
-                           else
-                             return std::function<bool()>{[] { return true; }};
-                         }};
+    snapshot take;
+    if constexpr (detail::verifiable<T>)
+      take = [&value] { return std::function<bool()>{[&value, copy = value] { return detail::same_value(copy, value); }}; };
+    m_outputs[&value] = {*m_property_handler.find(name(), property_name), property_name, std::move(take)};
     return value;
   }
 
   template <typename T>
   history_property<T>& add_history(std::string const& property_name, T&& data = T()) {
     auto& value{m_property_handler.template add_history<T>(name(), property_name, std::forward<T>(data))};
-    m_outputs[&value] = {*m_property_handler.find(name(), property_name), property_name, [] {
-                           return std::function<bool()>{[] { return true; }};
-                         }};
+    m_outputs[&value] = {*m_property_handler.find(name(), property_name), property_name, {}}; // never constant
     return value;
   }
 
@@ -258,6 +257,8 @@ protected:
     auto const it{output_entry_of("constant_output", output)};
     if (it->second.property->is_history())
       throw std::logic_error("constant_output(): '" + m_name + "::" + it->second.name + "' is history, never constant");
+    if (!it->second.take)
+      throw std::logic_error("constant_output(): '" + m_name + "::" + it->second.name + "' has a type that cannot be compared");
     if (reads)
       std::erase(*reads, nullptr); // an absent optional input
     if (reads)
