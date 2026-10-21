@@ -76,6 +76,12 @@ public:
       m_terms.push_back({&w, &s, &c});
       ++i;
     }
+    std::vector<input_wire_base const*> tangent_reads;
+    for (auto const& [w, _, C] : m_terms) {
+      tangent_reads.push_back(w);
+      tangent_reads.push_back(C);
+    }
+    base::constant_output(m_tangent, std::move(tangent_reads));
   }
 
   static input_parameter_controller parameters() {

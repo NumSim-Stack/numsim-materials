@@ -60,8 +60,10 @@ medium — `isotropic_moduli` on that tangent produces it per update and the Esh
 ## 3. Tangent homogenisation (global)
 
 The composite is a tangent producer; the phases are produced tangents. Nothing is evaluated at a wrong
-strain because no phase *material* exists in the graph. The homogenisation runs once per update, inside one
-node: `tangent` = Σ cᵣ ℂᵣ : Aᵣ with the concentrations Aᵣ of its kernel.
+strain because no phase *material* exists in the graph. The homogenisation runs inside one node: `tangent` =
+Σ cᵣ ℂᵣ : Aᵣ with the concentrations Aᵣ of its kernel. With constant phases (tangents, fractions and Eshelby
+tensors from parameters) the tangent and the concentrations are constant properties, computed once; a phase
+whose tangent changes keeps them in the update loop.
 
 ```json
 {"type": "constant_scalar", "name": "cm", "value": 0.7},
@@ -131,6 +133,8 @@ strain ──► mean_field_strain ──strain_matrix──► matrix material 
   state vector carry them) and `concentration_<phase>`. Its `kernel` is the same object as in §3 — any of
   `voigt`, `reuss`, `hill`, `dilute`, `mori_tanaka`, `self_consistent` — so with linear phases one pass equals
   the global composite exactly; the self-consistent kernel converges its own fixed point inside every pass.
+  The concentrations and the strains are separate callbacks: with constant phases the concentrations are
+  computed once and only the strains every update; a phase read over a local edge recomputes them every pass.
 - The phase materials consume those strains like any other strain: `"strain_source": "mt_strain",
   "strain_property": "strain_matrix"`. Every strain consumer takes `strain_property` (default `strain`).
 - `mean_field_composite_local_linear` / `_nonlinear` produce `stress` = Σ cᵣ σᵣ and `tangent` = Σ cᵣ ℂᵣ : Aᵣ.
