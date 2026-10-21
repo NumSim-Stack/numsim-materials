@@ -212,6 +212,16 @@ private:
       }
     }
 
+    // within a material: declared callback order, and an output without a callback after its writers
+    // (cannot close a cycle: the material's global inputs already reach every output)
+    for (auto* mat : interfaces) {
+      for (auto const& [earlier, later] : mat->callback_order())
+        add_edge(prop_key(earlier->traits().id), prop_key(later->traits().id));
+      for (auto const& [output, writers] : writers_of(properties, *mat))
+        for (auto const* writer : writers)
+          add_edge(prop_key(writer->traits().id), prop_key(output->traits().id));
+    }
+
     // --- Topological sort ---
     std::queue<std::string> ready;
     for (auto& [key, deg] : indegree)
@@ -254,9 +264,28 @@ private:
     }
   }
 
+  /// Outputs of `mat` without a callback -> the callbacks that may write them: the declared writer
+  /// (written_by), else every callback of the material.
+  std::unordered_map<const property_base*, std::vector<const property_base*>> writers_of(property_handler& properties,
+                                                                                        const material_interface_type& mat) const {
+    std::unordered_map<const property_base*, std::vector<const property_base*>> writers;
+    auto pos = properties.data().find(std::string(mat.name()));
+    if (pos == properties.data().end())
+      return writers;
+    std::vector<const property_base*> callbacks;
+    for (auto& [name, prop] : pos->second)
+      if (prop->traits().update)
+        callbacks.push_back(prop.get());
+    for (auto& [name, prop] : pos->second)
+      if (!prop->traits().update)
+        writers[prop.get()] = callbacks;
+    for (auto const& [output, by] : mat.written_outputs())
+      writers[output] = {by};
+    return writers;
+  }
+
   /// Constant: declared, not history, every read a global edge from a constant (the topological order has the
-  /// reads first). A callback runs once only when the outputs of its material without a callback of their own
-  /// (written by some callback of it) are constant as well.
+  /// reads first). A constant callback runs once when every output it may write (writers_of) is constant.
   void find_constants(property_handler& properties, const std::vector<material_interface_type*>& interfaces) {
     using declaration = typename material_interface_type::constant_declaration;
     std::unordered_map<const property_base*, std::pair<material_interface_type const*, declaration const*>> declared;
@@ -289,15 +318,18 @@ private:
       if (pos == properties.data().end())
         continue;
       auto& props{pos->second};
-      bool const quiet_constant{std::ranges::all_of(props, [&](auto const& entry) {
-        return entry.second->traits().update || m_constant.contains(entry.second.get());
-      })};
+      auto const writers{writers_of(properties, *mat)};
+      auto const writes_constants{[&](const property_base* callback) {
+        return std::ranges::all_of(writers, [&](auto const& w) {
+          return m_constant.contains(w.first) || std::ranges::find(w.second, callback) == w.second.end();
+        });
+      }};
       std::vector<declaration const*> outputs;
       for (auto& d : mat->constant_outputs())
         if (m_constant.contains(d.output))
           outputs.push_back(&d);
       for (auto& [name, prop] : props)
-        if (quiet_constant && prop->traits().update && m_constant.contains(prop.get())) {
+        if (prop->traits().update && m_constant.contains(prop.get()) && writes_constants(prop.get())) {
           m_once.insert(prop.get());
           m_checks[prop.get()] = {std::string(mat->name()), outputs};
         }

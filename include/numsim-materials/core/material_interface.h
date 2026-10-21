@@ -9,6 +9,7 @@
 #include <functional>
 #include <limits>
 #include <optional>
+#include <utility>
 #include <stdexcept>
 #include <type_traits>
 #include <memory>
@@ -201,6 +202,11 @@ public:
   };
   const std::vector<constant_declaration>& constant_outputs() const noexcept { return m_constant_outputs; }
 
+  /// (output, writer): the output has no callback of its own, the writer's callback fills it.
+  const auto& written_outputs() const noexcept { return m_written_by; }
+  /// (earlier, later): callbacks of this material in the order they must run.
+  const auto& callback_order() const noexcept { return m_callback_order; }
+
   /// The engine's revision counter, bumped by set_parameter(); bound at finalize().
   void bind_revision(std::size_t* revision) noexcept { m_revision = revision; }
 
@@ -219,8 +225,11 @@ protected:
 
   template <typename T>
   history_property<T>& add_history(std::string const& property_name, T&& data = T()) {
-    return m_property_handler.template add_history<T>(
-        name(), property_name, std::forward<T>(data));
+    auto& value{m_property_handler.template add_history<T>(name(), property_name, std::forward<T>(data))};
+    m_outputs[&value] = {*m_property_handler.find(name(), property_name), property_name, [] {
+                           return std::function<bool()>{[] { return true; }};
+                         }};
+    return value;
   }
 
   template <typename T>
@@ -246,15 +255,30 @@ protected:
 
   /// `output` is the value add_property() returned, its address identifies the property.
   void declare_constant(void const* output, std::optional<std::vector<input_wire_base const*>> reads) {
-    auto const it{m_outputs.find(output)};
-    if (it == m_outputs.end())
-      throw std::logic_error("constant_output(): material '" + m_name + "' declared a value that is not one of its outputs");
+    auto const it{output_entry_of("constant_output", output)};
+    if (it->second.property->is_history())
+      throw std::logic_error("constant_output(): '" + m_name + "::" + it->second.name + "' is history, never constant");
     if (reads)
       for (auto const* read : *reads)
         if (std::ranges::none_of(m_typed_inputs, [read](auto const& input) { return input.get() == read; }))
           throw std::logic_error("constant_output(): '" + m_name + "::" + it->second.name +
                                  "' declares a read that is not an input of the material");
     m_constant_outputs.push_back({it->second.property, it->second.name, std::move(reads), it->second.take});
+  }
+
+  void declare_written_by(void const* output, void const* writer) {
+    auto const out{output_entry_of("written_by", output)};
+    auto const by{output_entry_of("written_by", writer)};
+    if (out->second.property->traits().update)
+      throw std::logic_error("written_by(): '" + m_name + "::" + out->second.name + "' has a callback of its own");
+    if (!by->second.property->traits().update)
+      throw std::logic_error("written_by(): '" + m_name + "::" + by->second.name + "' has no callback to write with");
+    m_written_by.emplace_back(out->second.property, by->second.property);
+  }
+
+  void declare_order(void const* later, void const* earlier) {
+    m_callback_order.emplace_back(output_entry_of("runs_after", earlier)->second.property,
+                                  output_entry_of("runs_after", later)->second.property);
   }
 
   /// Add a lazy reference to another material, resolved at finalize().
@@ -280,6 +304,14 @@ private:
   };
   std::unordered_map<void const*, output_entry> m_outputs; ///< value address -> property
   std::vector<constant_declaration> m_constant_outputs;
+  std::vector<std::pair<property_base_type const*, property_base_type const*>> m_written_by, m_callback_order;
+
+  auto output_entry_of(char const* what, void const* output) const {
+    auto const it{m_outputs.find(output)};
+    if (it == m_outputs.end())
+      throw std::logic_error(std::string{what} + "(): material '" + m_name + "' named a value that is not one of its outputs");
+    return it;
+  }
   std::size_t* m_revision{nullptr};
 };
 

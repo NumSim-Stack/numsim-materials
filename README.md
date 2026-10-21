@@ -49,6 +49,10 @@ material_context (facade)
   only on parameters and those inputs (all inputs of the material by default): when they are constant too
   (global edges), it is computed once, not on every update; `set_parameter()` and `get_mutable()` recompute
   the constants. Debug builds rerun them and throw when one changes (`ctx.verify_constants(bool)`)
+- `written_by(output, writer)` — an output without a callback is filled by the callback of `writer`; it is
+  ordered after that callback and only keeps that one from being skipped (undeclared: after, and against,
+  every callback of the material)
+- `runs_after(output, earlier)` — the callback of `output` runs after the callback of `earlier` (same material)
 - `ctx.update()` — execute all properties in topological order (the constant ones until they have run)
 - `ctx.update_property("mat", "prop")` — selective upstream update
 - `ctx.commit()` / `ctx.revert()` — timestep history management

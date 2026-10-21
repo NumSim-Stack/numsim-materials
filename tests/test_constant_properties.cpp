@@ -87,6 +87,75 @@ private:
   nm::input_property<value_type, nm::property_traits> m_foreign{"elsewhere", "value", nm::EdgeKind::Global};
 };
 
+/// Two callbacks: "slow" = factor * source (declared constant), also writing "slow_extra"; "fast" = slow * x
+/// for the varying "x". "attribute" names "slow_extra" written by "slow"; "extra_constant" declares it constant;
+/// "orphan" names a writer without a callback; "history" declares a history output constant.
+template <typename Traits>
+class two_callbacks final : public nm::material_base<two_callbacks<Traits>, Traits> {
+public:
+  using base = nm::material_base<two_callbacks<Traits>, Traits>;
+  using value_type = typename base::value_type;
+  using input_parameter_controller = typename base::input_parameter_controller;
+
+  template <typename... Args>
+  explicit two_callbacks(Args &&...args)
+      : base(std::forward<Args>(args)...), m_slow(base::template add_output<value_type>("slow", &two_callbacks::compute_slow)),
+        m_slow_extra(base::template add_output<value_type>("slow_extra")),
+        m_fast(base::template add_output<value_type>("fast", &two_callbacks::compute_fast)),
+        m_plain(base::template add_output<value_type>("plain")),
+        m_old(base::template add_history_output<value_type>("old")),
+        m_factor(base::template get_parameter<value_type>("factor")),
+        m_source(base::template add_input<value_type>(base::template get_parameter<std::string>("source"), "value",
+                                                      nm::EdgeKind::Global)),
+        m_x(base::template add_input<value_type>(base::template get_parameter<std::string>("x"), "state", nm::EdgeKind::Global)) {
+    base::constant_output(m_slow, {&m_source});
+    base::constant_output(m_plain, {}); // set here, written by no callback
+    base::written_by(m_old, m_fast);
+    if (base::template get_parameter<bool>("extra_constant"))
+      base::constant_output(m_slow_extra, {&m_source});
+    if (base::template get_parameter<bool>("attribute"))
+      base::written_by(m_slow_extra, m_slow);
+    if (base::template get_parameter<bool>("orphan"))
+      base::written_by(m_slow_extra, m_plain);
+    if (base::template get_parameter<bool>("history"))
+      base::constant_output(m_old);
+    base::runs_after(m_fast, m_slow);
+    if (base::template get_parameter<bool>("cycle"))
+      base::runs_after(m_slow, m_fast);
+  }
+
+  static input_parameter_controller parameters() {
+    input_parameter_controller para{base::parameters()};
+    nm::optional<value_type>(para, "factor", value_type{2});
+    nm::required<std::string>(para, "source");
+    nm::required<std::string>(para, "x");
+    nm::optional<bool>(para, "attribute", true);
+    nm::optional<bool>(para, "extra_constant", true);
+    nm::optional<bool>(para, "orphan", false);
+    nm::optional<bool>(para, "history", false);
+    nm::optional<bool>(para, "cycle", false);
+    return para;
+  }
+
+  void compute_slow() {
+    ++slow_calls;
+    m_slow = m_factor * m_source.get();
+    m_slow_extra = m_slow + (base::template get_parameter<bool>("extra_constant") ? 0 : m_x.get());
+  }
+  void compute_fast() {
+    ++fast_calls;
+    m_fast = m_slow * m_x.get();
+  }
+
+  int slow_calls{0}, fast_calls{0};
+
+private:
+  value_type &m_slow, &m_slow_extra, &m_fast, &m_plain;
+  nm::history_property<value_type> &m_old;
+  value_type const &m_factor;
+  nm::input_property<value_type, nm::property_traits> const &m_source, &m_x;
+};
+
 counter<policy> &make(ctx_type &ctx, std::string const &name, param_type p = {}) {
   p.insert<std::string>("name", name);
   return ctx.create<counter<policy>>(p);
@@ -279,4 +348,95 @@ TEST(ConstantProperties, VerificationPassesATrueConstant) {
     ctx.update();
   EXPECT_EQ(a.calls, 3); // the first run and two verifying reruns
   EXPECT_EQ(value_of(ctx, "b"), 1.0);
+}
+
+namespace {
+
+struct two_callbacks_setup {
+  ctx_type ctx;
+  nm::external_scalar_source<policy> *x{nullptr};
+  two_callbacks<policy> *m{nullptr};
+
+  explicit two_callbacks_setup(param_type p = {}) {
+    ctx.verify_constants(false); // counts the calls
+    param_type q;
+    q.insert<std::string>("name", "x");
+    x = &ctx.create<nm::external_scalar_source<policy>>(q);
+    make(ctx, "a");
+    p.insert<std::string>("name", "m");
+    p.insert<std::string>("source", "a");
+    p.insert<std::string>("x", "x");
+    m = &ctx.create<two_callbacks<policy>>(p);
+  }
+
+  void run(int n) {
+    for (int i{1}; i <= n; ++i) {
+      x->bind(0.0, static_cast<T>(i));
+      ctx.update();
+      EXPECT_EQ(ctx.get<T>("m", "fast"), 2.0 * i);
+    }
+  }
+};
+
+} // namespace
+
+TEST(ConstantProperties, CallbacksOfOneMaterialAreSkippedOneByOne) {
+  two_callbacks_setup s;
+  s.ctx.finalize();
+  s.run(4);
+  EXPECT_EQ(s.m->slow_calls, 1);
+  EXPECT_EQ(s.m->fast_calls, 4);
+}
+
+TEST(ConstantProperties, AnOutputWithoutAWriterKeepsTheMaterialsCallbacksRunning) {
+  param_type p;
+  p.insert<bool>("attribute", false);
+  p.insert<bool>("extra_constant", false);
+  two_callbacks_setup s{p};
+  s.ctx.finalize();
+  s.run(3);
+  EXPECT_EQ(s.m->slow_calls, 3); // "slow_extra" may be written by any callback
+}
+
+TEST(ConstantProperties, AVaryingWrittenOutputKeepsItsWriterRunning) {
+  param_type p;
+  p.insert<bool>("extra_constant", false);
+  two_callbacks_setup s{p};
+  s.ctx.finalize();
+  s.run(3);
+  EXPECT_EQ(s.m->slow_calls, 3);
+  EXPECT_EQ(s.ctx.get<T>("m", "slow_extra"), 2.0 + 3.0);
+}
+
+TEST(ConstantProperties, CallbacksAndTheOutputsTheyWriteAreOrdered) {
+  two_callbacks_setup s;
+  s.ctx.finalize();
+  auto const &order{s.ctx.property_execution_order()};
+  auto const at{[&](std::string const &name) {
+    return std::ranges::find(order, s.ctx.find_property("m", name)) - order.begin();
+  }};
+  EXPECT_LT(at("slow"), at("fast"));
+  EXPECT_LT(at("slow"), at("slow_extra")); // after its writer
+  EXPECT_LT(at("fast"), at("old"));
+  EXPECT_LT(at("slow"), at("plain")); // no writer declared: after every callback of the material
+  EXPECT_LT(at("fast"), at("plain"));
+}
+
+TEST(ConstantProperties, ACycleOfRunsAfterIsRejected) {
+  param_type p;
+  p.insert<bool>("cycle", true);
+  two_callbacks_setup s{p};
+  EXPECT_THROW(s.ctx.finalize(), std::runtime_error);
+}
+
+TEST(ConstantProperties, AWriterNeedsACallback) {
+  param_type p;
+  p.insert<bool>("orphan", true);
+  EXPECT_THROW(two_callbacks_setup{p}, std::logic_error);
+}
+
+TEST(ConstantProperties, AHistoryOutputCannotBeConstant) {
+  param_type p;
+  p.insert<bool>("history", true);
+  EXPECT_THROW(two_callbacks_setup{p}, std::logic_error);
 }

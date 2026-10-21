@@ -87,6 +87,19 @@ protected:
     base::declare_constant(&output, std::move(reads));
   }
 
+  /// `output` has no callback of its own: the callback of `writer` fills it. Lets the engine skip a constant
+  /// callback while another callback of the material keeps running.
+  template <typename T, typename U>
+  void written_by(T const& output, U const& writer) {
+    base::declare_written_by(&output, &writer);
+  }
+
+  /// The callback of `output` runs after the callback of `earlier` (both outputs of this material).
+  template <typename T, typename U>
+  void runs_after(T const& output, U const& earlier) {
+    base::declare_order(&output, &earlier);
+  }
+
 private:
   /// Bind a member function as the update callback for a property.
   /// The lambda captures a reference to the derived material — the material
