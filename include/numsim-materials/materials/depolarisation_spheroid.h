@@ -29,7 +29,7 @@ public:
         m_rotation(rotation_to(detail::unit_direction(base::template get_parameter<std::vector<value_type>>("direction"), base::name()))) {
     if (!(m_aspect_ratio > 0))
       throw std::invalid_argument(base::name() + ": aspect_ratio must be positive");
-    base::publish();
+    base::register_output();
   }
 
   static input_parameter_controller parameters() {
