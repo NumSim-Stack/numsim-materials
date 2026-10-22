@@ -200,7 +200,7 @@ public:
       base::add_callback(&grouped::compute);
     auto group{base::add_callback(&grouped::compute, m_first, m_second, m_third)};
     if (base::template get_parameter<bool>("constant"))
-      group.constant({&m_source, nullptr});
+      group.reads(&m_source, decltype(&m_source){});
     if (base::template get_parameter<bool>("again"))
       base::add_callback(&grouped::compute, m_second);
   }
@@ -691,4 +691,182 @@ TEST(ConstantProperties, AConstantComputedByUpdatePropertyIsVerified) {
   ctx.finalize();
   ctx.update_property("a", "value");
   EXPECT_THROW(ctx.update(), std::logic_error);
+}
+
+namespace {
+
+/// A thermoelastic bar declaring its reads per callback: "stress" and "energy" = E (strain - thermal_strain),
+/// "stiffness" = E, "thermal_strain" = alpha (temperature - 20), "thermal_stress" = stiffness * thermal_strain.
+/// "stress" is created first, so only its reads order it after "stiffness" and "thermal_strain". "foreign"
+/// reads a member that is no output, "self" a callback its own output, "twice" declares a read set twice,
+/// "unbound" reads an output nothing writes, "sloppy" reads the strain in "thermal_strain" undeclared.
+template <typename Traits>
+class bar final : public nm::material_base<bar<Traits>, Traits> {
+public:
+  using base = nm::material_base<bar<Traits>, Traits>;
+  using value_type = typename base::value_type;
+  using input_parameter_controller = typename base::input_parameter_controller;
+
+  template <typename... Args>
+  explicit bar(Args &&...args)
+      : base(std::forward<Args>(args)...), m_E(base::template get_parameter<value_type>("E")),
+        m_alpha(base::template get_parameter<value_type>("alpha")),
+        m_strain(base::template add_input<value_type>("strain", "state", nm::EdgeKind::Global)),
+        m_temperature(base::template add_input<value_type>(base::template get_parameter<std::string>("temperature"),
+                                                           base::template get_parameter<std::string>("property"),
+                                                           nm::EdgeKind::Global)),
+        m_stress(base::template add_output<value_type>("stress")), m_energy(base::template add_output<value_type>("energy")),
+        m_stiffness(base::template add_output<value_type>("stiffness")),
+        m_thermal(base::template add_output<value_type>("thermal_strain")),
+        m_thermal_stress(base::template add_output<value_type>("thermal_stress")),
+        m_plain(base::template add_output<value_type>("plain")) {
+    auto const option{[this](char const *key) { return base::template get_parameter<bool>(key); }};
+    base::constant_output(m_plain, {}); // set here, written by no callback
+    base::add_callback(&bar::compute_stress, m_stress, m_energy).reads(m_strain, m_stiffness, &m_thermal);
+    base::add_callback(&bar::compute_stiffness, m_stiffness).reads(option("self") ? &m_stiffness : nullptr);
+    auto thermal{base::add_callback(&bar::compute_thermal, m_thermal)};
+    thermal.reads(std::vector<nm::input_wire_base const *>{&m_temperature, nullptr});
+    if (option("twice"))
+      thermal.reads(m_temperature);
+    auto thermal_stress{base::add_callback(&bar::compute_thermal_stress, m_thermal_stress)};
+    if (option("foreign"))
+      thermal_stress.reads(m_E);
+    else if (option("unbound"))
+      thermal_stress.reads(m_plain);
+    else
+      thermal_stress.reads(m_stiffness, m_thermal);
+  }
+
+  static input_parameter_controller parameters() {
+    input_parameter_controller para{base::parameters()};
+    nm::optional<value_type>(para, "E", value_type{200});
+    nm::optional<value_type>(para, "alpha", value_type{1e-2});
+    nm::optional<std::string>(para, "temperature", std::string{"temperature"});
+    nm::optional<std::string>(para, "property", std::string{"value"});
+    for (auto const *key : {"foreign", "self", "twice", "unbound", "sloppy"})
+      nm::optional<bool>(para, key, false);
+    return para;
+  }
+
+  void compute_stress() {
+    ++stress_calls;
+    m_stress = m_stiffness * (m_strain.get() - m_thermal);
+    m_energy = m_stress * m_stress / (2 * m_stiffness);
+  }
+  void compute_stiffness() {
+    ++stiffness_calls;
+    m_stiffness = m_E;
+  }
+  void compute_thermal() {
+    ++thermal_calls;
+    m_thermal = m_alpha * (m_temperature.get() - value_type{20}) +
+                (base::template get_parameter<bool>("sloppy") ? m_strain.get() : value_type{0});
+  }
+  void compute_thermal_stress() {
+    ++thermal_stress_calls;
+    m_thermal_stress = m_stiffness * m_thermal;
+  }
+
+  int stress_calls{0}, stiffness_calls{0}, thermal_calls{0}, thermal_stress_calls{0};
+
+private:
+  value_type const &m_E, &m_alpha;
+  nm::input_property<value_type, nm::property_traits> const &m_strain, &m_temperature;
+  value_type &m_stress, &m_energy, &m_stiffness, &m_thermal, &m_thermal_stress, &m_plain;
+};
+
+/// "temperature" (constant 70 or the varying "heat"), "strain" (varying) and "bar".
+struct bar_setup {
+  ctx_type ctx;
+  nm::external_scalar_source<policy> *strain{nullptr}, *heat{nullptr};
+  bar<policy> *b{nullptr};
+
+  explicit bar_setup(param_type p = {}, bool verify = false) {
+    ctx.verify_constants(verify);
+    param_type s;
+    s.insert<std::string>("name", "temperature");
+    s.insert<T>("factor", 70.0);
+    ctx.create<counter<policy>>(s);
+    s.clear();
+    s.insert<std::string>("name", "heat");
+    heat = &ctx.create<nm::external_scalar_source<policy>>(s);
+    s.clear();
+    s.insert<std::string>("name", "strain");
+    strain = &ctx.create<nm::external_scalar_source<policy>>(s);
+    p.insert<std::string>("name", "bar");
+    b = &ctx.create<bar<policy>>(p);
+    ctx.finalize();
+  }
+  void step(T eps, T temperature = 70.0) {
+    strain->bind(0.0, eps);
+    heat->bind(0.0, temperature);
+    ctx.update();
+  }
+  T get(std::string const &property) { return ctx.get<T>("bar", property); }
+};
+
+param_type heated() {
+  param_type p;
+  p.insert<std::string>("temperature", "heat");
+  p.insert<std::string>("property", "state");
+  return p;
+}
+
+param_type with(char const *key) {
+  param_type p;
+  p.insert<bool>(key, true);
+  return p;
+}
+
+} // namespace
+
+TEST(DeclaredReads, ConstancyIsInferredFromTheReads) {
+  bar_setup s;
+  for (int i{1}; i <= 5; ++i)
+    s.step(0.1 * i);
+  EXPECT_EQ(s.b->stiffness_calls, 1);
+  EXPECT_EQ(s.b->thermal_calls, 1);
+  EXPECT_EQ(s.b->thermal_stress_calls, 1); // reads constant own outputs only
+  EXPECT_EQ(s.b->stress_calls, 5);
+  EXPECT_DOUBLE_EQ(s.get("stress"), 200 * 0.5 - 200 * 0.5);
+  EXPECT_DOUBLE_EQ(s.get("thermal_stress"), 100.0);
+}
+
+TEST(DeclaredReads, AVaryingReadKeepsTheCallbackAndItsReadersRunning) {
+  bar_setup s{heated()};
+  for (int i{1}; i <= 5; ++i)
+    s.step(0.1, 20.0 + i);
+  EXPECT_EQ(s.b->stiffness_calls, 1);
+  EXPECT_EQ(s.b->thermal_calls, 5);
+  EXPECT_EQ(s.b->thermal_stress_calls, 5); // reads the varying thermal strain
+  EXPECT_DOUBLE_EQ(s.get("thermal_stress"), 200 * 0.05);
+}
+
+TEST(DeclaredReads, ReadingAnOwnOutputOrdersTheCallbacks) {
+  bar_setup s;
+  s.step(0.75); // "stress" was created first: right on the first update only when it runs last
+  EXPECT_DOUBLE_EQ(s.get("stress"), 200 * (0.75 - 0.5));
+  EXPECT_DOUBLE_EQ(s.get("energy"), 50.0 * 50.0 / 400);
+}
+
+TEST(DeclaredReads, OnlyOutputsOfTheMaterialCanBeRead) {
+  EXPECT_THAT_MESSAGE(bar_setup{with("foreign")}, std::logic_error, "not one of its outputs");
+}
+
+TEST(DeclaredReads, ACallbackCannotReadItsOwnOutput) {
+  EXPECT_THAT_MESSAGE(bar_setup{with("self")}, std::logic_error, "its own output");
+}
+
+TEST(DeclaredReads, ReadsAreDeclaredOnce) {
+  EXPECT_THAT_MESSAGE(bar_setup{with("twice")}, std::logic_error, "twice");
+}
+
+TEST(DeclaredReads, AReadOutputNeedsAWriter) {
+  EXPECT_THAT_MESSAGE(bar_setup{with("unbound")}, std::logic_error, "no callback");
+}
+
+TEST(DeclaredReads, VerificationCatchesAnUndeclaredRead) {
+  bar_setup s{with("sloppy"), true};
+  s.step(0.1);
+  EXPECT_THAT_MESSAGE(s.step(0.2), std::logic_error, "thermal_strain");
 }

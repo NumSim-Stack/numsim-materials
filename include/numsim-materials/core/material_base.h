@@ -117,7 +117,7 @@ protected:
   public:
     explicit callback_handle(material_base& owner) : m_owner(owner) {}
 
-    /// The outputs are functions of the parameters and of all inputs, or of `reads` (null ones skipped).
+    /// The outputs are functions of the parameters and of all inputs.
     callback_handle& constant()
       requires Verifiable
     {
@@ -125,25 +125,28 @@ protected:
         m_owner.declare_constant(output, std::nullopt);
       return *this;
     }
-    callback_handle& constant(std::vector<input_wire_base const*> const& reads)
-      requires Verifiable
-    {
-      for (auto const* output : m_outputs)
-        m_owner.declare_constant(output, reads);
-      return *this;
-    }
 
-    /// Runs after the callback of `earlier`.
-    template <bool V>
-    callback_handle& runs_after(callback_handle<V> const& earlier) {
-      m_owner.declare_order(m_outputs.front(), earlier.m_outputs.front());
+    /// The callback reads the parameters and `reads` only: inputs and outputs of this material, as references,
+    /// pointers (null ones skipped) or ranges of pointers. It runs after the writers of the outputs it reads;
+    /// its outputs are computed once while all reads are constant.
+    template <typename... Reads>
+    callback_handle& reads(Reads const&... reads) {
+      std::vector<input_wire_base const*> inputs;
+      std::vector<void const*> outputs;
+      (sort_read(inputs, outputs, reads), ...);
+      m_owner.declare_reads(m_outputs, std::move(inputs), outputs, Verifiable);
       return *this;
     }
 
   private:
     friend class material_base;
-    template <bool>
-    friend class callback_handle;
+    template <typename A>
+    static void sort_read(std::vector<input_wire_base const*>& inputs, std::vector<void const*>& outputs, A const& read) {
+      if constexpr (std::derived_from<detail::output_t<A>, input_wire_base>)
+        collect(inputs, read);
+      else
+        collect(outputs, read);
+    }
     material_base& m_owner;
     std::vector<void const*> m_outputs;
   };
@@ -153,7 +156,7 @@ protected:
   template <typename... Outputs>
   auto add_callback(void (Derived::*callback)(), Outputs const&... outputs) {
     callback_handle<(detail::verifiable<detail::output_t<Outputs>> && ...)> handle{*this};
-    (collect_outputs(handle.m_outputs, outputs), ...);
+    (collect(handle.m_outputs, outputs), ...);
     if (handle.m_outputs.empty())
       throw std::logic_error("add_callback(): material '" + base::m_name + "' bound a callback to no output");
     if (auto const bound{std::ranges::find_if(handle.m_outputs, [this](void const* output) { return base::is_bound(output); })};
@@ -180,8 +183,8 @@ protected:
   }
 
 private:
-  template <typename A>
-  static void collect_outputs(std::vector<void const*>& to, A const& output) {
+  template <typename P, typename A>
+  static void collect(std::vector<P>& to, A const& output) {
     if constexpr (std::is_pointer_v<A>) {
       if (output)
         to.push_back(output);

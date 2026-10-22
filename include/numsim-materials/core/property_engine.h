@@ -34,6 +34,7 @@ public:
   /// Build the execution order from the property registry and material interfaces.
   void build(property_handler& properties,
              const std::vector<material_interface_type*>& interfaces) {
+    std::ranges::for_each(interfaces, &material_interface_type::check_reads);
     auto const writers{collect_writers(interfaces)};
     compute_execution_order(properties, interfaces, writers);
     collect_history_properties(properties);
@@ -271,7 +272,7 @@ private:
 
     if (m_property_execution_order.size() != key_to_prop.size())
       throw std::runtime_error("Circular dependency in property graph "
-                               "(global edges, runs_after and written_by)");
+                               "(global edges, reads, runs_after and written_by)");
 
     // --- Convert to pointer-based structures for runtime ---
     m_key_to_prop = std::move(key_to_prop);
@@ -301,7 +302,7 @@ private:
     return result;
   }
 
-  /// Constant: declared, not history, every read a global edge from a constant. A constant callback runs once
+  /// Constant: declared, not history, every read a global edge from a constant or a constant output of its material. A constant callback runs once
   /// when every output it may write is constant.
   void find_constants(const std::vector<material_interface_type*>& interfaces, const writers_by_material& writers) {
     std::unordered_map<const property_base*, std::pair<const material_interface_type*, const declaration*>> declared;
@@ -319,8 +320,10 @@ private:
       if (it == declared.end() || prop->is_history())
         return false;
       auto const& [mat, d]{it->second};
-      return d->reads ? std::ranges::all_of(*d->reads, reads_constant)
-                      : std::ranges::all_of(mat->typed_inputs(), reads_constant, [](auto const& input) { return input.get(); });
+      auto const own_constant{[&](const property_base* read) { return m_constant.contains(read); }};
+      return std::ranges::all_of(d->own_reads, own_constant) &&
+             (d->reads ? std::ranges::all_of(*d->reads, reads_constant)
+                       : std::ranges::all_of(mat->typed_inputs(), reads_constant, [](auto const& input) { return input.get(); }));
     }};
     // in topological order, so every read is decided before its consumer
     m_constant.clear();

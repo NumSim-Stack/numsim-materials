@@ -9,6 +9,7 @@
 #include <functional>
 #include <limits>
 #include <optional>
+#include <ranges>
 #include <utility>
 #include <stdexcept>
 #include <type_traits>
@@ -209,11 +210,12 @@ public:
   /// Copies a value; the returned check compares it with the current one. Empty for types never constant.
   using snapshot = std::function<std::function<detail::verdict()>()>;
 
-  /// An output declared a function of the parameters and of `reads`, all inputs when unset
-  /// (material_base::constant_output).
+  /// An output declared a function of the parameters, of `reads` (all inputs when unset) and of the outputs
+  /// `own_reads` of this material (material_base::constant_output, callback_handle::reads).
   struct constant_declaration {
     property_base_type const* output;
     std::optional<std::vector<input_wire_base const*>> reads;
+    std::vector<property_base_type const*> own_reads;
     snapshot take;
   };
   const std::vector<constant_declaration>& constant_outputs() const noexcept { return m_constant_outputs; }
@@ -222,6 +224,14 @@ public:
   const auto& written_outputs() const noexcept { return m_written_by; }
   /// (earlier, later): callbacks of this material in the order they must run.
   const auto& callback_order() const noexcept { return m_callback_order; }
+
+  /// Throws when an output read by a callback of this material has no writer; at finalize(), when all are bound.
+  void check_reads() const {
+    for (auto const& [read, reader] : m_callback_order)
+      if (std::ranges::contains(m_read_declared, reader) && !read->traits().update &&
+          !std::ranges::contains(m_written_by, read, &decltype(m_written_by)::value_type::first))
+        throw std::logic_error("reads(): '" + m_name + "::" + read->traits().id.name + "' has no callback or writer to run after");
+  }
 
   /// The engine's revision counter, bumped by set_parameter(); bound at finalize().
   void bind_revision(std::size_t* revision) noexcept { m_revision = revision; }
@@ -277,15 +287,36 @@ protected:
       throw std::logic_error("constant_output(): '" + key_of(entry) + "' is history, never constant");
     if (!entry.take)
       throw std::logic_error("constant_output(): '" + key_of(entry) + "' has a type that cannot be compared");
-    if (reads) {
-      std::erase(*reads, nullptr); // an absent optional input
-      auto const is_input{[this](input_wire_base const* read) {
-        return std::ranges::contains(m_typed_inputs, read, [](auto const& input) { return input.get(); });
-      }};
-      if (!std::ranges::all_of(*reads, is_input))
-        throw std::logic_error("constant_output(): '" + key_of(entry) + "' declares a read that is not an input of the material");
+    if (reads)
+      check_inputs("constant_output", entry, *reads);
+    check_undeclared("constant_output", entry);
+    m_constant_outputs.push_back({entry.property, std::move(reads), {}, entry.take});
+  }
+
+  /// The callback filling `outputs` reads the parameters, `inputs` and the outputs `own` of this material only:
+  /// it runs after their writers, and its outputs are constant once all reads are (when they can be constant).
+  void declare_reads(std::vector<void const*> const& outputs, std::vector<input_wire_base const*> inputs,
+                     std::vector<void const*> const& own, bool verifiable) {
+    auto const& callback{output_entry_of("reads", outputs.front())};
+    if (std::ranges::contains(m_read_declared, callback.property))
+      throw std::logic_error("reads(): '" + key_of(callback) + "' declares its reads twice");
+    m_read_declared.push_back(callback.property);
+    check_inputs("reads", callback, inputs);
+    std::vector<property_base_type const*> own_reads;
+    for (auto const* output : own) {
+      auto const& read{output_entry_of("reads", output)};
+      if (std::ranges::contains(outputs, output))
+        throw std::logic_error("reads(): '" + key_of(callback) + "' reads its own output '" + key_of(read) + "'");
+      m_callback_order.emplace_back(read.property, callback.property); // after its writer: writer -> read
+      own_reads.push_back(read.property);
     }
-    m_constant_outputs.push_back({entry.property, std::move(reads), entry.take});
+    auto const entries{outputs | std::views::transform([this](void const* output) { return &output_entry_of("reads", output); }) |
+                       std::ranges::to<std::vector>()};
+    if (verifiable && std::ranges::none_of(entries, [](auto const* entry) { return entry->property->is_history(); }))
+      for (auto const* entry : entries) {
+        check_undeclared("reads", *entry);
+        m_constant_outputs.push_back({entry->property, inputs, own_reads, entry->take});
+      }
   }
 
   void declare_written_by(void const* output, void const* writer) {
@@ -338,6 +369,7 @@ private:
   };
   std::unordered_map<void const*, output_entry> m_outputs; ///< value address -> property
   std::vector<constant_declaration> m_constant_outputs;
+  std::vector<property_base_type const*> m_read_declared; ///< callbacks with declared reads
   std::vector<std::pair<property_base_type const*, property_base_type const*>> m_written_by, m_callback_order;
 
   /// The entry of an output of this material; declarations end at finalize(), when the engine reads them.
@@ -348,6 +380,18 @@ private:
     if (it == m_outputs.end())
       throw std::logic_error(std::string{what} + "(): material '" + m_name + "' named a value that is not one of its outputs");
     return it->second;
+  }
+  void check_inputs(char const* what, output_entry const& entry, std::vector<input_wire_base const*>& reads) const {
+    std::erase(reads, nullptr); // an absent optional input
+    auto const is_input{[this](input_wire_base const* read) {
+      return std::ranges::contains(m_typed_inputs, read, [](auto const& input) { return input.get(); });
+    }};
+    if (!std::ranges::all_of(reads, is_input))
+      throw std::logic_error(std::string{what} + "(): '" + key_of(entry) + "' declares a read that is not an input of the material");
+  }
+  void check_undeclared(char const* what, output_entry const& entry) const {
+    if (std::ranges::contains(m_constant_outputs, entry.property, &constant_declaration::output))
+      throw std::logic_error(std::string{what} + "(): '" + key_of(entry) + "' is declared twice");
   }
   std::string key_of(output_entry const& entry) const { return m_name + "::" + entry.property->traits().id.name; }
   static bool has_callback(output_entry const& entry) { return static_cast<bool>(entry.property->traits().update); }

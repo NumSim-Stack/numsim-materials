@@ -57,8 +57,8 @@ public:
       m_eps.push_back(&base::template add_history_output<tensor2>("strain_" + names[r]));
     }
     // constant phases: the concentrations are computed once, the strains on every update
-    auto const concentrations{base::add_callback(&mean_field_strain::compute_concentrations, m_A).constant(phase_reads)};
-    base::add_callback(&mean_field_strain::compute_strains, m_eps).runs_after(concentrations);
+    base::add_callback(&mean_field_strain::compute_concentrations, m_A).reads(phase_reads);
+    base::add_callback(&mean_field_strain::compute_strains, m_eps).reads(m_strain, m_A);
   }
 
   static input_parameter_controller parameters() {
