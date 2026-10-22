@@ -60,8 +60,10 @@ medium — `isotropic_moduli` on that tangent produces it per update and the Esh
 ## 3. Tangent homogenisation (global)
 
 The composite is a tangent producer; the phases are produced tangents. Nothing is evaluated at a wrong
-strain because no phase *material* exists in the graph. The homogenisation runs once per update, inside one
-node: `tangent` = Σ cᵣ ℂᵣ : Aᵣ with the concentrations Aᵣ of its kernel.
+strain because no phase *material* exists in the graph. The homogenisation runs inside one node: `tangent` =
+Σ cᵣ ℂᵣ : Aᵣ with the concentrations Aᵣ of its kernel. With constant phases (tangents, fractions and Eshelby
+tensors from parameters) the tangent and the concentrations are constant properties, computed once; a phase
+whose tangent changes keeps them in the update loop.
 
 ```json
 {"type": "constant_scalar", "name": "cm", "value": 0.7},
@@ -131,6 +133,8 @@ strain ──► mean_field_strain ──strain_matrix──► matrix material 
   state vector carry them) and `concentration_<phase>`. Its `kernel` is the same object as in §3 — any of
   `voigt`, `reuss`, `hill`, `dilute`, `mori_tanaka`, `self_consistent` — so with linear phases one pass equals
   the global composite exactly; the self-consistent kernel converges its own fixed point inside every pass.
+  The concentrations and the strains are separate callbacks: with constant phases the concentrations are
+  computed once and only the strains every update; a phase read over a local edge recomputes them every pass.
 - The phase materials consume those strains like any other strain: `"strain_source": "mt_strain",
   "strain_property": "strain_matrix"`. Every strain consumer takes `strain_property` (default `strain`).
 - `mean_field_composite_local_linear` / `_nonlinear` produce `stress` = Σ cᵣ σᵣ and `tangent` = Σ cᵣ ℂᵣ : Aᵣ.
@@ -219,6 +223,18 @@ global composite over the same phases; Mori–Tanaka equals `short_fibre_composi
 The phases localise with their initial tangents (the `phase` template's `tangent_source`), so the localisation
 is linear and one pass is exact, while the averaged stress and tangent are the damaged ones.
 
+With `"localisation": "nonlinear"` the fibres localise with their current tangents: the `phase` template reads
+the fibre material's tangent over a local edge, and the composite becomes
+`mean_field_composite_local_nonlinear` with `used_tangent` = `sf_<q>::tangent` per fibre (`matrix_used_tangent`
+for a nonlinear matrix). The passes run to the fixed point of §5:
+
+```json
+"localisation": "nonlinear",
+"phase": {"tangent_source": "fibre_{q}", "tangent_property": "damaged_tangent", "tangent_edge": "local", "initial_tangent_source": "Cf"}
+```
+
+Under Mori–Tanaka a softening fibre then attracts strain, so it damages more than in the linear localisation.
+
 ---
 
 ## 5. Who runs the fixed point
@@ -249,7 +265,8 @@ republished by `phase` as `depolarisation` (#110 for the composite nodes).
 ## 7. Reports and tests
 
 `docs/materials/mean_field_composite_global` (dilute, Mori–Tanaka, self-consistent, unidirectional fibres),
-`mean_field_composite_global_rule_of_mixture`, `short_fibre_composite`, `mean_field_damage` (the local pair with a
+`mean_field_composite_global_rule_of_mixture`, `short_fibre_composite`, `short_fibre_damage` (`orientation_phases` with
+damaging fibres, nonlinear against linear localisation), `mean_field_damage` (the local pair with a
 damaging matrix); tests `test_mean_field_kernels`, `test_mean_field_composite_global`, `test_rule_of_mixture`,
 `test_short_fibre_composite`, `test_mean_field_local`, `test_mean_field_damage`, `test_orientation_phases`,
 `test_json_expansions`, `test_scalar_split`,
