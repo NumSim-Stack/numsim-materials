@@ -867,6 +867,7 @@ TEST(DeclaredReads, AReadOutputNeedsAWriter) {
 
 TEST(DeclaredReads, VerificationCatchesAnUndeclaredRead) {
   bar_setup s{with("sloppy"), true};
+  s.ctx.check_reads(false); // the verification alone; test_read_check covers the check
   s.step(0.1);
   EXPECT_THAT_MESSAGE(s.step(0.2), std::logic_error, "thermal_strain");
 }

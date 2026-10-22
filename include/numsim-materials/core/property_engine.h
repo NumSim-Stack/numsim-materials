@@ -6,6 +6,7 @@
 #include <functional>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <numsim-core/print.h>
 #include <queue>
 #include <ranges>
@@ -14,6 +15,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 #include "numsim-materials/core/property_traits.h"
 #include "numsim-materials/core/property.h"
@@ -39,6 +41,9 @@ public:
     compute_execution_order(properties, interfaces, writers);
     collect_history_properties(properties);
     find_constants(interfaces, writers);
+#ifndef NDEBUG
+    track_reads(interfaces);
+#endif
   }
 
   /// Run the callbacks still to run, in topological order: a constant one only until it has run.
@@ -82,6 +87,9 @@ public:
 
   /// Rerun the constant callbacks on every update and throw when an output changes (on in debug builds).
   void verify_constants(bool on) noexcept { m_verify = on; }
+
+  /// Throw when a callback reads an input it did not declare (debug builds; compiled out under NDEBUG).
+  void check_reads(bool on) noexcept { *m_check_reads = on; }
 
   void commit() {
     for (auto* hp : m_history_properties)
@@ -391,6 +399,36 @@ private:
                                     : "changed although constant: it reads more than its parameters and declared inputs"));
   }
 
+#ifndef NDEBUG
+  /// Wraps every callback in a scope of the inputs it declared (none: untracked), so a nested callback a solver
+  /// reruns is checked against its own declaration; throws after a callback that read an undeclared input.
+  void track_reads(const std::vector<material_interface_type*>& interfaces) {
+    std::unordered_map<const property_base*, std::vector<const input_wire_base*>> declared;
+    for (auto const* mat : interfaces)
+      for (auto const& d : mat->declared_reads())
+        declared[d.callback] = d.inputs;
+    for (auto* prop : m_callbacks) {
+      if (!m_tracked.insert(prop).second)
+        continue;
+      auto const it{declared.find(prop)};
+      auto reads{it != declared.end() ? std::optional{std::move(it->second)} : std::nullopt};
+      auto& update{prop->traits().update};
+      update = [inner = std::move(update), reads = std::move(reads), on = m_check_reads.get(), key = prop_key(prop->traits().id)] {
+        detail::read_scope scope{*on && reads ? &*reads : nullptr};
+        struct restore {
+          detail::read_scope* outer;
+          ~restore() { detail::current_reads = outer; }
+        } const guard{std::exchange(detail::current_reads, &scope)};
+        inner();
+        if (scope.undeclared)
+          throw std::logic_error("reads(): '" + key + "' reads '" + scope.undeclared->source_owner() + "::" +
+                                 scope.undeclared->source_name() + "', an input it did not declare");
+      };
+    }
+  }
+  std::unordered_set<const property_base*> m_tracked; ///< callbacks wrapped by track_reads()
+#endif
+
   void collect_history_properties(property_handler& properties) {
     m_history_properties.clear();
     auto all{properties.data() | std::views::values | std::views::join | std::views::values |
@@ -442,6 +480,7 @@ private:
 #else
   bool m_verify{true};
 #endif
+  std::unique_ptr<bool> m_check_reads{std::make_unique<bool>(true)}; ///< stable address for the wrapped callbacks
 };
 
 } // namespace numsim::materials

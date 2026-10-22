@@ -1,10 +1,54 @@
 #ifndef INPUT_TYPES_H
 #define INPUT_TYPES_H
+#include <algorithm>
+#include <vector>
 #include <numsim-core/property_graph/input_types.h>
+#include "numsim-materials/core/property_traits.h"
+
 namespace numsim::materials {
-  using numsim_core::input_wire_base;
-  using numsim_core::connection_source;
-  using numsim_core::input_property;
-  using numsim_core::input_history;
+using numsim_core::input_wire_base;
+using numsim_core::connection_source;
+
+namespace detail {
+/// The inputs the running callback declared (null: it declared none); debug builds note the first read of any
+/// other input (property_engine checks it).
+struct read_scope {
+  std::vector<input_wire_base const*> const* declared;
+  input_wire_base const* undeclared{nullptr};
+};
+inline thread_local read_scope* current_reads{nullptr};
+
+inline void note_read([[maybe_unused]] input_wire_base const* input) noexcept {
+#ifndef NDEBUG
+  if (auto* scope{current_reads}; scope && scope->declared && !scope->undeclared && !std::ranges::contains(*scope->declared, input))
+    scope->undeclared = input;
+#endif
 }
+} // namespace detail
+
+/// numsim-core's input with its reads noted (debug builds), so the engine checks them against the declared ones.
+template <typename T, typename Traits = property_traits>
+class input_property : public numsim_core::input_property<T, Traits> {
+public:
+  using numsim_core::input_property<T, Traits>::input_property;
+  const T& get() const noexcept {
+    detail::note_read(this);
+    return numsim_core::input_property<T, Traits>::get();
+  }
+};
+
+template <typename T, typename Traits = property_traits>
+class input_history : public numsim_core::input_history<T, Traits> {
+public:
+  using numsim_core::input_history<T, Traits>::input_history;
+  const T& old_value() const noexcept {
+    detail::note_read(this);
+    return numsim_core::input_history<T, Traits>::old_value();
+  }
+  const T& new_value() const noexcept {
+    detail::note_read(this);
+    return numsim_core::input_history<T, Traits>::new_value();
+  }
+};
+} // namespace numsim::materials
 #endif

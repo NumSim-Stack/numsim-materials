@@ -117,12 +117,11 @@ protected:
   public:
     explicit callback_handle(material_base& owner) : m_owner(owner) {}
 
-    /// The outputs are functions of the parameters and of all inputs.
+    /// The outputs are functions of the parameters and of all inputs: reads() of every input.
     callback_handle& constant()
       requires Verifiable
     {
-      for (auto const* output : m_outputs)
-        m_owner.declare_constant(output, std::nullopt);
+      m_owner.declare_reads(m_outputs, m_owner.all_inputs(), {}, Verifiable);
       return *this;
     }
 

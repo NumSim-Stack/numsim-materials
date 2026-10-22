@@ -164,6 +164,9 @@ public:
   /// Rerun the constant callbacks on every update and throw when an output changes; on in debug builds.
   void verify_constants(bool on) noexcept { m_engine.verify_constants(on); }
 
+  /// Throw when a callback reads an input it did not declare; on in debug builds, compiled out under NDEBUG.
+  void check_reads(bool on) noexcept { m_engine.check_reads(on); }
+
   /// Whether the engine computes material::property once (after finalize(); false for an unknown property).
   bool is_constant(const std::string& material, const std::string& property) {
     auto const* prop{find_property(material, property)};
