@@ -56,10 +56,13 @@ public:
   }
 
 protected:
-  /// Called by the node's own constructor: binding the update needs the most-derived object.
-  void register_outputs() {
-    m_stress = &base::template add_output<tensor2>("stress", &Derived::compute);
+  /// Called by the node's own constructor: binding the update needs the most-derived object. Derived::compute()
+  /// fills `more` outputs too; the returned handle takes its reads (m_A, m_sigma, m_C, m_c for average()).
+  template <typename... Outputs>
+  auto register_outputs(Outputs const &...more) {
+    m_stress = &base::template add_output<tensor2>("stress");
     m_tangent = &base::template add_output<tensor4>("tangent");
+    return base::add_callback(&Derived::compute, *m_stress, *m_tangent, more...);
   }
 
   /// The sums; the derived node adds what it reports on top.

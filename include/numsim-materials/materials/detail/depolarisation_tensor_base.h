@@ -21,13 +21,13 @@ public:
   template <typename... Args>
   explicit depolarisation_tensor_base(Args &&...args)
       : base(std::forward<Args>(args)...), m_N(base::template add_output<tensor2>("tensor")) {
-    base::constant_output(m_N);
+    base::add_callback(&depolarisation_tensor_base::publish, m_N).reads();
   }
 
   static input_parameter_controller parameters() { return base::parameters(); }
 
 protected:
-  /// Derived calls this once its geometry parameters are read.
+  /// Derived calls this once its geometry parameters are read; the engine on set_parameter().
   void publish() { m_N = static_cast<Derived const &>(*this).shape(); }
 
 private:

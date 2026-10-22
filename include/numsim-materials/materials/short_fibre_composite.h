@@ -42,7 +42,7 @@ public:
   template <typename... Args>
   explicit short_fibre_composite(Args &&...args)
       : base(std::forward<Args>(args)...),
-        m_tangent(base::template add_output<tensor4>("tangent", &short_fibre_composite::compute)),
+        m_tangent(base::template add_output<tensor4>("tangent")),
         m_A_matrix(base::template add_output<tensor4>("concentration_matrix")),
         m_A_fibre(base::template add_output<tensor4>("concentration_fibre")),
         m_averaging(parse_averaging(base::template get_parameter<std::string>("averaging"))),
@@ -65,6 +65,7 @@ public:
       m_Qt.push_back(tensor4{tmech::otimesu(tmech::trans(R), tmech::trans(R))});
       m_w.push_back(w);
     }
+    base::add_callback(&short_fibre_composite::compute, m_tangent, m_A_matrix, m_A_fibre).reads(m_Cm, m_cm, m_Cf, m_c, m_S);
   }
 
   static input_parameter_controller parameters() {

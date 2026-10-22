@@ -20,7 +20,9 @@ public:
   using base = detail::mean_field_composite_local_base<mean_field_composite_local_linear<Traits>, Traits>;
 
   template <typename... Args>
-  explicit mean_field_composite_local_linear(Args &&...args) : base(std::forward<Args>(args)...) { base::register_outputs(); }
+  explicit mean_field_composite_local_linear(Args &&...args) : base(std::forward<Args>(args)...) {
+    base::register_outputs().reads(base::m_A, base::m_sigma, base::m_C, base::m_c);
+  }
 
   static constexpr char const *type_name() { return "mean_field_composite_local_linear"; }
   static std::vector<std::string> const &roles() {
