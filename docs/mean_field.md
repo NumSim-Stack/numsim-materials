@@ -49,7 +49,9 @@ tangent, like for any other tangent (`isotropic_tangent`, a cure-dependent stiff
 
 A phase bundles a tangent, a volume fraction and, for the mean-field schemes, the Eshelby tensor of its shape
 (elasticity) or its depolarisation tensor (conductivity), all as produced properties it republishes. It holds
-no material. The fraction must be non-negative; the composite checks that the fractions sum to one.
+no material. The fraction must be non-negative; the composite checks that the fractions sum to one. Each
+relay is its own callback: a varying fraction (a cure, a damage variable) leaves the tangent and shape relays
+constant, and a tangent over a local edge leaves the fraction constant.
 
 The Eshelby node consumes Poisson's ratio of the matrix. Where ν is a constant, `poisson_ratio_from_moduli`
 (or a bare `constant_scalar`) produces it once; where it follows a tangent — a curing matrix, an effective
