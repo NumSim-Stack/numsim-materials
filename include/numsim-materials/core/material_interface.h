@@ -72,6 +72,15 @@ bool is_finite(T const& a) {
     return true;
 }
 
+/// std::ranges::to<std::vector>(), which libstdc++ 13 lacks.
+template <std::ranges::input_range R>
+auto to_vector(R&& range) {
+  std::vector<std::ranges::range_value_t<R>> result;
+  for (auto&& value : range)
+    result.push_back(std::forward<decltype(value)>(value));
+  return result;
+}
+
 /// A rerun constant compared with its stored value.
 enum class verdict { same, changed, not_finite };
 } // namespace detail
@@ -310,8 +319,8 @@ protected:
       m_callback_order.emplace_back(read.property, callback.property); // after its writer: writer -> read
       own_reads.push_back(read.property);
     }
-    auto const entries{outputs | std::views::transform([this](void const* output) { return &output_entry_of("reads", output); }) |
-                       std::ranges::to<std::vector>()};
+    auto const entries{detail::to_vector(
+        outputs | std::views::transform([this](void const* output) { return &output_entry_of("reads", output); }))};
     if (verifiable && std::ranges::none_of(entries, [](auto const* entry) { return entry->property->is_history(); }))
       for (auto const* entry : entries) {
         check_undeclared("reads", *entry);

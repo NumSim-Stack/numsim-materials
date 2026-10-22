@@ -293,7 +293,8 @@ private:
     for (auto const* mat : interfaces) {
       auto& writers{result[mat]};
       auto const& props{mat->get_property_registry().produced_properties()};
-      auto const callbacks{props | std::views::filter(has_callback) | std::ranges::to<std::vector<const property_base*>>()};
+      std::vector<const property_base*> callbacks;
+      std::ranges::copy_if(props, std::back_inserter(callbacks), has_callback);
       for (auto const* prop : props | std::views::filter(std::not_fn(has_callback)))
         writers[prop] = callbacks;
       for (auto const& [output, by] : mat->written_outputs())
@@ -338,18 +339,17 @@ private:
           return m_constant.contains(w.first) || !std::ranges::contains(w.second, callback);
         });
       }};
-      auto const outputs{mat->constant_outputs() |
-                         std::views::filter([&](auto const& d) { return m_constant.contains(d.output); }) |
-                         std::views::transform([](auto const& d) { return &d; }) | std::ranges::to<std::vector>()};
+      auto const outputs{detail::to_vector(mat->constant_outputs() |
+                                           std::views::filter([&](auto const& d) { return m_constant.contains(d.output); }) |
+                                           std::views::transform([](auto const& d) { return &d; }))};
       for (auto const* prop : mat->get_property_registry().produced_properties())
         if (prop->traits().update && m_constant.contains(prop) && writes_constants(prop)) {
           m_once.insert(prop);
           m_checks[prop] = {mat, outputs};
         }
     }
-    m_callbacks = m_property_execution_order |
-                  std::views::filter([](auto const* prop) { return static_cast<bool>(prop->traits().update); }) |
-                  std::ranges::to<std::vector>();
+    m_callbacks = detail::to_vector(m_property_execution_order |
+                                    std::views::filter([](auto const* prop) { return static_cast<bool>(prop->traits().update); }));
     reactivate();
   }
 
@@ -381,7 +381,7 @@ private:
   /// Reruns a constant callback and throws when one of its material's constant outputs changes.
   void verify(property_base* prop) {
     auto const& [mat, outputs]{m_checks.at(prop)};
-    auto const checks{outputs | std::views::transform([](auto const* d) { return d->take(); }) | std::ranges::to<std::vector>()};
+    auto const checks{detail::to_vector(outputs | std::views::transform([](auto const* d) { return d->take(); }))};
     prop->traits().update();
     for (auto const& [check, d] : std::views::zip(checks, outputs))
       if (auto const verdict{check()}; verdict != detail::verdict::same)
