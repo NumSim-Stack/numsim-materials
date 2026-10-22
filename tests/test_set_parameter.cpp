@@ -148,11 +148,9 @@ TEST(SetParameter, LeavesOtherParametersAlone) {
 // materials, where it does not.
 // ---------------------------------------------------------------------------
 
-/// linear_elasticity computes its tangent in the constructor and registers
-/// "tangent" with no callback, so a write to K lands in the parameter and
-/// changes nothing. Pinned, not endorsed: this is the limitation the API
-/// documents, and the reason isotropic_tangent's "recompute" exists.
-TEST(SetParameterShippedMaterials, WriteLandsButDerivedStateGoesStale) {
+/// linear_elasticity fills "tangent" in a constant callback reading the
+/// parameters alone, so a write to K recomputes it on the next update.
+TEST(SetParameterShippedMaterials, AConstantTangentFollowsTheWrite) {
   ctx_type ctx;
   param_type p;
   p.insert<std::string>("name", "strain_in");
@@ -175,12 +173,10 @@ TEST(SetParameterShippedMaterials, WriteLandsButDerivedStateGoesStale) {
 
   el.template set_parameter<T>("K", 200.0);
 
-  // The write is real...
   EXPECT_DOUBLE_EQ(el.template get_parameter<T>("K"), 200.0);
-  // ... and has no effect, because the tangent was built once.
   ctx.update();
-  EXPECT_DOUBLE_EQ(ctx.get<tensor2>("elastic", "stress")(0, 0),
-                   before);
+  EXPECT_NEAR(ctx.get<tensor2>("elastic", "stress")(0, 0),
+              (200.0 + 4.0 * 40.0 / 3.0) * 0.001, 1e-12);
 }
 
 /// Each material holds its own COPY of the handler, so a write reaches one

@@ -28,8 +28,7 @@ public:
   template <typename... Args>
   explicit strain_energy_state_function(Args&&... args)
       : base(std::forward<Args>(args)...),
-        m_eps_eq(base::template add_output<value_type>(
-            "equivalent_strain", &strain_energy_state_function::compute)),
+        m_eps_eq(base::template add_output<value_type>("equivalent_strain")),
         m_deps_eq(base::template add_output<tensor2>("d_equivalent_strain")),
         m_E(base::template get_parameter<value_type>("youngs_modulus")),
         m_strain_source(base::template get_parameter<std::string>("strain_source")),
@@ -38,7 +37,9 @@ public:
             m_strain_source, base::template get_parameter<std::string>("strain_property"), EdgeKind::Global)),
         m_tangent(base::template add_input<tensor4>(
             m_tangent_source, "tangent", EdgeKind::Global))
-  {}
+  {
+    base::add_callback(&strain_energy_state_function::compute, m_eps_eq, m_deps_eq).reads(m_strain, m_tangent);
+  }
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
