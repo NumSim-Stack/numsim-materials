@@ -22,9 +22,10 @@ public:
   template <typename... Args>
   explicit constant_scalar(Args&&... args)
       : base(std::forward<Args>(args)...),
-        m_value(base::template add_output<value_type>("value")) {
-    m_value = base::template get_parameter<value_type>("value");
-    base::constant_output(m_value);
+        m_value(base::template add_output<value_type>("value")),
+        m_parameter(base::template get_parameter<value_type>("value")) {
+    publish(); // readable before the first update
+    base::add_callback(&constant_scalar::publish, m_value).reads();
   }
 
   static input_parameter_controller parameters() {
@@ -33,8 +34,11 @@ public:
     return para;
   }
 
+  void publish() { m_value = m_parameter; }
+
 private:
   value_type& m_value;
+  const value_type& m_parameter;
 };
 
 }  // namespace numsim::materials

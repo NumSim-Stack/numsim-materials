@@ -25,7 +25,7 @@ public:
   template <typename... Args>
   explicit kamal_sourour_rate(Args &&...args)
       : base(std::forward<Args>(args)...),
-        m_rate(base::template add_output<value_type>("rate", &kamal_sourour_rate::compute)),
+        m_rate(base::template add_output<value_type>("rate")),
         m_drate(base::template add_output<value_type>("rate_derivative")),
         m_A1(base::template get_parameter<value_type>("A1")),
         m_E1(base::template get_parameter<value_type>("E1")),
@@ -41,6 +41,7 @@ public:
                                      std::pair{"m", m_m}, std::pair{"n", m_n}})
       if (!(value >= 0))
         throw std::invalid_argument("kamal_sourour_rate '" + base::name() + "': " + key + " must be non-negative");
+    base::add_callback(&kamal_sourour_rate::compute, m_rate, m_drate).reads(m_theta, m_z);
   }
 
   static input_parameter_controller parameters() {

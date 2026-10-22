@@ -16,9 +16,11 @@ public:
   template <typename... Args>
   explicit scalar_stepper(Args &&...args)
       : base(std::forward<Args>(args)...),
-        m_his(base::template add_history_output<value_type>("state", &scalar_stepper::update)),
+        m_his(base::template add_history_output<value_type>("state")),
         m_inc(base::template get_parameter<value_type>("increment"))
-  {}
+  {
+    base::add_callback(&scalar_stepper::update, m_his).reads();
+  }
 
   static input_parameter_controller parameters(){
     input_parameter_controller param{base::parameters()};

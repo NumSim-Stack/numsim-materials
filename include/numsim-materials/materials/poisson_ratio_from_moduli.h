@@ -22,13 +22,10 @@ public:
 
   template <typename... Args>
   explicit poisson_ratio_from_moduli(Args &&...args)
-      : base(std::forward<Args>(args)...), m_nu(base::template add_output<value_type>("value")) {
-    auto const K{base::template get_parameter<value_type>("K")};
-    auto const G{base::template get_parameter<value_type>("G")};
-    if (!(K > 0 && G > 0))
-      throw std::invalid_argument("poisson_ratio_from_moduli '" + base::name() + "': K and G must be positive");
-    m_nu = poisson_ratio(K, G);
-    base::constant_output(m_nu);
+      : base(std::forward<Args>(args)...), m_nu(base::template add_output<value_type>("value")),
+        m_K(base::template get_parameter<value_type>("K")), m_G(base::template get_parameter<value_type>("G")) {
+    compute(); // checks the moduli at construction
+    base::add_callback(&poisson_ratio_from_moduli::compute, m_nu).reads();
   }
 
   static input_parameter_controller parameters() {
@@ -38,8 +35,15 @@ public:
     return para;
   }
 
+  void compute() {
+    if (!(m_K > 0 && m_G > 0))
+      throw std::invalid_argument("poisson_ratio_from_moduli '" + base::name() + "': K and G must be positive");
+    m_nu = poisson_ratio(m_K, m_G);
+  }
+
 private:
   value_type &m_nu;
+  value_type const &m_K, &m_G;
 };
 
 } // namespace numsim::materials

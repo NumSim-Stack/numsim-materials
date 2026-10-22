@@ -15,7 +15,7 @@ an evolving fraction) the consumers follow. A mean-field scheme is a **kernel ob
 
 | node | consumes | produces |
 |---|---|---|
-| `poisson_ratio_from_moduli` | parameters `K`, `G` (once, at construction) | `value` |
+| `poisson_ratio_from_moduli` | parameters `K`, `G` (constant; recomputed after `set_parameter`) | `value` |
 | `isotropic_moduli` | `tangent_source` / `tangent_property` | `K`, `G`, `poisson_ratio` |
 | `eshelby_sphere`, `eshelby_cylinder`, `eshelby_spheroid`, `eshelby_ellipsoid` | `nu_source` / `nu_property` | `tensor` (rank 4) |
 | `depolarisation_sphere`, `_cylinder`, `_spheroid`, `_ellipsoid` | geometry only | `tensor` (rank 2, trace one) |
