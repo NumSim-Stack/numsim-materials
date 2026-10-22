@@ -56,7 +56,7 @@ public:
   template<typename... Args>
   explicit scalar_system_2(Args&&... args)
       : base(std::forward<Args>(args)...),
-        m_rx(base::add_output<T>("residual_x", &scalar_system_2::compute)),
+        m_rx(base::add_output<T>("residual_x")),
         m_ry(base::add_output<T>("residual_y")),
         m_jxx(base::add_output<T>("jacobian_x_x")),
         m_jxy(base::add_output<T>("jacobian_x_y")),
@@ -67,7 +67,9 @@ public:
         m_b(base::get_parameter<T>("b")),
         m_solver(base::get_parameter<std::string>("solver_name")),
         m_x(base::add_input<T>(m_solver, "x", EdgeKind::Local)),
-        m_y(base::add_input<T>(m_solver, "y", EdgeKind::Local)) {}
+        m_y(base::add_input<T>(m_solver, "y", EdgeKind::Local)) {
+    base::add_callback(&scalar_system_2::compute, m_rx, m_ry, m_jxx, m_jxy, m_jyx, m_jyy).reads(m_x, m_y);
+  }
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
@@ -313,7 +315,7 @@ public:
   template<typename... Args>
   explicit mixed_system_t(Args&&... args)
       : base(std::forward<Args>(args)...),
-        m_rg(base::template add_output<value_type>("residual_g", &mixed_system_t::compute)),
+        m_rg(base::template add_output<value_type>("residual_g")),
         m_rB(base::template add_output<t2>("residual_B")),
         m_jgg(base::template add_output<value_type>("jacobian_g_g")),
         m_jgB(base::template add_output<t2>("jacobian_g_B")),
@@ -332,6 +334,7 @@ public:
       m_P = t2{0.5, 0.1, 0.2,
                0.1, 0.7, 0.3,
                0.2, 0.3, 0.9};
+    base::add_callback(&mixed_system_t::compute, m_rg, m_rB, m_jgg, m_jgB, m_jBg, m_jBB).reads(m_g, m_B);
   }
 
   static input_parameter_controller parameters() {
@@ -656,7 +659,7 @@ public:
   template<typename... Args>
   explicit strain_coupled_system(Args&&... args)
       : base(std::forward<Args>(args)...),
-        m_rg(base::add_output<T>("residual_g", &strain_coupled_system::compute)),
+        m_rg(base::add_output<T>("residual_g")),
         m_rB(base::add_output<tensor2>("residual_B")),
         m_jgg(base::add_output<T>("jacobian_g_g")),
         m_jgB(base::add_output<tensor2>("jacobian_g_B")),
@@ -674,6 +677,8 @@ public:
     m_eps = tensor2{0.03, 0.01, 0.00,
                     0.01, 0.05, 0.02,
                     0.00, 0.02, 0.07};
+    base::add_callback(&strain_coupled_system::compute, m_rg, m_rB, m_jgg, m_jgB, m_jBg, m_jBB, m_dRg, m_dRB)
+        .reads(m_g, m_B);
   }
 
   static input_parameter_controller parameters() {
@@ -858,10 +863,12 @@ public:
       : base(std::forward<Args>(args)...),
         // Declared scalar, but the solver expects a tensor2 for a sym_tensor
         // unknown's residual.
-        m_rB(base::add_output<T>("residual_B", &mistyped_system::compute)),
+        m_rB(base::add_output<T>("residual_B")),
         m_jBB(base::add_output<T>("jacobian_B_B")),
         m_solver(base::get_parameter<std::string>("solver_name")),
-        m_B(base::add_input<tensor2>(m_solver, "B", EdgeKind::Local)) {}
+        m_B(base::add_input<tensor2>(m_solver, "B", EdgeKind::Local)) {
+    base::add_callback(&mistyped_system::compute, m_rB, m_jBB).reads();
+  }
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
@@ -914,14 +921,16 @@ public:
       : base(std::forward<Args>(args)...),
         m_rx(base::add_output<T>("residual_x")),
         m_ry(base::add_output<T>("residual_y")),
-        // compute is bound to a JACOBIAN block, not a residual.
-        m_jxx(base::add_output<T>("jacobian_x_x", &jacobian_bound_system::compute)),
+        m_jxx(base::add_output<T>("jacobian_x_x")),
         m_jxy(base::add_output<T>("jacobian_x_y")),
         m_jyx(base::add_output<T>("jacobian_y_x")),
         m_jyy(base::add_output<T>("jacobian_y_y")),
         m_solver(base::get_parameter<std::string>("solver_name")),
         m_x(base::add_input<T>(m_solver, "x", EdgeKind::Local)),
-        m_y(base::add_input<T>(m_solver, "y", EdgeKind::Local)) {}
+        m_y(base::add_input<T>(m_solver, "y", EdgeKind::Local)) {
+    // compute is bound to a JACOBIAN block (the first output), not a residual.
+    base::add_callback(&jacobian_bound_system::compute, m_jxx, m_rx, m_ry, m_jxy, m_jyx, m_jyy).reads(m_x, m_y);
+  }
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};

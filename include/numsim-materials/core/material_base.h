@@ -76,22 +76,32 @@ public:
 protected:
   material_handler& m_material_handler;
 
-  /// Create an output property and optionally bind an update callback.
+  /// Create an output property; add_callback() binds the callback that fills it.
   template<typename T>
-  T& add_output(std::string const& property_name,
-                void (Derived::*callback)() = nullptr) {
-    auto& ref = base::template add_property<T>(property_name);
+  T& add_output(std::string const& property_name) {
+    return base::template add_property<T>(property_name);
+  }
+
+  /// Create a history output property; add_callback() binds the callback that fills it.
+  template<typename T>
+  history_property<T>& add_history_output(std::string const& property_name, T initial = T{}) {
+    return base::template add_history<T>(property_name, std::move(initial));
+  }
+
+  template<typename T>
+  [[deprecated("bind the callback with add_callback(&callback, output).reads(...)")]]
+  T& add_output(std::string const& property_name, void (Derived::*callback)()) {
+    auto& ref = add_output<T>(property_name);
     if (callback)
       bind_callback(property_name, callback);
     return ref;
   }
 
-  /// Create a history output property and optionally bind an update callback.
   template<typename T>
-  history_property<T>& add_history_output(std::string const& property_name,
-                                           void (Derived::*callback)() = nullptr,
+  [[deprecated("bind the callback with add_callback(&callback, output).reads(...)")]]
+  history_property<T>& add_history_output(std::string const& property_name, void (Derived::*callback)(),
                                            T initial = T{}) {
-    auto& ref = base::template add_history<T>(property_name, std::move(initial));
+    auto& ref = add_history_output<T>(property_name, std::move(initial));
     if (callback)
       bind_callback(property_name, callback);
     return ref;
@@ -100,12 +110,14 @@ protected:
   /// `output` (as add_output returned it) is a function of the parameters and of the material's inputs only:
   /// once they are constant too (over global edges), the engine computes it once instead of on every update.
   template <detail::verifiable T>
+  [[deprecated("declare the reads of the callback filling it: add_callback(...).reads(...)")]]
   void constant_output(T const& output) {
     base::declare_constant(&output, std::nullopt);
   }
 
   /// As above, reading only `reads` of the inputs.
   template <detail::verifiable T>
+  [[deprecated("declare the reads of the callback filling it: add_callback(...).reads(...)")]]
   void constant_output(T const& output, std::vector<input_wire_base const*> reads) {
     base::declare_constant(&output, std::move(reads));
   }
@@ -188,12 +200,14 @@ protected:
   /// `output` has no callback of its own: the callback of `writer` fills it. Lets the engine skip a constant
   /// callback while another callback of the material keeps running.
   template <typename T, typename U>
+  [[deprecated("pass the output to the writer's add_callback(&callback, outputs...)")]]
   void written_by(T const& output, U const& writer) {
     base::declare_written_by(&output, &writer);
   }
 
   /// The callback of `output` runs after the callback of `earlier` (both outputs of this material).
   template <typename T, typename U>
+  [[deprecated("declare the read of the earlier output: add_callback(...).reads(earlier)")]]
   void runs_after(T const& output, U const& earlier) {
     base::declare_order(&output, &earlier);
   }
