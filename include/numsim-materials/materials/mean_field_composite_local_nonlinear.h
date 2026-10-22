@@ -2,6 +2,7 @@
 #define NUMSIM_MATERIALS_MEAN_FIELD_COMPOSITE_LOCAL_NONLINEAR_H
 
 #include <algorithm>
+#include <ranges>
 #include <string>
 #include <utility>
 #include <vector>
@@ -34,7 +35,7 @@ public:
         m_used.push_back({r, &base::template input<tensor4>(phases[r], "used_tangent")});
     if (m_used.empty())
       throw std::invalid_argument(base::where() + "no phase names the 'used_tangent' its strain was localised with");
-    base::register_outputs();
+    base::register_outputs(m_residual).reads(base::m_A, base::m_sigma, base::m_C, base::m_c, m_used | std::views::values);
   }
 
   static constexpr char const *type_name() { return "mean_field_composite_local_nonlinear"; }

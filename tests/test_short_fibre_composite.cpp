@@ -135,6 +135,12 @@ TEST(ShortFibre, ConcentrationsAverageToIdentityAndStressIsOnTheTangent) {
   }
 }
 
+TEST(ShortFibre, ConstantPhasesMakeTheCompositeConstant) {
+  auto ctx{build(mostly)};
+  for (auto const *output : {"tangent", "concentration_matrix", "concentration_fibre"})
+    EXPECT_TRUE(ctx->is_constant("sf", output)) << output;
+}
+
 TEST(ShortFibre, StiffnessOrdering) {
   auto al{build(aligned)}, mo{build(mostly)}, ra{build(random3d)};
   auto const &Ca{al->get<tensor4>("sf", "tangent")};

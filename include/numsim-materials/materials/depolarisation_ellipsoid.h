@@ -27,7 +27,7 @@ public:
     for (auto const a : m_semi_axes)
       if (!(a > 0))
         throw std::invalid_argument(base::name() + ": semi_axes must be positive");
-    base::publish();
+    base::register_output();
   }
 
   static input_parameter_controller parameters() {
