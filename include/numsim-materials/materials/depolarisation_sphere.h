@@ -17,7 +17,7 @@ public:
 
   template <typename... Args>
   explicit depolarisation_sphere(Args &&...args) : base(std::forward<Args>(args)...) {
-    base::publish();
+    base::register_output();
   }
 
   static input_parameter_controller parameters() { return base::parameters(); }

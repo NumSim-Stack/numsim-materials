@@ -23,7 +23,7 @@ public:
   explicit depolarisation_cylinder(Args &&...args)
       : base(std::forward<Args>(args)...),
         m_direction(detail::unit_direction(base::template get_parameter<std::vector<value_type>>("direction"), base::name())) {
-    base::publish();
+    base::register_output();
   }
 
   static input_parameter_controller parameters() {
