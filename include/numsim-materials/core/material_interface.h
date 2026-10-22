@@ -321,11 +321,22 @@ protected:
     }
     auto const entries{detail::to_vector(
         outputs | std::views::transform([this](void const* output) { return &output_entry_of("reads", output); }))};
-    if (verifiable && std::ranges::none_of(entries, [](auto const* entry) { return entry->property->is_history(); }))
+    if (verifiable && std::ranges::none_of(entries, [this](auto const* entry) {
+          return entry->property->is_history() || std::ranges::contains(m_stateful, entry->property);
+        }))
       for (auto const* entry : entries) {
         check_undeclared("reads", *entry);
         m_constant_outputs.push_back({entry->property, inputs, own_reads, entry->take});
       }
+  }
+
+  /// The outputs are never constant: the callback filling them keeps state or has side effects.
+  void declare_stateful(std::vector<void const*> const& outputs) {
+    for (auto const* output : outputs) {
+      auto const* property{output_entry_of("stateful", output).property};
+      m_stateful.push_back(property);
+      std::erase_if(m_constant_outputs, [property](auto const& d) { return d.output == property; });
+    }
   }
 
   void declare_written_by(void const* output, void const* writer) {
@@ -379,6 +390,7 @@ private:
   std::unordered_map<void const*, output_entry> m_outputs; ///< value address -> property
   std::vector<constant_declaration> m_constant_outputs;
   std::vector<property_base_type const*> m_read_declared; ///< callbacks with declared reads
+  std::vector<property_base_type const*> m_stateful;      ///< outputs never constant
   std::vector<std::pair<property_base_type const*, property_base_type const*>> m_written_by, m_callback_order;
 
   /// The entry of an output of this material; declarations end at finalize(), when the engine reads them.

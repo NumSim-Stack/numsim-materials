@@ -25,8 +25,7 @@ public:
   template <typename... Args>
   explicit curing_rate(Args&&... args)
       : base(std::forward<Args>(args)...),
-        m_rate(base::template add_output<value_type>(
-            "rate", &curing_rate::compute)),
+        m_rate(base::template add_output<value_type>("rate")),
         m_drate(base::template add_output<value_type>("rate_derivative")),
         m_A(base::template get_parameter<value_type>("A")),
         m_E(base::template get_parameter<value_type>("E")),
@@ -38,7 +37,9 @@ public:
             connection_source{m_temp_name, "state"}, EdgeKind::Global)),
         m_z(base::template add_input<value_type>(
             m_integrator_name, "state", EdgeKind::Local))
-  {}
+  {
+    base::add_callback(&curing_rate::compute, m_rate, m_drate).reads(m_theta, m_z);
+  }
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};

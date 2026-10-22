@@ -138,6 +138,13 @@ protected:
       return *this;
     }
 
+    /// The callback keeps state of its own or acts outside its outputs (it adds to its last value, records a
+    /// row): it runs on every update, however constant its reads are.
+    callback_handle& stateful() {
+      m_owner.declare_stateful(m_outputs);
+      return *this;
+    }
+
   private:
     friend class material_base;
     template <typename A>
