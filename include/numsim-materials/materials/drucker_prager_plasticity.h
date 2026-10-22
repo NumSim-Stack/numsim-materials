@@ -36,8 +36,7 @@ public:
   template <typename... Args>
   explicit drucker_prager_plasticity(Args&&... args)
       : base(std::forward<Args>(args)...),
-        m_stress(base::template add_output<tensor2>(
-            "stress", &drucker_prager_plasticity::compute)),
+        m_stress(base::template add_output<tensor2>("stress")),
         m_tangent(base::template add_output<tensor4>("tangent")),
         m_eps_p(base::template add_history_output<tensor2>("plastic_strain")),
         m_kappa(base::template add_history_output<value_type>("equivalent_plastic_strain")),
@@ -61,6 +60,7 @@ public:
                     m_K_bulk);
     m_C_e = plasticity_detail::make_isotropic_tangent<value_type, Dim>(
         m_K_bulk, m_G);
+    base::add_callback(&drucker_prager_plasticity::compute, m_stress, m_tangent, m_eps_p, m_kappa).reads(m_strain, m_H, m_dH);
   }
 
   static input_parameter_controller parameters() {
