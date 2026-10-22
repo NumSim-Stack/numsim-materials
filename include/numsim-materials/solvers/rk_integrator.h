@@ -68,7 +68,7 @@ public:
       m_df.resize(s);
       m_J.resize(s, s);
     }
-    base::add_callback(&rk_integrator::compute, m_state).reads(m_rate, m_drate);
+    base::add_callback(&rk_integrator::compute, m_state).reads(m_rate, m_drate).drives(m_rate, m_drate);
   }
 
   static input_parameter_controller parameters() {

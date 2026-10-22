@@ -939,3 +939,50 @@ TEST(CallbackEdges, CallbacksOfOneMaterialFormNoFalseCycle) {
   ctx.update();
   EXPECT_EQ(ctx.get<T>("pair", "a"), 2.0 * 3.0);
 }
+
+namespace {
+/// "count" = the call count of the counter named by "target", reached through a material_ref, not an input.
+template <typename Traits>
+class referrer final : public nm::material_base<referrer<Traits>, Traits> {
+public:
+  using base = nm::material_base<referrer<Traits>, Traits>;
+  using value_type = typename base::value_type;
+  using input_parameter_controller = typename base::input_parameter_controller;
+
+  template <typename... Args>
+  explicit referrer(Args &&...args)
+      : base(std::forward<Args>(args)...), m_count(base::template add_output<value_type>("count")),
+        m_target(base::template add_material_ref<counter<Traits>>(base::template get_parameter<std::string>("target"))) {
+    base::add_callback(&referrer::compute, m_count).reads();
+  }
+
+  static input_parameter_controller parameters() {
+    input_parameter_controller para{base::parameters()};
+    nm::required<std::string>(para, "target");
+    return para;
+  }
+
+  void compute() { m_count = m_target.get().calls; }
+
+private:
+  value_type &m_count;
+  nm::material_ref<counter<Traits>, Traits> &m_target;
+};
+
+} // namespace
+
+TEST(HiddenDependencies, AMaterialReachedByReferenceKeepsItsReaderVarying) {
+  ctx_type ctx;
+  param_type p;
+  p.insert<std::string>("name", "r");
+  p.insert<std::string>("target", "b");
+  ctx.create<referrer<policy>>(p); // created first: only an edge runs it after b's source
+  p.clear();
+  p.insert<std::string>("name", "x");
+  auto &x{ctx.create<nm::external_scalar_source<policy>>(p)};
+  make(ctx, "b", reading("x", "state"));
+  ctx.finalize();
+  x.bind(0.0, 1.0);
+  ctx.update();
+  EXPECT_FALSE(ctx.is_constant("r", "count"));
+}

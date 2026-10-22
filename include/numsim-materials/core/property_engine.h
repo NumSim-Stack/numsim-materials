@@ -241,6 +241,24 @@ private:
             add_input_edge(input.get(), prop);
     }
 
+    // dependencies outside the inputs: what a driven callback reads globally, and the material behind a material_ref
+    for (auto* mat : interfaces)
+      for (auto const& d : mat->declared_reads())
+        for (auto const* driven : d.drives)
+          if (auto const it{by_name.find(driven->source_owner())}; it != by_name.end())
+            for (auto const* read : reads_of(*it->second, driven->source_name()))
+              add_input_edge(read, d.callback);
+    for (auto* mat : interfaces)
+      for (auto const& target_name : mat->material_ref_targets())
+        if (auto const it{by_name.find(target_name)}; it != by_name.end())
+          for (auto const* callback : callbacks_of(*mat)) {
+            for (auto const& input : it->second->typed_inputs())
+              add_input_edge(input.get(), callback); // what the target reads, the referencing callbacks read
+            for (auto const& [out, by] : writers.at(it->second))
+              if (by.empty()) // the target cannot fill it: the referencing callbacks do
+                add_edge(prop_key(callback->traits().id), prop_key(out->traits().id));
+          }
+
     // within a material: declared callback order, and an output without a callback after its writers
     for (auto* mat : interfaces) {
       for (auto const& [earlier, later] : mat->callback_order())
@@ -298,6 +316,21 @@ private:
     }
   }
 
+  /// The inputs behind the callback that fills material::property: its declared reads, else every input.
+  static std::vector<const input_wire_base*> reads_of(const material_interface_type& mat, const std::string& property) {
+    for (auto const& d : mat.declared_reads())
+      if (std::ranges::any_of(d.outputs, [&](auto const* out) { return out->traits().id.name == property; }))
+        return d.inputs;
+    return mat.all_inputs();
+  }
+
+  static std::vector<const property_base*> callbacks_of(const material_interface_type& mat) {
+    std::vector<const property_base*> callbacks;
+    std::ranges::copy_if(mat.get_property_registry().produced_properties(), std::back_inserter(callbacks),
+                         [](const property_base* prop) { return static_cast<bool>(prop->traits().update); });
+    return callbacks;
+  }
+
   /// Per material, its outputs without a callback -> the callbacks that may write them: the declared writer
   /// (written_by), else every callback of the material.
   static writers_by_material collect_writers(const std::vector<material_interface_type*>& interfaces) {
@@ -335,7 +368,11 @@ private:
         return false;
       auto const& [mat, d]{it->second};
       auto const own_constant{[&](const property_base* read) { return m_constant.contains(read); }};
-      return std::ranges::all_of(d->own_reads, own_constant) &&
+      auto const targets_constant{std::ranges::all_of(mat->material_ref_targets(), [&](std::string const& name) {
+        auto const target{std::ranges::find(interfaces, name, &material_interface_type::name)};
+        return target == interfaces.end() || std::ranges::all_of((*target)->all_inputs(), reads_constant);
+      })};
+      return targets_constant && std::ranges::all_of(d->own_reads, own_constant) &&
              (d->reads ? std::ranges::all_of(*d->reads, reads_constant)
                        : std::ranges::all_of(mat->typed_inputs(), reads_constant, [](auto const& input) { return input.get(); }));
     }};
@@ -410,8 +447,12 @@ private:
   void track_reads(const std::vector<material_interface_type*>& interfaces) {
     std::unordered_map<const property_base*, std::vector<const input_wire_base*>> declared;
     for (auto const* mat : interfaces)
-      for (auto const& d : mat->declared_reads())
-        declared[d.callback] = d.inputs;
+      for (auto const& d : mat->declared_reads()) {
+        auto& allowed{declared[d.callback] = d.inputs};
+        for (auto const& target : mat->material_ref_targets())
+          if (auto const it{std::ranges::find(interfaces, target, &material_interface_type::name)}; it != interfaces.end())
+            std::ranges::copy((*it)->all_inputs(), std::back_inserter(allowed));
+      }
     for (auto* prop : m_callbacks) {
       if (!m_tracked.insert(prop).second)
         continue;

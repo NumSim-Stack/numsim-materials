@@ -60,7 +60,7 @@ public:
                     m_K_bulk);
     m_C_e = plasticity_detail::make_isotropic_tangent<value_type, Dim>(
         m_K_bulk, m_G);
-    base::add_callback(&drucker_prager_plasticity::compute, m_stress, m_tangent, m_eps_p, m_kappa).reads(m_strain, m_H, m_dH);
+    base::add_callback(&drucker_prager_plasticity::compute, m_stress, m_tangent, m_eps_p, m_kappa).reads(m_strain, m_H, m_dH).drives(m_H, m_dH);
   }
 
   static input_parameter_controller parameters() {

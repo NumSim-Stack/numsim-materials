@@ -234,8 +234,14 @@ public:
     property_base_type const* callback;
     std::vector<input_wire_base const*> inputs;
     std::vector<property_base_type const*> outputs;
+    std::vector<input_wire_base const*> drives; ///< local inputs whose source callbacks it reruns
   };
   const std::vector<read_declaration>& declared_reads() const noexcept { return m_declared_reads; }
+
+  /// The names of the materials this one reaches through material_ref.
+  auto material_ref_targets() const {
+    return m_material_refs | std::views::transform([](auto const& ref) -> const std::string& { return ref->target_name(); });
+  }
 
   /// (output, writer): the output has no callback of its own, the writer's callback fills it.
   const auto& written_outputs() const noexcept { return m_written_by; }
@@ -335,7 +341,7 @@ protected:
     auto const entries{detail::to_vector(
         outputs | std::views::transform([this](void const* output) { return &output_entry_of("reads", output); }))};
     m_declared_reads.push_back(
-        {callback.property, inputs, detail::to_vector(entries | std::views::transform([](auto const* entry) { return entry->property; }))});
+        {callback.property, inputs, detail::to_vector(entries | std::views::transform([](auto const* entry) { return entry->property; })), {}});
     if (verifiable && std::ranges::none_of(entries, [this](auto const* entry) {
           return entry->property->is_history() || std::ranges::contains(m_stateful, entry->property);
         }))
@@ -343,6 +349,20 @@ protected:
         check_undeclared("reads", *entry);
         m_constant_outputs.push_back({entry->property, inputs, own_reads, entry->take});
       }
+  }
+
+  /// The callback filling `callback` (after its reads()) reruns the source callbacks of the local inputs `driven`.
+  void declare_drives(void const* callback, std::vector<input_wire_base const*> driven) {
+    auto const& entry{output_entry_of("drives", callback)};
+    auto const it{std::ranges::find(m_declared_reads, entry.property, &read_declaration::callback)};
+    if (it == m_declared_reads.end())
+      throw std::logic_error("drives(): '" + key_of(entry) + "' declares what it drives before its reads");
+    check_inputs("drives", entry, driven);
+    if (!std::ranges::all_of(driven, [&](auto const* input) {
+          return input->edge_kind() == EdgeKind::Local && std::ranges::contains(it->inputs, input);
+        }))
+      throw std::logic_error("drives(): '" + key_of(entry) + "' drives an input it does not read over a local edge");
+    it->drives = std::move(driven);
   }
 
   /// The outputs are never constant: the callback filling them keeps state or has side effects.
