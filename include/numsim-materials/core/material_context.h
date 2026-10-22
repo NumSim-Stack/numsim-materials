@@ -67,6 +67,8 @@ public:
     for (auto* mat : m_store.interfaces())
       mat->wire_inputs();
     m_engine.build(m_properties, m_store.interfaces());
+    for (auto* mat : m_store.interfaces())
+      mat->bind_revision(m_engine.revision());
     check_integrity();
     m_finalized = true;
   }
@@ -158,6 +160,9 @@ public:
   }
 
   void dump() const { m_engine.dump(); }
+
+  /// Rerun the constant callbacks on every update and throw when an output changes; on in debug builds.
+  void verify_constants(bool on) noexcept { m_engine.verify_constants(on); }
 
   std::vector<material_property_info> build_property_infos() const {
     std::vector<material_property_info> infos;

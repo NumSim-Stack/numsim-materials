@@ -24,6 +24,7 @@ public:
       : base(std::forward<Args>(args)...),
         m_value(base::template add_output<value_type>("value")) {
     m_value = base::template get_parameter<value_type>("value");
+    base::constant_output(m_value);
   }
 
   static input_parameter_controller parameters() {

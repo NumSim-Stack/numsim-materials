@@ -47,13 +47,18 @@ public:
       throw std::invalid_argument("mean_field_strain '" + base::name() + "': needs at least one phase");
     m_kernel->bind(names);
     auto const needs{m_kernel->needs()};
+    std::vector<input_wire_base const *> phase_reads;
     for (std::size_t r{0}; r < names.size(); ++r) {
       m_C.push_back(needs.tangents ? &base::template add_input<tensor4>(names[r], "tangent", EdgeKind::Global) : nullptr);
       m_c.push_back(&base::template add_input<value_type>(names[r], "volume_fraction", EdgeKind::Global));
       m_S.push_back(needs.eshelby && r > 0 ? &base::template add_input<tensor4>(names[r], "eshelby", EdgeKind::Global) : nullptr);
+      phase_reads.insert(phase_reads.end(), {m_C[r], m_c[r], m_S[r]});
       m_A.push_back(&base::template add_output<tensor4>("concentration_" + names[r]));
-      m_eps.push_back(&base::template add_history_output<tensor2>("strain_" + names[r], r == 0 ? &mean_field_strain::compute : nullptr));
+      m_eps.push_back(&base::template add_history_output<tensor2>("strain_" + names[r]));
     }
+    // constant phases: the concentrations are computed once, the strains on every update
+    base::add_callback(&mean_field_strain::compute_concentrations, m_A).reads(phase_reads);
+    base::add_callback(&mean_field_strain::compute_strains, m_eps).reads(m_strain, m_A);
   }
 
   static input_parameter_controller parameters() {
@@ -64,8 +69,8 @@ public:
     return para;
   }
 
-  /// One callback for every output: the concentrations of the tangents as they stand, then the strains.
-  void compute() {
+  /// The concentrations of the tangents as they stand.
+  void compute_concentrations() {
     std::vector<mean_field::phase_view<value_type>> phases;
     value_type total{0};
     for (std::size_t r{0}; r < m_c.size(); ++r) {
@@ -76,11 +81,15 @@ public:
       throw std::invalid_argument("mean_field_strain '" + base::name() + "': the volume fractions must sum to one");
     std::vector<tensor4> A(phases.size());
     m_kernel->concentrations(phases, A);
-    tensor2 const d_eps{m_strain.new_value() - m_strain.old_value()};
-    for (std::size_t r{0}; r < phases.size(); ++r) {
+    for (std::size_t r{0}; r < phases.size(); ++r)
       *m_A[r] = A[r];
-      m_eps[r]->new_value() = m_eps[r]->old_value() + tmech::dcontract(A[r], d_eps);
-    }
+  }
+
+  /// strain_r = strain_r,n + A_r : d_strain, after the concentrations.
+  void compute_strains() {
+    tensor2 const d_eps{m_strain.new_value() - m_strain.old_value()};
+    for (std::size_t r{0}; r < m_A.size(); ++r)
+      m_eps[r]->new_value() = m_eps[r]->old_value() + tmech::dcontract(*m_A[r], d_eps);
   }
 
 private:
