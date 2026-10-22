@@ -24,13 +24,14 @@ public:
   template <typename... Args>
   explicit saint_venant_kirchhoff(Args&&... args)
       : base(std::forward<Args>(args)...),
-        m_P(base::template add_output<tensor2>("stress", &saint_venant_kirchhoff::update)),
+        m_P(base::template add_output<tensor2>("stress")),
         m_A(base::template add_output<tensor4>("tangent")),
         m_K(base::template get_parameter<value_type>("K")),
         m_G(base::template get_parameter<value_type>("G")),
         m_F_name(base::template get_parameter<std::string>("deformation_gradient_source")),
         m_F(base::template add_input<tensor2>(m_F_name, "deformation_gradient", EdgeKind::Global)) {
     m_C = 3 * m_K * vol_projector<value_type, Dim>() + 2 * m_G * dev_projector<value_type, Dim>();
+    base::add_callback(&saint_venant_kirchhoff::update, m_P, m_A).reads(m_F);
   }
 
   static input_parameter_controller parameters() {

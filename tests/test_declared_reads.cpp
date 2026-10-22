@@ -4,8 +4,11 @@
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/materials/constant_scalar.h"
+#include "numsim-materials/materials/incremental_linear_elasticity.h"
+#include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/materials/poisson_ratio_from_moduli.h"
 #include "numsim-materials/materials/tensor_component_stepper.h"
+#include "numsim-materials/umat/external_state_source.h"
 
 // The shipped materials declare what each callback reads (#168): constness follows from the reads, and a
 // constant from the parameters alone is recomputed after set_parameter().
@@ -64,6 +67,33 @@ TEST(DeclaredReadsMigration, AStatefulStepperIsNeverConstant) {
     ctx.update();
   EXPECT_FALSE(ctx.is_constant("step", "strain"));
   EXPECT_EQ(ctx.get<tensor2>("step", "strain")(0, 1), 1.5);
+}
+
+TEST(DeclaredReadsMigration, IncrementalElasticityCopiesAConstantTangentOnce) {
+  ctx_type ctx;
+  param_type p;
+  p.insert<std::string>("name", "strain");
+  auto &strain{ctx.create<nm::external_strain_source<policy>>(p)};
+  p.clear();
+  p.insert<std::string>("name", "total");
+  p.insert<std::string>("strain_producer_name", "strain");
+  p.insert<T>("K", 100.0);
+  p.insert<T>("G", 40.0);
+  ctx.create<nm::linear_elasticity<policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "inc");
+  p.insert<std::string>("strain_source", "strain");
+  p.insert<std::string>("tangent_source", "total");
+  ctx.create<nm::incremental_linear_elasticity<policy>>(p);
+  ctx.finalize();
+  tensor2 eps;
+  eps(0, 0) = 1e-3;
+  strain.bind(tensor2{}, eps);
+  ctx.update();
+  EXPECT_TRUE(ctx.is_constant("total", "tangent"));
+  EXPECT_TRUE(ctx.is_constant("inc", "tangent"));
+  EXPECT_FALSE(ctx.is_constant("inc", "stress"));
+  EXPECT_NEAR(ctx.get<tensor2>("inc", "stress")(0, 0), (100.0 + 4.0 * 40.0 / 3.0) * 1e-3, 1e-12);
 }
 
 } // namespace

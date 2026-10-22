@@ -29,8 +29,7 @@ public:
   template <typename... Args>
   explicit vector_strain_state_function(Args&&... args)
       : base(std::forward<Args>(args)...),
-        m_eps_eq(base::template add_output<value_type>(
-            "equivalent_strain", &vector_strain_state_function::compute)),
+        m_eps_eq(base::template add_output<value_type>("equivalent_strain")),
         m_deps_eq(base::template add_output<tensor2>("d_equivalent_strain")),
         m_strain_source(base::template get_parameter<std::string>("strain_source")),
         m_strain(base::template add_input<tensor2>(
@@ -48,6 +47,7 @@ public:
     m_n = tensor1{};
     if (!m_indices.empty()) m_m(m_indices[0]) = value_type{1};
     if (!n_indices.empty()) m_n(n_indices[0]) = value_type{1};
+    base::add_callback(&vector_strain_state_function::compute, m_eps_eq, m_deps_eq).reads(m_strain);
   }
 
   static input_parameter_controller parameters() {

@@ -27,14 +27,15 @@ public:
   template <typename... Args>
   explicit linear_stress(Args&&... args)
       : base(std::forward<Args>(args)...),
-        m_sig(base::template add_output<tensor2>(
-            "stress", &linear_stress::update_stress)),
+        m_sig(base::template add_output<tensor2>("stress")),
         m_C(base::template add_input<tensor4>(
             base::template get_parameter<std::string>("tangent_source"),
             "tangent", EdgeKind::Global)),
         m_eps(base::template add_input<tensor2>(
             base::template get_parameter<std::string>("strain_source"),
-            base::template get_parameter<std::string>("strain_property"), EdgeKind::Global)) {}
+            base::template get_parameter<std::string>("strain_property"), EdgeKind::Global)) {
+    base::add_callback(&linear_stress::update_stress, m_sig).reads(m_C, m_eps);
+  }
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};

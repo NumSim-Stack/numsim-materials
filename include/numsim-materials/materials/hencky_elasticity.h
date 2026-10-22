@@ -25,7 +25,7 @@ public:
   template <typename... Args>
   explicit hencky_elasticity(Args &&...args)
       : base(std::forward<Args>(args)...),
-        m_P(base::template add_output<tensor2>("stress", &hencky_elasticity::compute)),
+        m_P(base::template add_output<tensor2>("stress")),
         m_A(base::template add_output<tensor4>("tangent")),
         m_log_strain(base::template add_output<tensor2>("log_strain")),
         m_C(base::template add_input<tensor4>(base::template get_parameter<std::string>("tangent_source"),
@@ -33,7 +33,9 @@ public:
         m_F_name(base::template get_parameter<std::string>("deformation_gradient_source")),
         m_F(base::template add_input<tensor2>(m_F_name, "deformation_gradient", EdgeKind::Global)),
         m_F_inv(base::template add_input<tensor2>(m_F_name, "inverse", EdgeKind::Global)),
-        m_eigenstrain(eigenstrain_input()) {}
+        m_eigenstrain(eigenstrain_input()) {
+    base::add_callback(&hencky_elasticity::compute, m_P, m_A, m_log_strain).reads(m_C, m_F, m_F_inv, m_eigenstrain);
+  }
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
