@@ -265,7 +265,7 @@ public:
     }
   }
 
-  /// Every input of the material, as a callback reading all of them declares it (callback_handle::constant()).
+  /// Every input of the material, as a callback reading all of them declares it (callback_handle::reads_all_inputs()).
   std::vector<input_wire_base const*> all_inputs() const {
     return detail::to_vector(m_typed_inputs | std::views::transform([](auto const& input) -> input_wire_base const* { return input.get(); }));
   }

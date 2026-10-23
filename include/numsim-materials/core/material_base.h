@@ -122,19 +122,24 @@ protected:
     base::declare_constant(&output, std::move(reads));
   }
 
-  /// A callback bound by add_callback() and the outputs it fills; constant() only when all are verifiable.
+  /// A callback bound by add_callback() and the outputs it fills; their constness follows from its reads.
   /// Used in the constructor: the declarations it makes live in the material.
   template <bool Verifiable>
   class callback_handle {
   public:
     explicit callback_handle(material_base& owner) : m_owner(owner) {}
 
-    /// The outputs are functions of the parameters and of all inputs: reads() of every input it has at finalize().
+    /// The callback reads the parameters and every input the material has at finalize().
+    callback_handle& reads_all_inputs() {
+      m_owner.declare_reads_all(m_outputs, Verifiable);
+      return *this;
+    }
+
+    [[deprecated("reads_all_inputs(): it declares the reads, constness follows from them")]]
     callback_handle& constant()
       requires Verifiable
     {
-      m_owner.declare_reads_all(m_outputs, Verifiable);
-      return *this;
+      return reads_all_inputs();
     }
 
     /// The callback reads the parameters and `reads` only: inputs and outputs of this material, as references,

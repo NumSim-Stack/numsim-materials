@@ -49,12 +49,13 @@ material_context (facade)
   skipped, or ranges of pointers); the handle declares what it reads, and order and constness follow:
   - `.reads(inputs and own outputs...)` — runs after their sources and the callbacks of those outputs; computed
     once while every read is constant (`set_parameter()` and `get_mutable()` recompute the constants)
-  - `.reads()` — the parameters alone; `.constant()` — every input of the material
+  - `.reads()` — the parameters alone; `.reads_all_inputs()` — every input the material has at `finalize()`
   - `.stateful()` — keeps state of its own or acts outside its outputs: runs on every update
   - `.drives(local inputs...)` — reruns their source callbacks (a solver): runs after what those read
-- Debug builds rerun the constants and throw when one changes (`ctx.verify_constants(bool)`), and throw when a
-  callback reads an input it did not declare (`ctx.check_reads(bool)`); `ctx.is_constant("mat", "prop")`
-- Deprecated: a callback passed to `add_output`, `constant_output`, `written_by`, `runs_after`
+- Debug checks (CMake option `NUMSIM_MATERIALS_DEBUG_CHECKS`, on except in release configurations) rerun the
+  constants and throw when one changes (`ctx.verify_constants(bool)`), and throw when a callback reads an input
+  it did not declare (`ctx.check_reads(bool)`); `ctx.is_constant("mat", "prop")`
+- Deprecated: a callback passed to `add_output`, `constant_output`, `written_by`, `runs_after`, `.constant()`
 - `ctx.update()` — execute all properties in topological order (the constant ones until they have run)
 - `ctx.update_property("mat", "prop")` — selective upstream update
 - `ctx.commit()` / `ctx.revert()` — timestep history management

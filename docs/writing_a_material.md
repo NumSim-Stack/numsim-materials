@@ -83,7 +83,7 @@ The handle then declares what the callback reads besides its parameters:
 | `.reads()` | parameters only | runs it once, and again after `set_parameter()` |
 | `.reads(inputs...)` | these inputs | orders it after their sources; runs it once while they are constant |
 | `.reads(..., own outputs...)` | outputs of other callbacks of this material | orders it after those callbacks |
-| `.constant()` | every input of the material | as `.reads(all inputs)` |
+| `.reads_all_inputs()` | every input the material has at `finalize()` | as `.reads(all inputs)` |
 | `.stateful()` | also state of its own, or acts outside its outputs | runs it on every update |
 
 The callback is the node of the graph. Order and constness follow from the reads:
@@ -124,14 +124,19 @@ Without `.stateful()`, a stepper that reads nothing would run once. A recorder o
 
 ## 5. Checking the declarations
 
-- **Debug builds** (`NDEBUG` unset) rerun every constant callback on each update and throw when an output changes. That catches an incomplete read list and hidden state. `ctx.verify_constants(false)` turns this off, for example in call-counting tests.
-- **Undeclared inputs:** in debug builds, a callback that reads an input it did not declare throws on its first run, constant or not:
+- **The debug checks** are set by the CMake option `NUMSIM_MATERIALS_DEBUG_CHECKS`:
+  - `AUTO` turns them on except in `Release`, `RelWithDebInfo` and `MinSizeRel`; `ON` and `OFF` force them.
+  - CMake defines the setting for every translation unit using the target, independently of `NDEBUG`. Without CMake, the macro of the same name follows `NDEBUG` and must be the same in every translation unit of a program.
+- **Verification:** with the checks on, every constant callback reruns on each update and throws when an output changes. That catches an incomplete read list and hidden state. `ctx.verify_constants(false)` turns this off, for example in call-counting tests.
+- **Undeclared inputs:** with the checks on, a callback that reads an input it did not declare throws on the first run that reads it, constant or not. A read in a branch that has not run yet goes unnoticed until it runs:
 
   ```
   reads(): 'bar::stress' reads 'strain::state', an input it did not declare
   ```
 
-  `ctx.check_reads(false)` turns this off. The check cannot see reads of the callback's own outputs, so declare those carefully (section 7).
+  `ctx.check_reads(false)` turns this off.
+- **Not checked:** reads of the material's own outputs are plain references, which the check cannot see. Declare them carefully (section 7).
+- **After a throw:** the callback has written its outputs already, so the context is partly updated. `revert()` restores history only. Treat the step as failed.
 - **Inspecting the graph:**
   - `ctx.dump()` prints the execution order and marks the constant outputs;
   - `ctx.is_constant(material, property)` asks for one output.
@@ -144,18 +149,23 @@ Without `.stateful()`, a stepper that reads nothing would run once. A recorder o
   base::add_callback(&backward_euler::update, m_delta).reads(m_residual, m_jacobian).drives(m_residual, m_jacobian);
   ```
 
-  The engine then runs the solver after everything the driven callbacks read globally (the time step, the temperature), whatever order the deck creates them in.
-- **`material_ref`:** a material reached through `material_ref` (a `local_newton` solver object) is not an input. The engine treats what that material reads as reads of the referencing material. Its outputs without a callback (the solver's `iterations`) are filled by the referencing callbacks.
+  The engine then runs the solver after everything the driven callbacks read globally (the time step, the temperature), whatever order the deck creates them in. Reads of the solver's own outputs (a function reading the current unknown) add no edge: the solver fills those itself.
+- **What a driven callback must be:** a repeatable trial evaluation. Every call computes from the same committed history and its current inputs, and writes outputs only. It must not commit, count or record, because the solver calls it once per iteration.
+- **Driving any output of a group:** an output filled by another output's callback reruns that callback through `update_source()`.
+- **`material_ref`:** a material reached through `material_ref` (a `local_newton` solver object) is not an input. The engine:
+  - treats what the target reads as reads of every callback of the referencing material;
+  - keeps those callbacks varying unless every output of the target is constant (a target with history, state or a bare output never is);
+  - orders the target's bare outputs after the referencing callbacks, which fill them. A bare output has no callback and no writer, like the solver's `iterations`. A referencing callback that reads it is not ordered before it.
 
 ## 7. Common mistakes
 
 | mistake | symptom | fix |
 |---|---|---|
-| a read missing from `.reads(...)` | stale value on the first update; debug: "reads an input it did not declare" | declare it |
+| a read missing from `.reads(...)` | wrong order, a stale value; with the other reads constant, a value frozen after the first update (release); debug: "reads an input it did not declare" | declare it |
 | an own output read missing | wrong order: the value of the previous update | declare the own output |
 | a parameter copied into a member | `set_parameter()` has no effect | hold it by reference |
 | state in a member (a counter, a last value) | debug: "changed although constant" | `.stateful()`, or make it a history output |
-| `.constant()` on a callback that reads a varying input it does not use | never folded | `.reads(...)` with the inputs it uses |
+| `.reads_all_inputs()` on a callback that does not use a varying input | never folded | `.reads(...)` with the inputs it uses |
 
 ## 8. The deprecated declarations
 
@@ -168,5 +178,6 @@ These still compile, with a deprecation warning, until they are removed:
 | `constant_output(output[, {inputs}])` | `.reads(inputs...)` on the callback that fills it |
 | `written_by(output, writer)` | pass the output to the writer's `add_callback(&callback, writer, output)` |
 | `runs_after(output, earlier)` | `.reads(earlier)` on the callback of `output` |
+| `.constant()` on a callback handle | `.reads_all_inputs()` |
 
 A callback bound the old way has no declared reads. The engine then orders it after every input of its material, never folds it unless `constant_output` says so, and does not check its reads.
