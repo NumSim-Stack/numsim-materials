@@ -3,7 +3,6 @@
 
 #include <algorithm>
 #include <cstddef>
-#include <memory>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -13,6 +12,7 @@
 
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_context.h"
+#include "numsim-materials/driver/material_point.h"
 #include "numsim-materials/core/property_value.h"
 #include "numsim-materials/materials/props_scalar.h"
 #include "numsim-materials/umat/errors.h"
@@ -110,69 +110,42 @@ public:
   };
 
   material_point_evaluator(context_type& ctx, config cfg)
-      : m_ctx(ctx), m_cfg(std::move(cfg)) {
-    if (!m_ctx.is_finalized())
-      throw fatal_error(
-          "material_point_evaluator: the context must be finalized first");
-
-    if (m_cfg.strain_source.empty() == m_cfg.deformation_gradient_source.empty())
-      throw fatal_error(
-          "material_point_evaluator: set exactly one of strain_source and "
-          "deformation_gradient_source");
-
-    std::vector<statev_exclusion> exclusions = m_cfg.extra_exclusions;
-    if (!m_cfg.strain_source.empty()) {
+      : m_ctx(ctx), m_cfg(std::move(cfg)), m_point(ctx, point_config(ctx, m_cfg)) {
+    if (!m_cfg.strain_source.empty())
       m_strain_src = resolve_source<external_strain_source<Traits>>(
           m_cfg.strain_source, "strain_source");
-      exclusions.emplace_back(m_cfg.strain_source, "strain");
-    } else {
+    else
       m_F_src = resolve_source<external_deformation_gradient_source<Traits>>(
           m_cfg.deformation_gradient_source, "deformation_gradient_source");
-      exclusions.emplace_back(m_cfg.deformation_gradient_source,
-                              "deformation_gradient");
-    }
-
-    if (!m_cfg.time_source.empty()) {
+    if (!m_cfg.time_source.empty())
       m_time_src = resolve_source<external_scalar_source<Traits>>(
           m_cfg.time_source, "time_source");
-      exclusions.emplace_back(m_cfg.time_source, "state");
-    }
 
-    m_stress =
-        resolve_property<tensor2>(m_cfg.stress_source, m_cfg.stress_property);
+    m_stress = &m_point.template output<tensor2>(m_cfg.stress_source,
+                                                 m_cfg.stress_property);
     const std::string& tangent_owner =
         m_cfg.tangent_source ? *m_cfg.tangent_source : m_cfg.stress_source;
-    m_tangent = resolve_property<tensor4>(tangent_owner, m_cfg.tangent_property);
+    m_tangent =
+        &m_point.template output<tensor4>(tangent_owner, m_cfg.tangent_property);
 
     if (!m_cfg.plastic_strain_property.empty()) {
       const auto src = connection_source::parse(m_cfg.plastic_strain_property);
-      m_plastic_strain = resolve_history<tensor2>(src.material, src.property);
-    }
-    if (!m_cfg.residual_property.empty()) {
-      const auto src = connection_source::parse(m_cfg.residual_property);
-      m_residual = resolve_property<value_type>(src.material, src.property);
+      m_plastic_strain =
+          &m_point.template history<tensor2>(src.material, src.property);
     }
 
-    m_statev = std::make_unique<statev_map<Traits>>(m_ctx, exclusions);
-
-    // Collected rather than configured: a hand-listed set is a second thing to
-    // keep in step with the graph, and a missed entry is a stale modulus.
-    for (auto* material : m_ctx.materials())
-      if (auto* reader = dynamic_cast<props_scalar<Traits>*>(material)) {
-        m_props_readers.push_back(reader);
-        m_props_needed = std::max(m_props_needed, reader->index() + 1);
-      }
-    m_live_slots.assign(m_props_needed, false);
-    for (const auto* reader : m_props_readers) m_live_slots[reader->index()] = true;
+    // The STATEV layout now, not on first use: history it cannot hold is a
+    // setup fault of the model.
+    static_cast<void>(m_point.history_width());
   }
 
   /// Doubles this material needs in STATEV — what *DEPVAR must be at least.
   [[nodiscard]] std::size_t nstatv() const noexcept {
-    return m_statev->nstatv();
+    return m_point.history_width();
   }
 
   [[nodiscard]] std::vector<std::string> describe_statev() const {
-    return m_statev->describe();
+    return m_point.describe_history();
   }
 
   [[nodiscard]] bool finite_strain() const noexcept { return m_F_src != nullptr; }
@@ -230,27 +203,17 @@ public:
                           value_type dtime, value_type* stress6,
                           value_type* tangent36,
                           std::span<const value_type> drot = {}) {
-    // Every reader publishes zero until bind_props() runs: moduli of zero, an
-    // all-zero DDSDDE, and a host that fails to converge with nothing naming
-    // the cause. Catches never-bound, not stale — the plane-stress solve
-    // re-runs this per iterate without re-binding, so the two are
-    // indistinguishable from here. The registry binds on every call.
-    if (!m_props_readers.empty() && !m_props_bound)
-      throw fatal_error(
-          "material_point_evaluator: this model reads its material constants "
-          "per call — call bind_props() before evaluating");
-
     // STATEV is the only state store: reload it every call, so a repeated call
     // on an unconverged iterate starts from t_n, not from the previous trial.
-    // revert() first: it also clears a context a failed call left failed.
-    m_ctx.revert();
-    m_statev->unpack(statev);
+    // reset() first: it also clears a context a failed call left failed.
+    m_point.reset();
+    m_point.load_history(statev);
 
     // Co-rotational update. STATEV was written in the previous configuration,
     // so it must be rotated after unpack and before the material runs.
-    if (!drot.empty() && m_statev->has_rotatable_history()) {
+    if (!drot.empty() && m_point.has_rotatable_history()) {
       const auto R = rotation_from_buffer<value_type>(drot.data());
-      if (!is_identity_rotation(R)) m_statev->rotate_history(R);
+      if (!is_identity_rotation(R)) m_point.rotate_history(R);
     }
 
     if (finite_strain())
@@ -271,20 +234,12 @@ public:
   /// runs the graph repeatedly for one call and the constants do not change
   /// between iterates. A no-op without props_scalar materials.
   void bind_props(std::span<const value_type> props) {
-    if (m_props_readers.empty()) return;
-    if (props.size() < m_props_needed)
-      throw fatal_error(
-          "material_point_evaluator: the model reads " +
-          std::to_string(m_props_needed) +
-          " host constants but this call supplied " +
-          std::to_string(props.size()) + " — check *USER MATERIAL, CONSTANTS=");
-    for (auto* reader : m_props_readers) reader->bind(props);
-    m_props_bound = true;
+    m_point.bind_props(props);
   }
 
   /// True when any constant is read per call rather than baked into the graph.
   [[nodiscard]] bool has_live_props() const noexcept {
-    return !m_props_readers.empty();
+    return m_point.has_live_props();
   }
 
   /// True when host constant @p slot is read per call, so a change there is
@@ -294,7 +249,7 @@ public:
   /// answering for the whole model would wave the BAKED constants through as
   /// well, leaving them silently at their first value.
   [[nodiscard]] bool is_live_prop(std::size_t slot) const noexcept {
-    return slot < m_live_slots.size() && m_live_slots[slot];
+    return m_point.is_live_prop(slot);
   }
 
   /// Write the updated history back. No commit(): the host owns the timestep.
@@ -306,28 +261,15 @@ public:
       throw fatal_error(
           "material_point_evaluator: evaluate_deformation_gradient needs a "
           "deformation_gradient_source");
-    if (!m_props_readers.empty() && !m_props_bound)
-      throw fatal_error(
-          "material_point_evaluator: this model reads its material constants "
-          "per call — call bind_props() before evaluating");
-    m_ctx.revert(); // as in evaluate()
-    m_statev->unpack(statev);
+    m_point.reset(); // as in evaluate()
+    m_point.load_history(statev);
     m_F_src->bind(F_old, F_new);
     if (m_time_src) m_time_src->bind(time, time + dtime);
     run();
   }
 
   /// One graph update, repeated to the fixed point when a residual is configured.
-  void run() {
-    m_ctx.update();
-    if (!m_residual) return;
-    for (int pass{1}; *m_residual > m_cfg.residual_tolerance; ++pass) {
-      if (pass >= m_cfg.max_passes)
-        throw std::runtime_error(std::format("material_point_evaluator: '{}' did not reach {:g} in {} passes (last {:g})",
-                                             m_cfg.residual_property, m_cfg.residual_tolerance, m_cfg.max_passes, *m_residual));
-      m_ctx.update();
-    }
-  }
+  void run() { m_point.evaluate(); }
 
   /// Stress of the last evaluation (P for finite strain).
   [[nodiscard]] const tensor2& stress() const noexcept { return *m_stress; }
@@ -335,10 +277,14 @@ public:
   /// Tangent of the last evaluation (dP/dF for finite strain).
   [[nodiscard]] const tensor4& tangent() const noexcept { return *m_tangent; }
 
-  void store_statev(value_type* statev) const { m_statev->pack(statev); }
+  void store_statev(value_type* statev) const { m_point.store_history(statev); }
 
   void check_nstatv(std::size_t host_nstatv) const {
-    m_statev->check_nstatv(host_nstatv);
+    if (host_nstatv < nstatv())
+      throw fatal_error(
+          "statev_map: the host provides NSTATV=" +
+          std::to_string(host_nstatv) + " but the configured materials need " +
+          std::to_string(nstatv()) + " — increase *DEPVAR in the input deck");
   }
 
   [[nodiscard]] bool reports_energies() const noexcept {
@@ -406,7 +352,7 @@ private:
     require(c.stress.size() == n, "stress has the wrong length for this element type");
     require(c.ddsdde.size() == n * n, "ddsdde has the wrong length for this element type");
     require(c.drot.empty() || c.drot.size() == 9, "drot must be empty or 3x3");
-    m_statev->check_nstatv(c.statev.size());
+    check_nstatv(c.statev.size());
     return n;
   }
 
@@ -425,37 +371,32 @@ private:
     return typed;
   }
 
-  /// Resolve a property that must be history, because the caller needs both
-  /// sides of the increment.
-  template <typename T>
-  const numsim_core::history_property<T, property_traits>* resolve_history(
-      const std::string& material, const std::string& property) {
-    auto* prop = m_ctx.find_property(material, property);
-    if (!prop)
-      throw fatal_error("material_point_evaluator: property '" + material +
-                        "::" + property + "' not found");
-    auto* hist =
-        dynamic_cast<const numsim_core::history_property<T, property_traits>*>(
-            prop);
-    if (!hist)
-      throw fatal_error("material_point_evaluator: property '" + material +
-                        "::" + property +
-                        "' must be a history property — the energy split needs "
-                        "its value at both ends of the increment");
-    return hist;
-  }
-
-  template <typename T>
-  const T* resolve_property(const std::string& material,
-                            const std::string& property) {
-    auto* prop = m_ctx.find_property(material, property);
-    if (!prop)
-      throw fatal_error("material_point_evaluator: property '" + material +
-                        "::" + property + "' not found");
-    if (auto const* value = property_value<T>(prop))
-      return value;
-    throw fatal_error("material_point_evaluator: property '" + material +
-                      "::" + property + "' has an unexpected type");
+  /// The material point's inputs: the strain or deformation gradient source,
+  /// and the time source. The checks come first, for their messages.
+  static typename material_point<Traits>::config point_config(
+      context_type& ctx, const config& cfg) {
+    if (!ctx.is_finalized())
+      throw fatal_error(
+          "material_point_evaluator: the context must be finalized first");
+    if (cfg.strain_source.empty() == cfg.deformation_gradient_source.empty())
+      throw fatal_error(
+          "material_point_evaluator: set exactly one of strain_source and "
+          "deformation_gradient_source");
+    typename material_point<Traits>::config point{
+        .host_owned = cfg.extra_exclusions,
+        .residual_property = cfg.residual_property,
+        .residual_tolerance = cfg.residual_tolerance,
+        .max_passes = cfg.max_passes};
+    for (const auto* source : {&cfg.strain_source,
+                               &cfg.deformation_gradient_source,
+                               &cfg.time_source})
+      if (!source->empty()) {
+        if (!ctx.find(*source))
+          throw fatal_error("material_point_evaluator: '" + *source +
+                            "' is not a material in this context");
+        point.inputs.push_back(*source);
+      }
+    return point;
   }
 
   context_type& m_ctx;
@@ -465,14 +406,9 @@ private:
   external_scalar_source<Traits>* m_time_src{nullptr};
   const tensor2* m_stress{nullptr};
   const tensor4* m_tangent{nullptr};
-  const value_type* m_residual{nullptr}; ///< null without a residual_property
   const numsim_core::history_property<tensor2, property_traits>*
       m_plastic_strain{nullptr};
-  std::unique_ptr<statev_map<Traits>> m_statev;
-  std::vector<props_scalar<Traits>*> m_props_readers;
-  std::vector<bool> m_live_slots;
-  std::size_t m_props_needed{0};
-  bool m_props_bound{false};
+  material_point<Traits> m_point;
 };
 
 }  // namespace numsim::materials::umat
