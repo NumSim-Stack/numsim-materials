@@ -1,6 +1,7 @@
 #ifndef NUMSIM_MATERIALS_SCALAR_SPLIT_H
 #define NUMSIM_MATERIALS_SCALAR_SPLIT_H
 
+#include <ranges>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -43,8 +44,8 @@ public:
   }
 
   void compute() {
-    for (std::size_t i{0}; i < m_parts.size(); ++i)
-      *m_parts[i] = m_weights[i] * m_source.get();
+    for (auto const& [part, weight] : std::views::zip(m_parts, m_weights))
+      *part = weight * m_source.get();
   }
 
 private:
