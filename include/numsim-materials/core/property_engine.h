@@ -92,6 +92,12 @@ public:
   /// Throw when a callback reads an input it did not declare (compiled in with NUMSIM_MATERIALS_DEBUG_CHECKS).
   void check_reads(bool on) noexcept { *m_check_reads = on; }
 
+  /// Off: every callback runs on every update, the constant ones too.
+  void fold_constants(bool on) noexcept {
+    m_fold = on;
+    reactivate();
+  }
+
   void commit() {
     for (auto* hp : m_history_properties)
       hp->commit();
@@ -444,7 +450,7 @@ private:
   /// Moves the once-callbacks that `ran` out of the loop; only after reactivate() is there any left.
   template <typename Ran>
   void retire(Ran const& ran) {
-    if (m_retired.size() == m_once.size())
+    if (!m_fold || m_retired.size() == m_once.size())
       return;
     auto const done{std::ranges::stable_partition(m_active, [&](property_base* prop) {
       return !(m_once.contains(prop) && ran(prop));
@@ -558,6 +564,7 @@ private:
   /// once-callback -> its material and that material's constant outputs, for verify()
   std::unordered_map<const property_base*, std::pair<const material_interface_type*, std::vector<const declaration*>>> m_checks;
   bool m_verify{NUMSIM_MATERIALS_DEBUG_CHECKS != 0};
+  bool m_fold{true};
   std::unique_ptr<bool> m_check_reads{std::make_unique<bool>(true)}; ///< stable address for the wrapped callbacks
 };
 
