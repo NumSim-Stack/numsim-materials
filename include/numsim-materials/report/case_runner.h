@@ -62,13 +62,13 @@ bool run_small_strain(nlohmann::json const &doc, load_case<typename Traits::valu
   return true;
 }
 
-/// Cauchy stress components (Abaqus order) and J, appended to the property columns.
+/// Cauchy stress components (symmetric_components order) and J, appended to the property columns.
 template <typename T>
 std::vector<T> cauchy_and_J(tmech::tensor<T, 3, 2> const &F, tmech::tensor<T, 3, 2> const &P) {
   auto const J{tmech::det(F)};
   tmech::tensor<T, 3, 2> const sigma{P * tmech::trans(F) / J};
   std::vector<T> out;
-  for (auto const &[i, j] : voigt_indices)
+  for (auto const &[i, j] : symmetric_indices)
     out.push_back(sigma(i, j));
   out.push_back(J);
   return out;
@@ -83,7 +83,7 @@ bool run_finite_strain(nlohmann::json const &doc, load_case<typename Traits::val
   umat::deformation_gradient_driver<Traits> driver{point.evaluator(), opts};
   property_columns<Traits> const columns{point.context(), parse_columns(doc)};
   auto names{columns.names()};
-  for (auto const &comp : voigt_components)
+  for (auto const &comp : symmetric_components)
     names.push_back("stress_" + std::string{comp});
   names.push_back("J");
   sink.begin(names);
