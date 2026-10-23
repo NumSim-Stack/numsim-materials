@@ -44,6 +44,7 @@ public:
     find_constants(interfaces, writers);
     if constexpr (NUMSIM_MATERIALS_DEBUG_CHECKS)
       track_reads(interfaces);
+    route_to_writers(interfaces);
   }
 
   /// Run the callbacks still to run, in topological order: a constant one only until it has run.
@@ -158,7 +159,7 @@ public:
                  m_property_execution_order.size());
     for (auto* prop : m_property_execution_order)
       numsim_core::println(stderr, "  {}::{}{}{}", prop->traits().id.owner, prop->traits().id.name,
-                   prop->traits().update ? "" : " (no callback)", is_constant(prop) ? " (constant)" : "");
+                   m_routed.contains(prop) ? " (by its writer)" : prop->traits().update ? "" : " (no callback)", is_constant(prop) ? " (constant)" : "");
   }
 
 private:
@@ -241,6 +242,34 @@ private:
             add_input_edge(input.get(), prop);
     }
 
+    // dependencies outside the inputs: what a driven callback reads globally, and the material behind a
+    // material_ref; reads of the material's own outputs order nothing there (it fills them itself)
+    auto const add_outside_edge{[&](const material_interface_type& mat, input_wire_base const* input, const property_base* to) {
+      if (input->source_owner() != mat.name())
+        add_input_edge(input, to);
+    }};
+    for (auto* mat : interfaces)
+      for (auto const& d : mat->declared_reads())
+        for (auto const* driven : d.drives)
+          if (auto const it{by_name.find(driven->source_owner())}; it != by_name.end())
+            for (auto const* read : reads_of(*it->second, driven->source_name()))
+              add_outside_edge(*mat, read, d.callback);
+    for (auto* mat : interfaces)
+      for (auto const& target_name : mat->material_ref_targets())
+        if (auto const it{by_name.find(target_name)}; it != by_name.end()) {
+          auto const& target{*it->second};
+          for (auto const* callback : callbacks_of(*mat)) {
+            for (auto const& input : target.typed_inputs())
+              add_outside_edge(*mat, input.get(), callback); // what the target reads, the referencing callbacks read
+            auto const reads{reads_of(*mat, callback->traits().id.name)};
+            for (auto const* out : bare_outputs(target)) // filled by the referencing callbacks, unless one reads it
+              if (std::ranges::none_of(reads, [&](auto const* read) {
+                    return read->source_owner() == target.name() && read->source_name() == out->traits().id.name;
+                  }))
+                add_edge(prop_key(callback->traits().id), prop_key(out->traits().id));
+          }
+        }
+
     // within a material: declared callback order, and an output without a callback after its writers
     for (auto* mat : interfaces) {
       for (auto const& [earlier, later] : mat->callback_order())
@@ -298,6 +327,31 @@ private:
     }
   }
 
+  /// The inputs behind the callback that fills material::property: its declared reads, else every input.
+  static std::vector<const input_wire_base*> reads_of(const material_interface_type& mat, const std::string& property) {
+    for (auto const& d : mat.declared_reads())
+      if (std::ranges::any_of(d.outputs, [&](auto const* out) { return out->traits().id.name == property; }))
+        return d.inputs;
+    return mat.all_inputs();
+  }
+
+  /// The outputs with no callback of their own and no declared writer.
+  static std::vector<const property_base*> bare_outputs(const material_interface_type& mat) {
+    std::vector<const property_base*> bare;
+    std::ranges::copy_if(mat.get_property_registry().produced_properties(), std::back_inserter(bare), [&](const property_base* prop) {
+      return !prop->traits().update &&
+             !std::ranges::contains(mat.written_outputs(), prop, &std::ranges::range_value_t<decltype(mat.written_outputs())>::first);
+    });
+    return bare;
+  }
+
+  static std::vector<const property_base*> callbacks_of(const material_interface_type& mat) {
+    std::vector<const property_base*> callbacks;
+    std::ranges::copy_if(mat.get_property_registry().produced_properties(), std::back_inserter(callbacks),
+                         [](const property_base* prop) { return static_cast<bool>(prop->traits().update); });
+    return callbacks;
+  }
+
   /// Per material, its outputs without a callback -> the callbacks that may write them: the declared writer
   /// (written_by), else every callback of the material.
   static writers_by_material collect_writers(const std::vector<material_interface_type*>& interfaces) {
@@ -335,7 +389,15 @@ private:
         return false;
       auto const& [mat, d]{it->second};
       auto const own_constant{[&](const property_base* read) { return m_constant.contains(read); }};
-      return std::ranges::all_of(d->own_reads, own_constant) &&
+      // a target is constant when everything it holds is: no history, no state, no bare or undecided output
+      auto const targets_constant{std::ranges::all_of(mat->material_ref_targets(), [&](std::string const& name) {
+        auto const target{std::ranges::find(interfaces, name, &material_interface_type::name)};
+        return target == interfaces.end() ||
+               (std::ranges::all_of((*target)->all_inputs(), reads_constant) &&
+                std::ranges::all_of((*target)->get_property_registry().produced_properties(),
+                                    [&](const property_base* out) { return m_constant.contains(out); }));
+      })};
+      return targets_constant && std::ranges::all_of(d->own_reads, own_constant) &&
              (d->reads ? std::ranges::all_of(*d->reads, reads_constant)
                        : std::ranges::all_of(mat->typed_inputs(), reads_constant, [](auto const& input) { return input.get(); }));
     }};
@@ -409,8 +471,12 @@ private:
   void track_reads(const std::vector<material_interface_type*>& interfaces) {
     std::unordered_map<const property_base*, std::vector<const input_wire_base*>> declared;
     for (auto const* mat : interfaces)
-      for (auto const& d : mat->declared_reads())
-        declared[d.callback] = d.inputs;
+      for (auto const& d : mat->declared_reads()) {
+        auto& allowed{declared[d.callback] = d.inputs};
+        for (auto const& target : mat->material_ref_targets())
+          if (auto const it{std::ranges::find(interfaces, target, &material_interface_type::name)}; it != interfaces.end())
+            std::ranges::copy((*it)->all_inputs(), std::back_inserter(allowed));
+      }
     for (auto* prop : m_callbacks) {
       if (!m_tracked.insert(prop).second)
         continue;
@@ -438,6 +504,19 @@ private:
              std::views::transform([](auto const& prop) { return prop.get(); })};
     std::ranges::copy_if(all, std::back_inserter(m_history_properties), [](auto const* prop) { return prop->is_history(); });
   }
+
+  /// An output filled by another output's callback (an add_callback group, written_by) reruns that callback when
+  /// asked for directly (update_source()); the update loop runs only the writer.
+  void route_to_writers(const std::vector<material_interface_type*>& interfaces) {
+    for (auto const* mat : interfaces)
+      for (auto const& [output, by] : mat->written_outputs()) {
+        auto* routed{find_in_graph(mat->name(), output->traits().id.name)};
+        auto* writer{find_in_graph(mat->name(), by->traits().id.name)};
+        m_routed.insert(routed);
+        routed->traits().update = [writer] { writer->traits().update(); };
+      }
+  }
+  std::unordered_set<const property_base*> m_routed; ///< outputs whose update reruns their writer
 
   /// Collect all upstream dependencies of a property (pointer-based, no string allocation).
   std::unordered_set<property_base*> collect_upstream(const property_base* target) const {
