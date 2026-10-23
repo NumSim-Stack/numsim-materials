@@ -372,6 +372,8 @@ protected:
     auto const it{std::ranges::find(m_declared_reads, entry.property, &read_declaration::callback)};
     if (it == m_declared_reads.end())
       throw std::logic_error("drives(): '" + key_of(entry) + "' declares what it drives before its reads");
+    if (!it->drives.empty())
+      throw std::logic_error("drives(): '" + key_of(entry) + "' declares what it drives twice");
     check_inputs("drives", entry, driven);
     if (!std::ranges::all_of(driven, [&](auto const* input) {
           return input->edge_kind() == EdgeKind::Local && std::ranges::contains(it->inputs, input);
