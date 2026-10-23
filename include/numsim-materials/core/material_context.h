@@ -104,6 +104,12 @@ public:
     std::ofstream out(path, std::ios::binary);
     if (!out)
       throw std::runtime_error("save_state: cannot open '" + path + "'");
+    save_state(out);
+  }
+
+  /// save_state() into a binary stream.
+  void save_state(std::ostream& out) const {
+    check_finalized("save_state");
     for (auto* prop : m_engine.property_execution_order())
       if (prop->is_history()) {
         std::ostringstream bytes;
@@ -121,8 +127,14 @@ public:
     std::ifstream in(path, std::ios::binary);
     if (!in)
       throw std::runtime_error("load_state: cannot open '" + path + "'");
+    load_state(in, path);
+  }
+
+  /// load_state() from a binary stream; `path` names it in the messages.
+  void load_state(std::istream& in, const std::string& path = "stream") {
+    check_finalized("load_state");
     std::unordered_map<std::string, std::string> saved;
-    while (in.peek() != std::ifstream::traits_type::eof()) {
+    while (in.peek() != std::istream::traits_type::eof()) {
       auto key{read_string(in, path)};
       saved[std::move(key)] = read_string(in, path);
     }

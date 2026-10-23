@@ -1,11 +1,13 @@
 #include <gtest/gtest.h>
-#include <filesystem>
+#include <optional>
+#include <sstream>
 #include <string>
 #include <tmech/tmech.h>
 #include <vector>
 #include "numsim-materials/core/material_base.h"
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/core/parameter_helpers.h"
+#include "numsim-materials/driver/material_point.h"
 #include "numsim-materials/materials/j2_plasticity.h"
 #include "numsim-materials/solvers/local_newton.h"
 #include "numsim-materials/umat/external_state_source.h"
@@ -74,8 +76,7 @@ constexpr T K{166.67e3}, G{76.92e3}, sigma_0{250.0}, H{2000.0}, softening{0.5}, 
 /// The model and a driver over it: bind a strain and a temperature, evaluate, accept or reject.
 struct model {
   ctx_type ctx;
-  nm::external_strain_source<policy> *strain{nullptr};
-  nm::external_scalar_source<policy> *temperature{nullptr};
+  std::optional<nm::material_point<policy>> point; ///< engine-owned history
   tensor2 eps_n;     ///< accepted strain
   T T_n{T_ref};      ///< accepted temperature
 
@@ -89,9 +90,9 @@ struct model {
       param_type p;
       p.insert<std::string>("name", name);
       if (name == "strain") {
-        strain = &ctx.create<nm::external_strain_source<policy>>(p);
+        ctx.create<nm::external_strain_source<policy>>(p);
       } else if (name == "temperature") {
-        temperature = &ctx.create<nm::external_scalar_source<policy>>(p);
+        ctx.create<nm::external_scalar_source<policy>>(p);
       } else if (name == "solver") {
         ctx.create<nm::local_newton<policy>>(p);
       } else if (name == "hardening") {
@@ -111,31 +112,33 @@ struct model {
     }
     ctx.finalize();
     ctx.fold_constants(fold);
+    point.emplace(ctx, nm::material_point<policy>::config{.inputs = {"strain", "temperature"}});
   }
 
   /// A trial evaluation from the accepted state: strain eps and temperature temp at the end of the step.
   tensor2 const &evaluate(tensor2 const &eps, T temp) {
-    strain->bind(eps_n, eps);
-    temperature->bind(T_n, temp);
-    ctx.update();
+    point->reset();
+    point->input<nm::external_strain_source<policy>>("strain").bind(eps_n, eps);
+    point->input<nm::external_scalar_source<policy>>("temperature").bind(T_n, temp);
+    point->evaluate();
     return stress();
   }
   void accept(tensor2 const &eps, T temp) {
-    ctx.commit();
+    point->accept();
     eps_n = eps;
     T_n = temp;
   }
-  void reject() { ctx.revert(); }
+  void reject() { point->reset(); }
   /// evaluate() and accept().
   void step(tensor2 const &eps, T temp) {
     evaluate(eps, temp);
     accept(eps, temp);
   }
 
-  tensor2 const &stress() { return ctx.get<tensor2>("j2", "stress"); }
-  tensor4 const &tangent() { return ctx.get<tensor4>("j2", "tangent"); }
-  tensor2 const &plastic_strain() { return ctx.get<tensor2>("j2", "plastic_strain"); }
-  T kappa() { return ctx.get<T>("j2", "equivalent_plastic_strain"); }
+  tensor2 const &stress() const { return point->output<tensor2>("j2", "stress"); }
+  tensor4 const &tangent() const { return point->output<tensor4>("j2", "tangent"); }
+  tensor2 const &plastic_strain() const { return point->output<tensor2>("j2", "plastic_strain"); }
+  T kappa() const { return point->output<T>("j2", "equivalent_plastic_strain"); }
 };
 
 /// Uniaxial-like strain path, a shear part to make the flow direction rotate.
@@ -201,16 +204,15 @@ TEST(ProvingCase, ARejectedStepLeavesTheAcceptedStateIntact) {
 }
 
 TEST(ProvingCase, ARestartContinuesAsTheUninterruptedRun) {
-  auto const path{(std::filesystem::temp_directory_path() / "numsim_proving_case.bin").string()};
   model uninterrupted, before;
   for (auto *m : {&uninterrupted, &before})
     for (int k{1}; k <= 3; ++k)
       m->step(strain_at(k * yield_strain), T_ref + 10 * k);
-  before.ctx.save_state(path);
+  std::stringstream checkpoint;
+  before.point->save(checkpoint);
 
   model restarted;
-  restarted.ctx.load_state(path);
-  std::filesystem::remove(path);
+  restarted.point->load(checkpoint);
   restarted.eps_n = before.eps_n; // the host restores its own state
   restarted.T_n = before.T_n;
   for (int k{4}; k <= 6; ++k)
