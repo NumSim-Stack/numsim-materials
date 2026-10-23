@@ -229,6 +229,14 @@ public:
   };
   const std::vector<constant_declaration>& constant_outputs() const noexcept { return m_constant_outputs; }
 
+  /// A callback with declared reads: the inputs it reads and the outputs it fills (its own first).
+  struct read_declaration {
+    property_base_type const* callback;
+    std::vector<input_wire_base const*> inputs;
+    std::vector<property_base_type const*> outputs;
+  };
+  const std::vector<read_declaration>& declared_reads() const noexcept { return m_declared_reads; }
+
   /// (output, writer): the output has no callback of its own, the writer's callback fills it.
   const auto& written_outputs() const noexcept { return m_written_by; }
   /// (earlier, later): callbacks of this material in the order they must run.
@@ -240,6 +248,20 @@ public:
       if (std::ranges::contains(m_read_declared, reader) && !read->traits().update &&
           !std::ranges::contains(m_written_by, read, &decltype(m_written_by)::value_type::first))
         throw std::logic_error("reads(): '" + m_name + "::" + read->traits().id.name + "' has no callback or writer to run after");
+  }
+
+  /// Gives the callbacks reading every input the inputs the material has now; at finalize(), before the engine reads them.
+  void resolve_all_inputs() {
+    for (auto& d : m_declared_reads | std::views::filter([this](auto const& d) { return std::ranges::contains(m_reads_all, d.callback); })) {
+      d.inputs = all_inputs();
+      for (auto& c : m_constant_outputs | std::views::filter([&](auto const& c) { return std::ranges::contains(d.outputs, c.output); }))
+        c.reads = d.inputs;
+    }
+  }
+
+  /// Every input of the material, as a callback reading all of them declares it (callback_handle::constant()).
+  std::vector<input_wire_base const*> all_inputs() const {
+    return detail::to_vector(m_typed_inputs | std::views::transform([](auto const& input) -> input_wire_base const* { return input.get(); }));
   }
 
   /// The engine's revision counter, bumped by set_parameter(); bound at finalize().
@@ -289,6 +311,12 @@ protected:
     return ref;
   }
 
+  /// The callback filling `outputs` reads every input, as the material has them at finalize().
+  void declare_reads_all(std::vector<void const*> const& outputs, bool verifiable) {
+    declare_reads(outputs, {}, {}, verifiable);
+    m_reads_all.push_back(m_declared_reads.back().callback);
+  }
+
   /// `output` is the value add_property() returned, its address identifies the property.
   void declare_constant(void const* output, std::optional<std::vector<input_wire_base const*>> reads) {
     auto const& entry{output_entry_of("constant_output", output)};
@@ -321,6 +349,8 @@ protected:
     }
     auto const entries{detail::to_vector(
         outputs | std::views::transform([this](void const* output) { return &output_entry_of("reads", output); }))};
+    m_declared_reads.push_back(
+        {callback.property, inputs, detail::to_vector(entries | std::views::transform([](auto const* entry) { return entry->property; }))});
     if (verifiable && std::ranges::none_of(entries, [this](auto const* entry) {
           return entry->property->is_history() || std::ranges::contains(m_stateful, entry->property);
         }))
@@ -390,6 +420,7 @@ private:
   std::unordered_map<void const*, output_entry> m_outputs; ///< value address -> property
   std::vector<constant_declaration> m_constant_outputs;
   std::vector<property_base_type const*> m_read_declared; ///< callbacks with declared reads
+  std::vector<read_declaration> m_declared_reads;
   std::vector<property_base_type const*> m_stateful;      ///< outputs never constant
   std::vector<std::pair<property_base_type const*, property_base_type const*>> m_written_by, m_callback_order;
 
@@ -420,6 +451,7 @@ private:
     return std::ranges::contains(m_written_by, entry.property, &decltype(m_written_by)::value_type::first);
   }
   std::size_t* m_revision{nullptr};
+  std::vector<property_base_type const*> m_reads_all; ///< callbacks reading every input (declare_reads_all)
 };
 
 } // namespace numsim::materials
