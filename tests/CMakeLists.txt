@@ -14,6 +14,7 @@ add_numsim_test(test_read_check_layout test_read_check_layout.cpp read_check_lay
 add_numsim_test(test_engine_contracts test_engine_contracts.cpp)
 add_numsim_test(test_checkpoint test_checkpoint.cpp)
 add_numsim_test(test_console_logger test_console_logger.cpp)
+add_numsim_test(test_proving_case test_proving_case.cpp)
 add_numsim_test(test_materials test_materials.cpp)
 add_numsim_test(test_damage test_damage.cpp)
 add_numsim_test(test_property_recorder test_property_recorder.cpp)
