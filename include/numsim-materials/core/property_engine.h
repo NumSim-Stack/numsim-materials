@@ -49,12 +49,14 @@ public:
 
   /// Run the callbacks still to run, in topological order: a constant one only until it has run.
   void update() {
-    refresh_constants();
-    if (m_verify)
-      std::ranges::for_each(m_retired, [this](property_base* prop) { verify(prop); });
-    for (auto* prop : m_active)
-      prop->traits().update();
-    retire([](property_base*) { return true; });
+    guarded("update", [this] {
+      refresh_constants();
+      if (m_verify)
+        std::ranges::for_each(m_retired, [this](property_base* prop) { verify(prop); });
+      for (auto* prop : m_active)
+        prop->traits().update();
+      retire([](property_base*) { return true; });
+    });
   }
 
   /// Update a single property and all its upstream dependencies.
@@ -67,17 +69,26 @@ public:
   }
 
   /// Update a single property (by pointer) and all its upstream dependencies.
+  /// From a callback (numerical_diff_checker), a reevaluation: every upstream callback runs, constants included,
+  /// and the running update keeps its state.
   void update_property(const property_base* target,
                        const std::unordered_set<const property_base*>& exclude = {}) {
-    refresh_constants();
     auto const subgraph = collect_upstream(target);
     auto const runs{[&](property_base* prop) { return subgraph.contains(prop) && !exclude.contains(prop); }};
-    if (m_verify)
-      for (auto* prop : m_retired | std::views::filter(runs))
-        verify(prop);
-    for (auto* prop : m_active | std::views::filter(runs))
-      prop->traits().update();
-    retire(runs);
+    if (m_running) {
+      for (auto* prop : m_callbacks | std::views::filter(runs))
+        prop->traits().update();
+      return;
+    }
+    guarded("update_property", [&] {
+      refresh_constants();
+      if (m_verify)
+        for (auto* prop : m_retired | std::views::filter(runs))
+          verify(prop);
+      for (auto* prop : m_active | std::views::filter(runs))
+        prop->traits().update();
+      retire(runs);
+    });
   }
 
   /// A property computed once: declared constant (material_base::constant_output) and reading only constants.
@@ -99,11 +110,15 @@ public:
   }
 
   void commit() {
+    if (m_failed)
+      throw std::logic_error("commit(): the last update threw, the context is partly updated: revert() first");
     for (auto* hp : m_history_properties)
       hp->commit();
   }
 
+  /// Restores the history and clears a failed update.
   void revert() {
+    m_failed = false;
     for (auto* hp : m_history_properties)
       hp->revert();
   }
@@ -429,6 +444,24 @@ private:
     reactivate();
   }
 
+  /// Runs `run` as the update in progress; an exception from it leaves the context failed until revert().
+  template <typename Run>
+  void guarded(char const* what, Run&& run) {
+    if (m_running)
+      throw std::logic_error(std::string{what} + "(): called from a callback; a callback reevaluates with update_property()");
+    if (m_failed)
+      throw std::logic_error(std::string{what} + "(): the last update threw, the context is partly updated: revert() first");
+    m_running = true;
+    try {
+      run();
+    } catch (...) {
+      m_running = false;
+      m_failed = true;
+      throw;
+    }
+    m_running = false;
+  }
+
   /// Every callback runs again, the constant ones once more.
   void reactivate() {
     m_active = m_callbacks;
@@ -559,6 +592,8 @@ private:
   std::unordered_map<const property_base*, std::pair<const material_interface_type*, std::vector<const declaration*>>> m_checks;
   bool m_verify{NUMSIM_MATERIALS_DEBUG_CHECKS != 0};
   bool m_fold{true};
+  bool m_running{false}; ///< an update is in progress
+  bool m_failed{false};  ///< the last update threw
   std::unique_ptr<bool> m_check_reads{std::make_unique<bool>(true)}; ///< stable address for the wrapped callbacks
 };
 

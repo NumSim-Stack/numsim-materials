@@ -58,7 +58,8 @@ material_context (facade)
 - Deprecated: a callback passed to `add_output`, `constant_output`, `written_by`, `runs_after`, `.constant()`
 - `ctx.update()` — execute all properties in topological order (the constant ones until they have run)
 - `ctx.update_property("mat", "prop")` — selective upstream update
-- `ctx.commit()` / `ctx.revert()` — timestep history management
+- `ctx.commit()` / `ctx.revert()` — timestep history management; after an update threw, the context refuses
+  `update()` and `commit()` until `revert()`
 - `ctx.save_state("checkpoint.bin")` / `ctx.load_state(...)` — binary checkpoint/restart of the history,
   keyed by property: it restores into a context created in any order and refuses one with other properties
 - `ctx.fold_constants(false)` — run the constant callbacks on every update too (a reference run)

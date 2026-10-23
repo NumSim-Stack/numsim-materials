@@ -242,6 +242,8 @@ public:
 
     // STATEV is the only state store: reload it every call, so a repeated call
     // on an unconverged iterate starts from t_n, not from the previous trial.
+    // revert() first: it also clears a context a failed call left failed.
+    m_ctx.revert();
     m_statev->unpack(statev);
 
     // Co-rotational update. STATEV was written in the previous configuration,
@@ -308,6 +310,7 @@ public:
       throw fatal_error(
           "material_point_evaluator: this model reads its material constants "
           "per call — call bind_props() before evaluating");
+    m_ctx.revert(); // as in evaluate()
     m_statev->unpack(statev);
     m_F_src->bind(F_old, F_new);
     if (m_time_src) m_time_src->bind(time, time + dtime);
