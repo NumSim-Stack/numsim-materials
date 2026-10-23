@@ -59,7 +59,9 @@ material_context (facade)
 - `ctx.update()` — execute all properties in topological order (the constant ones until they have run)
 - `ctx.update_property("mat", "prop")` — selective upstream update
 - `ctx.commit()` / `ctx.revert()` — timestep history management
-- `ctx.save_state("checkpoint.bin")` / `ctx.load_state(...)` — binary checkpoint/restart
+- `ctx.save_state("checkpoint.bin")` / `ctx.load_state(...)` — binary checkpoint/restart of the history,
+  keyed by property: it restores into a context created in any order and refuses one with other properties
+- `ctx.fold_constants(false)` — run the constant callbacks on every update too (a reference run)
 
 `commit()` and `revert()` belong to the driver. Materials and solvers never call
 them.
