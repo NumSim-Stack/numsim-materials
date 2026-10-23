@@ -26,7 +26,7 @@ jobs:
             sudo tee /etc/apt/sources.list.d/llvm.list
           sudo apt-get update
         fi
-        sudo apt-get install -y ${{ matrix.cxx }} cmake
+        sudo apt-get install -y ${{ matrix.cxx }} cmake libeigen3-dev # Eigen 3.4 from the Ubuntu archive, not a clone from gitlab.com
 
     - name: Configure
       run: |
