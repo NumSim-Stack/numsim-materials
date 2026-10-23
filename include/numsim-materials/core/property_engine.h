@@ -36,14 +36,14 @@ public:
   /// Build the execution order from the property registry and material interfaces.
   void build(property_handler& properties,
              const std::vector<material_interface_type*>& interfaces) {
+    std::ranges::for_each(interfaces, &material_interface_type::resolve_all_inputs);
     std::ranges::for_each(interfaces, &material_interface_type::check_reads);
     auto const writers{collect_writers(interfaces)};
     compute_execution_order(properties, interfaces, writers);
     collect_history_properties(properties);
     find_constants(interfaces, writers);
-#ifndef NDEBUG
-    track_reads(interfaces);
-#endif
+    if constexpr (NUMSIM_MATERIALS_DEBUG_CHECKS)
+      track_reads(interfaces);
   }
 
   /// Run the callbacks still to run, in topological order: a constant one only until it has run.
@@ -85,10 +85,10 @@ public:
   /// Bumped by every write outside the graph (set_parameter, get_mutable): constants are recomputed.
   std::size_t* revision() noexcept { return m_revision.get(); }
 
-  /// Rerun the constant callbacks on every update and throw when an output changes (on in debug builds).
+  /// Rerun the constant callbacks on every update and throw when an output changes (on with NUMSIM_MATERIALS_DEBUG_CHECKS).
   void verify_constants(bool on) noexcept { m_verify = on; }
 
-  /// Throw when a callback reads an input it did not declare (debug builds; compiled out under NDEBUG).
+  /// Throw when a callback reads an input it did not declare (compiled in with NUMSIM_MATERIALS_DEBUG_CHECKS).
   void check_reads(bool on) noexcept { *m_check_reads = on; }
 
   void commit() {
@@ -404,7 +404,6 @@ private:
                                     : "changed although constant: it reads more than its parameters and declared inputs"));
   }
 
-#ifndef NDEBUG
   /// Wraps every callback in a scope of the inputs it declared (none: untracked), so a nested callback a solver
   /// reruns is checked against its own declaration; throws after a callback that read an undeclared input.
   void track_reads(const std::vector<material_interface_type*>& interfaces) {
@@ -432,7 +431,6 @@ private:
     }
   }
   std::unordered_set<const property_base*> m_tracked; ///< callbacks wrapped by track_reads()
-#endif
 
   void collect_history_properties(property_handler& properties) {
     m_history_properties.clear();
@@ -480,11 +478,7 @@ private:
   std::size_t m_seen_revision{0};
   /// once-callback -> its material and that material's constant outputs, for verify()
   std::unordered_map<const property_base*, std::pair<const material_interface_type*, std::vector<const declaration*>>> m_checks;
-#ifdef NDEBUG
-  bool m_verify{false};
-#else
-  bool m_verify{true};
-#endif
+  bool m_verify{NUMSIM_MATERIALS_DEBUG_CHECKS != 0};
   std::unique_ptr<bool> m_check_reads{std::make_unique<bool>(true)}; ///< stable address for the wrapped callbacks
 };
 
