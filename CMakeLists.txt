@@ -32,6 +32,9 @@ option(NUMSIM_MATERIALS_BUILD_EXAMPLES  "Build the numsim-materials examples"   
 option(NUMSIM_MATERIALS_ENABLE_PLOTTING "Qt6 + QCustomPlot live plotting"       OFF)
 option(NUMSIM_MATERIALS_BUILD_REPORTS  "Build the material report generator"   OFF)
 option(NUMSIM_MATERIALS_INSTALL         "Install the library and its CMake package" ON)
+set(NUMSIM_MATERIALS_DEBUG_CHECKS AUTO CACHE STRING
+    "Read check and verification of constants: AUTO (off in Release, RelWithDebInfo, MinSizeRel), ON or OFF")
+set_property(CACHE NUMSIM_MATERIALS_DEBUG_CHECKS PROPERTY STRINGS AUTO ON OFF)
 
 include(cmake/numsim_bootstrap.cmake)
 include(NumSimDependency)
@@ -112,6 +115,15 @@ target_include_directories(${PROJECT_NAME}
 )
 
 target_compile_features(${PROJECT_NAME} INTERFACE cxx_std_23)
+# one value for every translation unit using the target: the checks change inline function bodies
+if(NUMSIM_MATERIALS_DEBUG_CHECKS STREQUAL "AUTO")
+  target_compile_definitions(${PROJECT_NAME} INTERFACE
+    NUMSIM_MATERIALS_DEBUG_CHECKS=$<IF:$<CONFIG:Release,RelWithDebInfo,MinSizeRel>,0,1>)
+elseif(NUMSIM_MATERIALS_DEBUG_CHECKS)
+  target_compile_definitions(${PROJECT_NAME} INTERFACE NUMSIM_MATERIALS_DEBUG_CHECKS=1)
+else()
+  target_compile_definitions(${PROJECT_NAME} INTERFACE NUMSIM_MATERIALS_DEBUG_CHECKS=0)
+endif()
 target_link_libraries(${PROJECT_NAME} INTERFACE
   numsim-core::numsim-core tmech::tmech nlohmann_json::nlohmann_json)
 set(NUMSIM_MATERIALS_EXPORTED_DEPS numsim-core tmech nlohmann_json)
