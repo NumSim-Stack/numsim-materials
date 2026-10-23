@@ -33,10 +33,11 @@ public:
   template <typename... Args>
   explicit ref_holder(Args&&... args)
       : base(std::forward<Args>(args)...),
-        m_out(base::template add_output<value_type>("value",
-                                                    &ref_holder::compute)),
+        m_out(base::template add_output<value_type>("value")),
         m_target(base::template add_material_ref<nm::local_newton<Traits>>(
-            base::template get_parameter<std::string>("solver_source"))) {}
+            base::template get_parameter<std::string>("solver_source"))) {
+    base::add_callback(&ref_holder::compute, m_out).reads();
+  }
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};

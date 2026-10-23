@@ -1,7 +1,12 @@
 #ifndef MATERIAL_CONTEXT_H
 #define MATERIAL_CONTEXT_H
 
+#include <cstdint>
 #include <fstream>
+#include <ranges>
+#include <vector>
+#include <sstream>
+#include <unordered_map>
 #include <stdexcept>
 #include <unordered_set>
 #include "numsim-materials/core/material_base.h"
@@ -93,27 +98,57 @@ public:
 
   // --- Checkpoint / Restart ---
 
-  /// Save all history property state to a binary file.
+  /// Save all history property state to a binary file: per property its name, its byte count and its bytes.
   void save_state(const std::string& path) const {
     check_finalized("save_state");
     std::ofstream out(path, std::ios::binary);
     if (!out)
       throw std::runtime_error("save_state: cannot open '" + path + "'");
     for (auto* prop : m_engine.property_execution_order())
-      if (prop->is_history())
-        prop->serialize(out);
+      if (prop->is_history()) {
+        std::ostringstream bytes;
+        prop->serialize(bytes);
+        write_string(out, key_of(*prop));
+        write_string(out, bytes.str());
+      }
   }
 
-  /// Load history property state from a binary file.
-  /// The context must have the same materials in the same order as when saved.
+  /// Load history property state from a binary file. Every history property of this context is restored by
+  /// name, in any creation order. A property missing on either side throws before anything is restored; one of
+  /// another size throws when it is reached.
   void load_state(const std::string& path) {
     check_finalized("load_state");
     std::ifstream in(path, std::ios::binary);
     if (!in)
       throw std::runtime_error("load_state: cannot open '" + path + "'");
+    std::unordered_map<std::string, std::string> saved;
+    while (in.peek() != std::ifstream::traits_type::eof()) {
+      auto key{read_string(in, path)};
+      saved[std::move(key)] = read_string(in, path);
+    }
+    std::vector<property_base*> restored;
+    std::string missing;
     for (auto* prop : m_engine.property_execution_order())
-      if (prop->is_history())
-        prop->deserialize(in);
+      if (prop->is_history()) {
+        if (saved.contains(key_of(*prop)))
+          restored.push_back(prop);
+        else
+          missing += " '" + key_of(*prop) + "'";
+      }
+    if (!missing.empty() || restored.size() != saved.size()) {
+      std::string unknown;
+      for (auto const& key : saved | std::views::keys)
+        if (!std::ranges::contains(restored, key, [](auto const* prop) { return key_of(*prop); }))
+          unknown += " '" + key + "'";
+      throw std::runtime_error("load_state: '" + path + "' does not match this context; missing:" +
+                               (missing.empty() ? " none" : missing) + ", unknown here:" + (unknown.empty() ? " none" : unknown));
+    }
+    for (auto* prop : restored) {
+      std::istringstream bytes{saved.at(key_of(*prop))};
+      prop->deserialize(bytes);
+      if (!bytes || bytes.peek() != std::istringstream::traits_type::eof())
+        throw std::runtime_error("load_state: '" + key_of(*prop) + "' in '" + path + "' has another size");
+    }
   }
 
   // --- Lookup ---
@@ -167,6 +202,9 @@ public:
   /// Throw when a callback reads an input it did not declare; compiled in with NUMSIM_MATERIALS_DEBUG_CHECKS.
   void check_reads(bool on) noexcept { m_engine.check_reads(on); }
 
+  /// Run the constant callbacks on every update too: the reference to check folding against (on by default).
+  void fold_constants(bool on) noexcept { m_engine.fold_constants(on); }
+
   /// Whether the engine computes material::property once (after finalize(); false for an unknown property).
   bool is_constant(const std::string& material, const std::string& property) {
     auto const* prop{find_property(material, property)};
@@ -194,6 +232,23 @@ private:
     if (!m_finalized)
       throw std::logic_error(
           std::string("material_context::") + method + "() called before finalize()");
+  }
+
+  static std::string key_of(const property_base& prop) { return prop.traits().id.owner + "::" + prop.traits().id.name; }
+  static void write_string(std::ostream& out, const std::string& text) {
+    auto const size{static_cast<std::uint64_t>(text.size())};
+    out.write(reinterpret_cast<const char*>(&size), sizeof(size));
+    out.write(text.data(), static_cast<std::streamsize>(text.size()));
+  }
+  static std::string read_string(std::istream& in, const std::string& path) {
+    std::uint64_t size{0};
+    in.read(reinterpret_cast<char*>(&size), sizeof(size));
+    std::string text(in ? size : 0, '\0');
+    if (in)
+      in.read(text.data(), static_cast<std::streamsize>(size));
+    if (!in)
+      throw std::runtime_error("load_state: '" + path + "' is truncated");
+    return text;
   }
 
   void check_integrity() {

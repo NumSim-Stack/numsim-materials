@@ -44,7 +44,7 @@ std::string parameter_type_label() {
 
 /// Types whose recomputed value same_value() can compare with the stored one; only these can be constant.
 template <typename T>
-concept verifiable = std::copy_constructible<T> &&
+concept verifiable = std::copy_constructible<T> && !std::is_pointer_v<T> && // a pointer compares by address
                      (std::is_arithmetic_v<T> || requires(T const& a) { tmech::norm(a - a); } || std::equality_comparable<T>);
 
 /// Whether a recomputed value equals the stored one, to sqrt(eps) relative: independent of the units.
@@ -265,7 +265,7 @@ public:
     }
   }
 
-  /// Every input of the material, as a callback reading all of them declares it (callback_handle::constant()).
+  /// Every input of the material, as a callback reading all of them declares it (callback_handle::reads_all_inputs()).
   std::vector<input_wire_base const*> all_inputs() const {
     return detail::to_vector(m_typed_inputs | std::views::transform([](auto const& input) -> input_wire_base const* { return input.get(); }));
   }

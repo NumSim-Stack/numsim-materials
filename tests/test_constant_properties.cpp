@@ -12,6 +12,10 @@
 #include "numsim-materials/core/parameter_helpers.h"
 #include "numsim-materials/umat/external_state_source.h"
 
+// The fixtures below also test the deprecated declarations (constant_output, written_by, runs_after, a callback
+// passed to add_output) for as long as they exist.
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+
 #define EXPECT_THAT_MESSAGE(statement, exception, text)                                                       \
   try {                                                                                                     \
     statement;                                                                                              \

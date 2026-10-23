@@ -31,7 +31,7 @@ public:
       throw std::invalid_argument("scalar_split '" + base::name() + "': weights must not be empty");
     for (std::size_t i{0}; i < m_weights.size(); ++i)
       m_parts.push_back(&base::template add_output<value_type>("value_" + std::to_string(i)));
-    base::add_callback(&scalar_split::compute, m_parts).constant();
+    base::add_callback(&scalar_split::compute, m_parts).reads_all_inputs();
   }
 
   static input_parameter_controller parameters() {

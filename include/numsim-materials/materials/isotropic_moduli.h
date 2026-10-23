@@ -34,7 +34,7 @@ public:
         m_tolerance(base::template get_parameter<value_type>("tolerance")),
         m_C(base::template add_input<tensor4>(base::template get_parameter<std::string>("tangent_source"),
                                               base::template get_parameter<std::string>("tangent_property"), EdgeKind::Global)) {
-    base::add_callback(&isotropic_moduli::compute, m_K, m_G, m_nu).constant();
+    base::add_callback(&isotropic_moduli::compute, m_K, m_G, m_nu).reads_all_inputs();
   }
 
   static input_parameter_controller parameters() {
