@@ -7,7 +7,7 @@
 #include <iterator>
 #include <memory>
 #include <optional>
-#include <numsim-core/print.h>
+#include <print>
 #include <queue>
 #include <ranges>
 #include <set>
@@ -161,10 +161,10 @@ public:
   }
 
   void dump() const {
-    numsim_core::println(stderr, "=== Property execution order ({} properties) ===",
+    std::println(stderr, "=== Property execution order ({} properties) ===",
                  m_property_execution_order.size());
     for (auto* prop : m_property_execution_order)
-      numsim_core::println(stderr, "  {}::{}{}{}", prop->traits().id.owner, prop->traits().id.name,
+      std::println(stderr, "  {}::{}{}{}", prop->traits().id.owner, prop->traits().id.name,
                    m_routed.contains(prop) ? " (by its writer)" : prop->traits().update ? "" : " (no callback)", is_constant(prop) ? " (constant)" : "");
   }
 
@@ -343,31 +343,28 @@ private:
 
   /// The outputs with no callback of their own and no declared writer.
   static std::vector<const property_base*> bare_outputs(const material_interface_type& mat) {
-    std::vector<const property_base*> bare;
-    std::ranges::copy_if(mat.get_property_registry().produced_properties(), std::back_inserter(bare), [&](const property_base* prop) {
-      return !prop->traits().update &&
-             !std::ranges::contains(mat.written_outputs(), prop, &std::ranges::range_value_t<decltype(mat.written_outputs())>::first);
-    });
-    return bare;
+    auto const written{mat.written_outputs() | std::views::keys};
+    return mat.get_property_registry().produced_properties() | std::views::filter([&](const property_base* prop) {
+             return !has_callback(prop) && !std::ranges::contains(written, prop);
+           }) |
+           std::ranges::to<std::vector<const property_base*>>();
   }
 
   static std::vector<const property_base*> callbacks_of(const material_interface_type& mat) {
-    std::vector<const property_base*> callbacks;
-    std::ranges::copy_if(mat.get_property_registry().produced_properties(), std::back_inserter(callbacks),
-                         [](const property_base* prop) { return static_cast<bool>(prop->traits().update); });
-    return callbacks;
+    return mat.get_property_registry().produced_properties() | std::views::filter(has_callback) |
+           std::ranges::to<std::vector<const property_base*>>();
   }
+
+  static bool has_callback(const property_base* prop) { return static_cast<bool>(prop->traits().update); }
 
   /// Per material, its outputs without a callback -> the callbacks that may write them: the declared writer
   /// (written_by), else every callback of the material.
   static writers_by_material collect_writers(const std::vector<material_interface_type*>& interfaces) {
     writers_by_material result;
-    auto const has_callback{[](const property_base* prop) { return static_cast<bool>(prop->traits().update); }};
     for (auto const* mat : interfaces) {
       auto& writers{result[mat]};
       auto const& props{mat->get_property_registry().produced_properties()};
-      std::vector<const property_base*> callbacks;
-      std::ranges::copy_if(props, std::back_inserter(callbacks), has_callback);
+      auto const callbacks{callbacks_of(*mat)};
       for (auto const* prop : props | std::views::filter(std::not_fn(has_callback)))
         writers[prop] = callbacks;
       for (auto const& [output, by] : mat->written_outputs())
@@ -420,17 +417,15 @@ private:
           return m_constant.contains(w.first) || !std::ranges::contains(w.second, callback);
         });
       }};
-      auto const outputs{detail::to_vector(mat->constant_outputs() |
-                                           std::views::filter([&](auto const& d) { return m_constant.contains(d.output); }) |
-                                           std::views::transform([](auto const& d) { return &d; }))};
+      auto const outputs{mat->constant_outputs() | std::views::filter([&](auto const& d) { return m_constant.contains(d.output); }) |
+                         std::views::transform([](auto const& d) { return &d; }) | std::ranges::to<std::vector>()};
       for (auto const* prop : mat->get_property_registry().produced_properties())
         if (prop->traits().update && m_constant.contains(prop) && writes_constants(prop)) {
           m_once.insert(prop);
           m_checks[prop] = {mat, outputs};
         }
     }
-    m_callbacks = detail::to_vector(m_property_execution_order |
-                                    std::views::filter([](auto const* prop) { return static_cast<bool>(prop->traits().update); }));
+    m_callbacks = m_property_execution_order | std::views::filter(has_callback) | std::ranges::to<std::vector>();
     reactivate();
   }
 
@@ -462,7 +457,7 @@ private:
   /// Reruns a constant callback and throws when one of its material's constant outputs changes.
   void verify(property_base* prop) {
     auto const& [mat, outputs]{m_checks.at(prop)};
-    auto const checks{detail::to_vector(outputs | std::views::transform([](auto const* d) { return d->take(); }))};
+    auto const checks{outputs | std::views::transform([](auto const* d) { return d->take(); }) | std::ranges::to<std::vector>()};
     prop->traits().update();
     for (auto const& [check, d] : std::views::zip(checks, outputs))
       if (auto const verdict{check()}; verdict != detail::verdict::same)
@@ -505,10 +500,9 @@ private:
   std::unordered_set<const property_base*> m_tracked; ///< callbacks wrapped by track_reads()
 
   void collect_history_properties(property_handler& properties) {
-    m_history_properties.clear();
-    auto all{properties.data() | std::views::values | std::views::join | std::views::values |
-             std::views::transform([](auto const& prop) { return prop.get(); })};
-    std::ranges::copy_if(all, std::back_inserter(m_history_properties), [](auto const* prop) { return prop->is_history(); });
+    m_history_properties = properties.data() | std::views::values | std::views::join | std::views::values |
+                           std::views::transform([](auto const& prop) { return prop.get(); }) |
+                           std::views::filter([](auto const* prop) { return prop->is_history(); }) | std::ranges::to<std::vector>();
   }
 
   /// An output filled by another output's callback (an add_callback group, written_by) reruns that callback when

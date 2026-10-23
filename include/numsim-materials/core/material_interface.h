@@ -72,15 +72,6 @@ bool is_finite(T const& a) {
     return true;
 }
 
-/// std::ranges::to<std::vector>(), which libstdc++ 13 lacks.
-template <std::ranges::input_range R>
-auto to_vector(R&& range) {
-  std::vector<std::ranges::range_value_t<R>> result;
-  for (auto&& value : range)
-    result.push_back(std::forward<decltype(value)>(value));
-  return result;
-}
-
 /// A rerun constant compared with its stored value.
 enum class verdict { same, changed, not_finite };
 } // namespace detail
@@ -267,7 +258,8 @@ public:
 
   /// Every input of the material, as a callback reading all of them declares it (callback_handle::reads_all_inputs()).
   std::vector<input_wire_base const*> all_inputs() const {
-    return detail::to_vector(m_typed_inputs | std::views::transform([](auto const& input) -> input_wire_base const* { return input.get(); }));
+    return m_typed_inputs | std::views::transform([](auto const& input) -> input_wire_base const* { return input.get(); }) |
+           std::ranges::to<std::vector>();
   }
 
   /// The engine's revision counter, bumped by set_parameter(); bound at finalize().
@@ -353,10 +345,10 @@ protected:
       m_callback_order.emplace_back(read.property, callback.property); // after its writer: writer -> read
       own_reads.push_back(read.property);
     }
-    auto const entries{detail::to_vector(
-        outputs | std::views::transform([this](void const* output) { return &output_entry_of("reads", output); }))};
-    m_declared_reads.push_back(
-        {callback.property, inputs, detail::to_vector(entries | std::views::transform([](auto const* entry) { return entry->property; })), {}});
+    auto const entries{outputs | std::views::transform([this](void const* output) { return &output_entry_of("reads", output); }) |
+                       std::ranges::to<std::vector>()};
+    m_declared_reads.push_back({callback.property, inputs,
+                                entries | std::views::transform(&output_entry::property) | std::ranges::to<std::vector>(), {}});
     if (verifiable && std::ranges::none_of(entries, [this](auto const* entry) {
           return entry->property->is_history() || std::ranges::contains(m_stateful, entry->property);
         }))

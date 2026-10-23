@@ -1,6 +1,7 @@
 #ifndef NUMSIM_MATERIALS_MEAN_FIELD_COMPOSITE_GLOBAL_H
 #define NUMSIM_MATERIALS_MEAN_FIELD_COMPOSITE_GLOBAL_H
 
+#include <ranges>
 #include <cmath>
 #include <memory>
 #include <stdexcept>
@@ -62,8 +63,8 @@ public:
   void compute() {
     std::vector<mean_field::phase_view<value_type>> phases;
     value_type total{0};
-    for (std::size_t r{0}; r < m_C.size(); ++r) {
-      phases.push_back({m_c[r]->get(), &m_C[r]->get(), m_S[r] ? &m_S[r]->get() : nullptr});
+    for (auto const& [c, C, S] : std::views::zip(m_c, m_C, m_S)) {
+      phases.push_back({c->get(), &C->get(), S ? &S->get() : nullptr});
       total += phases.back().fraction;
     }
     if (std::abs(total - 1) > value_type{1e-10})
@@ -71,9 +72,9 @@ public:
     std::vector<tensor4> A(phases.size());
     m_kernel->concentrations(phases, A);
     m_tangent = tensor4{};
-    for (std::size_t r{0}; r < phases.size(); ++r) {
-      *m_A[r] = A[r];
-      m_tangent += phases[r].fraction * tmech::dcontract(*phases[r].tangent, A[r]);
+    for (auto const& [output, phase, a] : std::views::zip(m_A, phases, A)) {
+      *output = a;
+      m_tangent += phase.fraction * tmech::dcontract(*phase.tangent, a);
     }
   }
 
