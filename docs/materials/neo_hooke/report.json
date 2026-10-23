@@ -1,0 +1,17 @@
+{
+  "title": "neo_hooke",
+  "include": ["../standard_finite_strain.json"],
+  "parameters": {"K": 166666.67, "G": 76923.08},
+  "derived": {"E": "9 * K * G / (3 * K + G)", "Lambda": "K - 2 * G / 3"},
+  "model": {"materials": [
+    {"type": "external_deformation_gradient_source", "name": "F"},
+    {"type": "neo_hooke", "name": "nh", "deformation_gradient_source": "F", "K": "$K", "G": "$G"}]},
+  "point": {"deformation_gradient_source": "F", "stress_source": "nh"},
+  "checks": [
+    {"name": "simple shear: P12 = G γ", "case": "simple_shear", "value": "P_12", "expected": "G * F_12", "tolerance": 1e-9, "relative": true, "plot": {"x": "F_12", "xlabel": "γ"}},
+    {"name": "simple shear: P21 = G γ, J = 1", "case": "simple_shear", "value": "np.maximum(abs(P_21 - G * F_12) / np.maximum(G * abs(F_12), 1e-30), abs(J - 1))", "tolerance": 1e-9},
+    {"name": "simple shear: σ11 = G γ²", "case": "simple_shear", "value": "stress_11", "expected": "G * F_12**2", "tolerance": 1e-9, "relative": true},
+    {"name": "volumetric: P11 = G (λ − 1/λ) + 3 Λ ln λ / λ", "case": "volumetric", "value": "P_11", "expected": "G * (F_11 - 1 / F_11) + 3 * Lambda * np.log(F_11) / F_11", "tolerance": 1e-9, "relative": true, "plot": {"x": "J"}},
+    {"name": "uniaxial stress at small stretch: σ11 ≈ E (λ − 1)", "case": "uniaxial_stress", "where": "abs(F_11 - 1) < 2e-2", "value": "stress_11", "expected": "E * (F_11 - 1)", "tolerance": 3e-2, "relative": true}
+  ]
+}
