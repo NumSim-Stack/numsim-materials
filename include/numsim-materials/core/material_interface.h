@@ -256,6 +256,15 @@ public:
         throw std::logic_error("reads(): '" + m_name + "::" + read->traits().id.name + "' has no callback or writer to run after");
   }
 
+  /// Gives the callbacks reading every input the inputs the material has now; at finalize(), before the engine reads them.
+  void resolve_all_inputs() {
+    for (auto& d : m_declared_reads | std::views::filter([this](auto const& d) { return std::ranges::contains(m_reads_all, d.callback); })) {
+      d.inputs = all_inputs();
+      for (auto& c : m_constant_outputs | std::views::filter([&](auto const& c) { return std::ranges::contains(d.outputs, c.output); }))
+        c.reads = d.inputs;
+    }
+  }
+
   /// Every input of the material, as a callback reading all of them declares it (callback_handle::constant()).
   std::vector<input_wire_base const*> all_inputs() const {
     return detail::to_vector(m_typed_inputs | std::views::transform([](auto const& input) -> input_wire_base const* { return input.get(); }));
@@ -306,6 +315,12 @@ protected:
     auto& ref = *ptr;
     m_typed_inputs.push_back(std::move(ptr));
     return ref;
+  }
+
+  /// The callback filling `outputs` reads every input, as the material has them at finalize().
+  void declare_reads_all(std::vector<void const*> const& outputs, bool verifiable) {
+    declare_reads(outputs, {}, {}, verifiable);
+    m_reads_all.push_back(m_declared_reads.back().callback);
   }
 
   /// `output` is the value add_property() returned, its address identifies the property.
@@ -456,6 +471,7 @@ private:
     return std::ranges::contains(m_written_by, entry.property, &decltype(m_written_by)::value_type::first);
   }
   std::size_t* m_revision{nullptr};
+  std::vector<property_base_type const*> m_reads_all; ///< callbacks reading every input (declare_reads_all)
 };
 
 } // namespace numsim::materials

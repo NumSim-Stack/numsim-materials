@@ -35,7 +35,8 @@ jobs:
           -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
           -DNUMSIM_MATERIALS_BUILD_TESTS=ON \
           -DNUMSIM_MATERIALS_BUILD_EXAMPLES=OFF \
-          -DNUMSIM_MATERIALS_ENABLE_PLOTTING=OFF
+          -DNUMSIM_MATERIALS_ENABLE_PLOTTING=OFF \
+          -DNUMSIM_MATERIALS_DEBUG_CHECKS=ON
 
     - name: Build
       run: cmake --build build -j$(nproc)

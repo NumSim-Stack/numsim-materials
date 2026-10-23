@@ -129,11 +129,11 @@ protected:
   public:
     explicit callback_handle(material_base& owner) : m_owner(owner) {}
 
-    /// The outputs are functions of the parameters and of all inputs: reads() of every input.
+    /// The outputs are functions of the parameters and of all inputs: reads() of every input it has at finalize().
     callback_handle& constant()
       requires Verifiable
     {
-      m_owner.declare_reads(m_outputs, m_owner.all_inputs(), {}, Verifiable);
+      m_owner.declare_reads_all(m_outputs, Verifiable);
       return *this;
     }
 
@@ -184,6 +184,8 @@ protected:
   template <typename... Outputs>
   auto add_callback(void (Derived::*callback)(), Outputs const&... outputs) {
     callback_handle<(detail::verifiable<detail::output_t<Outputs>> && ...)> handle{*this};
+    if (!callback)
+      throw std::logic_error("add_callback(): material '" + base::m_name + "' bound a null callback");
     (collect(handle.m_outputs, outputs), ...);
     if (handle.m_outputs.empty())
       throw std::logic_error("add_callback(): material '" + base::m_name + "' bound a callback to no output");
