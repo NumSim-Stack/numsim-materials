@@ -328,6 +328,9 @@ TEST(LocalNewtonSolver, SolvesAndReportsConvergence) {
       [](T2 x) { return std::pair<T2, T2>{x * x - T2{4}, T2{2} * x}; }, T2{3});
   EXPECT_TRUE(ok.converged);
   EXPECT_NEAR(ok.x, 2.0, 1e-10);
+  // The iteration count of the last solve is a property, for reports.
+  EXPECT_EQ(ctx.get<T2>("solver", "iterations"), T2(ok.iterations));
+  EXPECT_GT(ok.iterations, 0);
 
   // No root: x^2 + 1 = 0. Must report failure rather than a plausible number.
   const auto bad = s.solve(
