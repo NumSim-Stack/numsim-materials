@@ -16,7 +16,6 @@ namespace r = numsim::materials::report;
 using policy = nm::material_policy_default;
 using T = policy::value_type;
 using ctx_type = nm::material_context<policy>;
-using evaluator = nm::umat::material_point_evaluator<policy>;
 using driver = nm::umat::material_point_driver<policy>;
 using columns = r::property_columns<policy>;
 using json = nlohmann::json;
@@ -34,17 +33,15 @@ json j2_model() {
 
 struct j2_point {
   ctx_type ctx;
-  std::unique_ptr<evaluator> ev;
   std::unique_ptr<driver> d;
   driver::step_result res;
 
   j2_point() {
     nm::umat::make_json_builder<policy>(j2_model().dump())(ctx, {});
-    evaluator::config cfg;
-    cfg.strain_source = "strain";
-    cfg.stress_source = "j2";
-    ev = std::make_unique<evaluator>(ctx, cfg);
-    d = std::make_unique<driver>(*ev);
+    policy::ParameterHandler parameters;
+    parameters.insert<std::string>("strain_source", "strain");
+    parameters.insert<std::string>("stress_source", "j2");
+    d = std::make_unique<driver>(ctx, parameters);
     driver::tensor2 eps;
     eps(0, 0) = 5e-3;
     res = d->step(eps, driver::tensor2{}, nm::umat::load_control<T>::uniaxial_stress(), 0, 1);

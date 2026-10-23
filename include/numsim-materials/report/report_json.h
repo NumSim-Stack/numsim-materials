@@ -13,7 +13,6 @@
 #include "numsim-materials/core/tensor_identities.h"
 #include "numsim-materials/report/load_path.h"
 #include "numsim-materials/umat/load_control.h"
-#include "numsim-materials/umat/material_point_evaluator.h"
 
 /// Parsing of report documents into value types; nothing here runs a material.
 namespace numsim::materials::report {
@@ -141,20 +140,24 @@ inline std::vector<refinement_study> parse_studies(nlohmann::json const &doc) {
   return out;
 }
 
-/// "point": the evaluator configuration (strain_source, stress_source, optional tangent_source, time_source).
+/// "point": the parameters of the material-point driver (strain_source or deformation_gradient_source,
+/// stress_source, optional tangent_source and time_source, and optionally tolerance, max_iter, fd_step).
 template <typename Traits>
-typename umat::material_point_evaluator<Traits>::config parse_point(nlohmann::json const &doc) {
-  auto const &p{doc.at("point")};
-  typename umat::material_point_evaluator<Traits>::config cfg;
-  if (is_finite_strain(doc))
-    cfg.deformation_gradient_source = p.at("deformation_gradient_source").template get<std::string>();
-  else
-    cfg.strain_source = p.at("strain_source").template get<std::string>();
-  cfg.stress_source = p.at("stress_source").template get<std::string>();
-  if (p.contains("tangent_source"))
-    cfg.tangent_source = p["tangent_source"].template get<std::string>();
-  cfg.time_source = p.value("time_source", std::string{});
-  return cfg;
+typename Traits::ParameterHandler parse_point(nlohmann::json const &doc) {
+  using T = typename Traits::value_type;
+  typename Traits::ParameterHandler out;
+  for (auto const &[key, value] : doc.at("point").items()) {
+    if (key == "strain_source" || key == "deformation_gradient_source" || key == "stress_source" ||
+        key == "tangent_source" || key == "time_source")
+      out.template insert<std::string>(key, value.template get<std::string>());
+    else if (key == "tolerance" || key == "fd_step")
+      out.template insert<T>(key, value.template get<T>());
+    else if (key == "max_iter")
+      out.template insert<int>(key, value.template get<int>());
+    else
+      throw std::invalid_argument("report: \"point\" has no parameter '" + key + "'");
+  }
+  return out;
 }
 
 /// A report column wired to a graph property.

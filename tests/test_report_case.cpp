@@ -99,11 +99,12 @@ TEST(LoadPath, RejectsStepsOutsideThePath) {
 TEST(ReportJson, ParsesThePointAndTheColumns) {
   auto const doc = json::parse(R"({"point": {"strain_source": "s", "stress_source": "m", "tangent_source": "t"},
     "record": {"kappa": "m::kappa"}})");
-  auto const cfg{r::parse_point<policy>(doc)};
-  EXPECT_EQ(cfg.strain_source, "s");
-  EXPECT_EQ(cfg.stress_source, "m");
-  ASSERT_TRUE(cfg.tangent_source.has_value());
-  EXPECT_EQ(*cfg.tangent_source, "t");
+  auto const p{r::parse_point<policy>(doc)};
+  EXPECT_EQ(p.get<std::string>("strain_source"), "s");
+  EXPECT_EQ(p.get<std::string>("stress_source"), "m");
+  EXPECT_EQ(p.get<std::string>("tangent_source"), "t");
+  EXPECT_THROW(r::parse_point<policy>(json::parse(R"({"point": {"strain": "s"}})")), std::invalid_argument)
+      << "not a driver parameter";
   auto const cols{r::parse_columns(doc)};
   ASSERT_EQ(cols.size(), 3u);
   EXPECT_EQ(cols[0].name, "strain");
@@ -174,9 +175,9 @@ TEST(ReportJson, FiniteStrainPointAndNineComponentTensors) {
   auto const doc = neo_hooke_report();
   EXPECT_TRUE(r::is_finite_strain(doc));
   EXPECT_FALSE(r::is_finite_strain(elastic_report()));
-  auto const cfg{r::parse_point<policy>(doc)};
-  EXPECT_EQ(cfg.deformation_gradient_source, "F");
-  EXPECT_TRUE(cfg.strain_source.empty());
+  auto const p{r::parse_point<policy>(doc)};
+  EXPECT_EQ(p.get<std::string>("deformation_gradient_source"), "F");
+  EXPECT_FALSE(p.contains("strain_source"));
   auto const t{r::parse_tensor<T>(json::parse("[1, 2, 3, 4, 5, 6, 7, 8, 9]"))};
   EXPECT_EQ(t(0, 1), 4);
   EXPECT_EQ(t(1, 0), 7);
@@ -234,10 +235,12 @@ TEST(CaseRunner, ChecksTheTangentOnlyEveryNthStep) {
 
 TEST(CaseRunner, StopsAtAStepThatDoesNotConverge) {
   auto const doc = elastic_report();
+  auto doc_without_iterations = doc;
+  doc_without_iterations["point"]["max_iter"] = 0;
   auto const c{r::parse_case<T>(json::parse(R"({"name": "u", "control": "uniaxial_stress",
     "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], "steps": 3})"))};
   recording_sink sink;
-  EXPECT_FALSE(r::run_case<policy>(doc, c, sink, {.tolerance = 1e-10, .max_iter = 0}));
+  EXPECT_FALSE(r::run_case<policy>(doc_without_iterations, c, sink));
   ASSERT_EQ(sink.records.size(), 2u);
   EXPECT_FALSE(sink.records.back().result.converged);
 }
