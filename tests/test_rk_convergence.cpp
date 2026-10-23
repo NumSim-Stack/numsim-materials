@@ -225,6 +225,7 @@ TEST(RkConvergence, AFailedStageDoesNotInfluenceTheNextCall) {
   ctx_type failed_first, fresh;
   build_j2_rk(failed_first, 1, "implicit_euler");
   EXPECT_THROW(failed_first.update(), std::runtime_error);
+  failed_first.revert(); // the host rejects the failed step (#187)
   dynamic_cast<nm::j2_rk_plasticity<policy>*>(failed_first.find("j2"))->template set_parameter<int>("max_iter", 50);
   failed_first.update(); // the stepper is at its second increment now
   build_j2_rk(fresh, 50, "implicit_euler");
