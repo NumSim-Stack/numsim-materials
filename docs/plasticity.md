@@ -424,12 +424,13 @@ the trial state yields. Two things make that work:
 
 - the solver is created with `graph_driven = false`, so the engine does not
   also run a cold-start solve at every point, elastic ones included. The
-  material checks this and throws otherwise;
+  material checks this at its first update and throws otherwise;
 - the material's residual callback is still a property the engine fires once
   per update, at whatever the solver's unknowns hold. On an elastic step the
-  material therefore calls `vector_newton::reset()`, which zeroes the unknowns:
-  zero is the local solution there, and a stale `Δλ` from the previous point
-  would otherwise be added to this point's `κ` through the hardening pull.
+  material therefore calls `vector_newton::reset()`, which zeroes the unknowns
+  and their strain derivatives: zero is the local solution there, and a stale
+  `Δλ` from the previous point would otherwise be added to this point's `κ`
+  through the hardening pull.
 
 `vector_newton` does hold per-solve state, unlike `local_newton`. It is all
 written by `solve()` and read back by the same `compute()` call, so the

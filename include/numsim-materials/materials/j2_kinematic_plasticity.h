@@ -38,6 +38,11 @@ namespace numsim::materials {
 ///   J_bl = gamma beta - (2/3) C N
 ///   J_bb = (1 + gamma dl) IIsym + (2/3) C dl A
 ///
+/// The symmetric unknown carries the trace of dbeta as well, so the system is
+/// 1 + Dim(Dim+1)/2 wide and its trace row reads (1 + gamma dl) tr(dbeta) =
+/// -gamma dl tr(beta_n): well posed, since the diagonal entry is 1 + gamma dl,
+/// and a back stress that starts traceless stays traceless.
+///
 /// and the partial strain derivatives at fixed unknowns, from ds_tr/deps = 2G IIdev:
 ///
 ///   dR_l/deps = 2G N         dR_b/deps = -(2/3) C dl 2G A
@@ -49,8 +54,8 @@ namespace numsim::materials {
 ///   function = <this material>, graph_driven = false, strain_derivative = true,
 ///   unknowns = [{dlambda, scalar}, {dbeta, sym_tensor}]
 ///
-/// graph_driven = false is checked at the first plastic step; the other three
-/// fail to wire at finalize.
+/// graph_driven = false is checked at the first update, elastic or not; the
+/// other three fail to wire at finalize.
 ///
 /// compute_residual() is bound to residual_dlambda so the solver can pull it,
 /// which also means the engine fires it once per update like every property
@@ -145,6 +150,14 @@ public:
 
   /// Trial state, conditional solve, update. Bound to "stress".
   void compute() {
+    auto& solver = m_solver.get();
+    if (solver.graph_driven())
+      throw std::runtime_error(
+          "j2_kinematic_plasticity '" + std::string(base::name()) +
+          "': solver_source must be a vector_newton with graph_driven = false. "
+          "A graph-driven solver also runs a cold-start solve at every point, "
+          "elastic ones included, where the yield residual has a negative root.");
+
     const auto I = tmech::eye<value_type, Dim, 2>();
     const auto kappa_n = m_kappa.old_value();
     const tensor2 beta_n{m_beta.old_value()};
@@ -158,7 +171,7 @@ public:
     const auto q_tr = equivalent(tensor2{m_s_tr - beta_n});
 
     if (q_tr - m_sigma_0 - m_H.get() <= value_type{0}) {
-      m_solver.get().reset();   // dl = 0, dbeta = 0: see the class comment
+      solver.reset();   // dl = 0, dbeta = 0, dx/deps = 0: see the class comment
       m_eps_p.new_value() = m_eps_p.old_value();
       m_beta.new_value() = beta_n;
       m_stress = tensor2{
@@ -168,13 +181,6 @@ public:
       return;
     }
 
-    auto& solver = m_solver.get();
-    if (solver.graph_driven())
-      throw std::runtime_error(
-          "j2_kinematic_plasticity '" + std::string(base::name()) +
-          "': solver_source must be a vector_newton with graph_driven = false. "
-          "A graph-driven solver also runs a cold-start solve at every point, "
-          "elastic ones included, where the yield residual has a negative root.");
     solver.solve();
     if (!solver.converged())
       throw std::runtime_error("j2_kinematic_plasticity '" +
@@ -188,10 +194,10 @@ public:
     if (dl < value_type{0})
       throw std::runtime_error(
           "j2_kinematic_plasticity '" + std::string(base::name()) +
-          "': the return map produced a negative plastic multiplier, which "
-          "means the combined hardening modulus is at or below -(3G + C). The "
-          "softening branch is unstable and this local return map cannot "
-          "resolve it.");
+          "': the return map produced a negative plastic multiplier: the "
+          "hardening softens faster than 3G + C can absorb (for gamma = 0 that "
+          "is H' <= -(3G + C)). That branch is unstable and this local return "
+          "map cannot resolve it.");
 
     const tensor2 beta{beta_n + m_db.get()};
     const tensor2 eta{m_s_tr - tmech::dev(beta)};
@@ -210,8 +216,8 @@ public:
     // Consistent tangent by the chain rule through the solver's dx/deps:
     //   dsigma/deps = C_e - 2G [ N (x) dl/deps + dl dN/deps ]
     //   dN/deps     = A : deta/deps,   deta/deps = 2G IIdev - dbeta/deps
-    // dbeta/deps is deviatoric in its first pair (the trace rows of R_b carry
-    // no strain dependence), so no IIdev projection is applied to it.
+    // A is deviatoric in its second index pair, so A : deta/deps discards the
+    // spherical part of dbeta/deps by itself; no dev() is applied to it.
     const tensor4 A{(value_type{1.5} * m_IIdev - tmech::otimes(N, N)) / q};
     const tensor4 deta_de{value_type{2} * m_G * m_IIdev - m_db_de.get()};
     m_tangent = tensor4{m_C_e - value_type{2} * m_G *

@@ -231,18 +231,24 @@ public:
 
   bool converged() const noexcept { return m_converged; }
 
-  /// Zero every unknown and mark the solver not converged, without solving.
+  /// Zero every output -- the unknowns and, when wired, their strain
+  /// derivatives -- and mark the solver not converged, without solving.
   ///
   /// For a return map that did not enter the solve, zero IS the solution of
-  /// the local system: no plastic increment. The alternative is to leave the
-  /// previous point's converged values in the output properties, where the
-  /// engine's own pass over the function material's callbacks would read them
-  /// as this point's -- the same point-to-point leak the cold start in solve()
-  /// exists to prevent.
+  /// the local system: no plastic increment, and no dependence of it on the
+  /// strain. The alternative is to leave the previous point's converged values
+  /// in the output properties, where the engine's own pass over the function
+  /// material's callbacks, or any other consumer, would read them as this
+  /// point's -- the same point-to-point leak the cold start in solve() exists
+  /// to prevent.
   void reset() {
     m_converged = false;
     m_x.setZero(m_N);
     scatter_state(m_x);
+    if (m_strain_derivative) {
+      m_dx_de.setZero();
+      scatter_strain_derivative();
+    }
   }
 
   /// Whether ctx.update() reaches solve() through the graph. False means a
@@ -464,8 +470,12 @@ private:
     }
 
     m_dx_de.noalias() = -m_lu.solve(m_dR_de);
+    scatter_strain_derivative();
+  }
 
-    r = 0;
+  /// Write m_dx_de into the d_<name>_d_strain outputs.
+  void scatter_strain_derivative() {
+    std::size_t r = 0;
     for (auto& L : m_dx_de_layout) {
       L->scatter_block(m_dx_de.data(), r, 0, m_N);
       r += L->rows();

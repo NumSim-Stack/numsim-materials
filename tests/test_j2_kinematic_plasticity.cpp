@@ -28,6 +28,20 @@ using t4 = tmech::tensor<T, 3, 4>;
 
 T sigma_eq(const t2& x) { return std::sqrt(T{1.5} * tmech::dcontract(x, x)); }
 
+/// EXPECT_THROW pinned to the message, so a different throw -- a solve that
+/// did not converge, a negative multiplier -- cannot stand in for the one
+/// the test is about.
+template <typename Fn>
+void expect_throw_saying(Fn&& fn, const char* needle) {
+  try {
+    fn();
+    ADD_FAILURE() << "expected a std::runtime_error saying '" << needle << "'";
+  } catch (const std::runtime_error& e) {
+    EXPECT_NE(std::string(e.what()).find(needle), std::string::npos)
+        << "wrong throw: " << e.what();
+  }
+}
+
 /// A strain that is loaded through the solver, and a second one that is not
 /// proportional to it, so the committed back stress is not parallel to the
 /// second trial deviator.
@@ -153,7 +167,8 @@ TEST(J2Kinematic, OnlyRecoveryNeedsMoreThanOneNewtonStep) {
   EXPECT_TRUE(prager.solver->converged());
 
   rig af(40.0, /*max_iter=*/1);
-  EXPECT_THROW(af.step(strain_a()), std::runtime_error)
+  expect_throw_saying([&] { af.step(strain_a()); }, "did not converge");
+  EXPECT_FALSE(af.solver->converged())
       << "with recovery the return is not radial and one step cannot land";
 }
 
@@ -192,9 +207,10 @@ TEST(J2Kinematic, RecoveryReturnsOnTheShiftedSurfaceAndRotatesTheFlow) {
 
 /// Below yield nothing is solved: the stress is the elastic one, the history
 /// is carried, and the solver has never run. The second half loads plastically
-/// first, so the solver's slots hold a converged dl when the elastic step
-/// comes; the engine fires compute_residual() with whatever is there, and that
-/// used to add the stale dl to kappa.
+/// first, so the solver's slots hold a converged dl and dx/deps when the
+/// elastic step comes; the engine fires compute_residual() with whatever is
+/// there, and that used to add the stale dl to kappa. The strain derivatives
+/// are exported properties too and must not carry over either.
 TEST(J2Kinematic, AnElasticStepDoesNotRunTheSolver) {
   const t4 C_e{nm::plasticity_detail::make_isotropic_tangent<T, 3>(rig::K, rig::G)};
   rig r(40.0);
@@ -213,6 +229,8 @@ TEST(J2Kinematic, AnElasticStepDoesNotRunTheSolver) {
   const T kappa_n = r.kappa();
   const t2 beta_n{r.beta()};
   const t2 eps_p_n{r.eps_p()};
+  ASSERT_GT(tmech::norm(r.ctx.get<t2>("solver", "d_dlambda_d_strain")), 0.1);
+  ASSERT_GT(tmech::norm(r.ctx.get<t4>("solver", "d_dbeta_d_strain")), 0.1);
 
   const t2 unloaded{0.9 * strain_a()};
   r.step(unloaded);
@@ -220,16 +238,20 @@ TEST(J2Kinematic, AnElasticStepDoesNotRunTheSolver) {
   EXPECT_DOUBLE_EQ(r.kappa(), kappa_n);
   EXPECT_EQ(tmech::norm(t2{r.beta() - beta_n}), 0.0);
   EXPECT_DOUBLE_EQ(r.dlambda(), 0.0) << "the unknowns are zero, not stale";
+  EXPECT_EQ(tmech::norm(r.ctx.get<t2>("solver", "d_dlambda_d_strain")), 0.0)
+      << "dx/deps is zero, not the previous point's";
+  EXPECT_EQ(tmech::norm(r.ctx.get<t4>("solver", "d_dbeta_d_strain")), 0.0);
   EXPECT_LT(tmech::norm(t2{r.stress() - tmech::dcontract(C_e, t2{unloaded - eps_p_n})}),
             1e-12);
   EXPECT_TRUE(tmech::almost_equal(r.tangent(), C_e, 1e-12));
 }
 
 /// The material needs the solver to itself. A graph-driven solver would run a
-/// second, cold-start solve at every point, elastic ones included.
+/// second, cold-start solve at every point, elastic ones included. Rejected at
+/// the first update, here an elastic one, not at the first yield.
 TEST(J2Kinematic, RejectsAGraphDrivenSolver) {
   rig r(40.0, 50, /*graph_driven=*/true);
-  EXPECT_THROW(r.step(strain_a()), std::runtime_error);
+  expect_throw_saying([&] { r.step(t2{0.1 * strain_a()}); }, "graph_driven = false");
 }
 
 /// Jacobian blocks against central differences of the residual, as directional
