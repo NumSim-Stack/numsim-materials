@@ -30,7 +30,11 @@ endif()
 option(NUMSIM_MATERIALS_BUILD_TESTS     "Build the numsim-materials test suite" ${NUMSIM_MATERIALS_IS_TOP_LEVEL})
 option(NUMSIM_MATERIALS_BUILD_EXAMPLES  "Build the numsim-materials examples"   ${NUMSIM_MATERIALS_IS_TOP_LEVEL})
 option(NUMSIM_MATERIALS_ENABLE_PLOTTING "Qt6 + QCustomPlot live plotting"       OFF)
+option(NUMSIM_MATERIALS_BUILD_REPORTS  "Build the material report generator"   OFF)
 option(NUMSIM_MATERIALS_INSTALL         "Install the library and its CMake package" ON)
+set(NUMSIM_MATERIALS_REPORT_TESTS AUTO CACHE STRING
+    "Report regression tests (Python 3 + numpy, figures: matplotlib): AUTO skips what is missing, ON requires it, OFF")
+set_property(CACHE NUMSIM_MATERIALS_REPORT_TESTS PROPERTY STRINGS AUTO ON OFF)
 
 include(cmake/numsim_bootstrap.cmake)
 include(NumSimDependency)
@@ -174,4 +178,8 @@ endif()
 
 if(NUMSIM_MATERIALS_BUILD_EXAMPLES)
   add_subdirectory(examples)
+endif()
+
+if(NUMSIM_MATERIALS_BUILD_REPORTS)
+  add_subdirectory(reports)
 endif()

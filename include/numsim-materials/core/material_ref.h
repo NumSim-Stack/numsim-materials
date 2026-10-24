@@ -1,7 +1,6 @@
 #ifndef MATERIAL_REF_H
 #define MATERIAL_REF_H
 
-#include <cassert>
 #include <stdexcept>
 #include <string>
 
@@ -23,7 +22,7 @@ public:
 
 /// Typed lazy reference to another material.
 /// Stores the name at construction, pointer resolved at finalize().
-/// After finalize(), get() is noexcept — guaranteed wired.
+/// get() throws before finalize() has wired it (a null target would otherwise surface only in Debug).
 template<typename T, typename Traits>
 class material_ref final : public material_ref_base<Traits> {
 public:
@@ -39,10 +38,25 @@ public:
           "material_ref::wire(): material '" + m_name + "' is not of the requested type");
   }
 
-  const T& get() const noexcept { assert(m_ptr && "material_ref::get() called before wire()"); return *m_ptr; }
-  T& get() noexcept { assert(m_ptr && "material_ref::get() called before wire()"); return *m_ptr; }
+  /// The referenced material; throws until finalize() has wired it.
+  const T& get() const {
+    if (!m_ptr) throw_unwired();
+    return *m_ptr;
+  }
+
+  T& get() {
+    if (!m_ptr) throw_unwired();
+    return *m_ptr;
+  }
 
 private:
+  [[noreturn]] void throw_unwired() const {
+    throw std::logic_error(
+        "material_ref::get(): reference to material '" + m_name +
+        "' is not wired yet. Material references resolve during "
+        "material_context::finalize(); this was reached before that.");
+  }
+
   std::string m_name;
   T* m_ptr{nullptr};
 };
