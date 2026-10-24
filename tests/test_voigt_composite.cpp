@@ -2,6 +2,7 @@
 #include <memory>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_context.h"
+#include "numsim-materials/driver/material_point_driver.h"
 #include "numsim-materials/materials/constant_scalar.h"
 #include "numsim-materials/materials/j2_plasticity.h"
 #include "numsim-materials/materials/linear_elasticity.h"
@@ -12,16 +13,12 @@
 #include "numsim-materials/materials/weighted_sum.h"
 #include "numsim-materials/solvers/local_newton.h"
 #include "numsim-materials/umat/external_state_source.h"
-#include "numsim-materials/umat/load_control.h"
-#include "numsim-materials/umat/material_point_driver.h"
-#include "numsim-materials/umat/material_point_evaluator.h"
 
 /// The nonlinear Voigt rule of mixtures (equal strain in every phase) is a wiring, not a material:
 /// every phase reads the composite strain and weighted_sum adds c_i sigma_i and c_i C_i.
 namespace {
 
 namespace nm = numsim::materials;
-namespace u = numsim::materials::umat;
 using policy = nm::material_policy_default;
 using T = policy::value_type;
 using ctx_type = nm::material_context<policy>;
@@ -95,16 +92,19 @@ std::unique_ptr<ctx_type> build() {
 
 TEST(VoigtComposite, StressIsTheFractionWeightedSumOfThePhaseStresses) {
   auto ctx{build()};
-  u::material_point_evaluator<policy> ev(*ctx, {.strain_source = "strain", .stress_source = "voigt"});
-  u::material_point_driver<policy> d(ev);
+  param_type point;
+  point.insert<std::string>("strain_source", "strain");
+  point.insert<std::string>("stress_source", "voigt");
+  nm::material_point_driver<policy> d(*ctx, point);
   tensor2 eps;
   for (int n{1}; n <= 20; ++n) {
     eps(0, 0) = n * 5e-4;
-    auto const res{d.step(eps, tensor2{}, u::load_control<T>::uniaxial_stress(), n - 1, 1)};
+    auto const res{d.step(eps, tensor2{}, nm::load_control<T>::uniaxial_stress(), n - 1, 1)};
     ASSERT_TRUE(res.converged) << n;
     tensor2 const expected{c_plastic * ctx->get<tensor2>("j2", "stress") + (1 - c_plastic) * ctx->get<tensor2>("elastic", "stress")};
     EXPECT_NEAR(tmech::norm(tensor2{res.stress - expected}), 0, 1e-12) << n;
     EXPECT_LT(d.tangent_error(res), 1e-6) << n; // the Voigt tangent is consistent: sum c_i C_i
+    d.accept();
   }
   EXPECT_GT(ctx->get<T>("j2", "equivalent_plastic_strain"), 0); // the plastic phase did yield
 }
