@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_UMAT_DEFORMATION_GRADIENT_DRIVER_H
-#define NUMSIM_MATERIALS_UMAT_DEFORMATION_GRADIENT_DRIVER_H
+#ifndef NUMSIM_MATERIALS_DRIVER_DEFORMATION_GRADIENT_DRIVER_H
+#define NUMSIM_MATERIALS_DRIVER_DEFORMATION_GRADIENT_DRIVER_H
 
 #include <algorithm>
 #include <string>
@@ -12,14 +12,14 @@
 #include "numsim-materials/driver/material_point.h"
 #include "numsim-materials/umat/errors.h"
 #include "numsim-materials/umat/external_state_source.h"
-#include "numsim-materials/umat/load_control.h"
+#include "numsim-materials/driver/load_control.h"
 
 /// One material point at finite strain under mixed F / P control: Newton on the free components of F.
 ///
 /// The history lives in the graph, as for material_point_driver: step() leaves the converged trial, accept()
 /// makes it the start of the next step, reject() returns to the accepted state. The accepted F is the old
 /// value of the deformation gradient source.
-namespace numsim::materials::umat {
+namespace numsim::materials {
 
 template <typename Traits>
 class deformation_gradient_driver {
@@ -62,7 +62,7 @@ public:
         m_max_iter(m_parameters.template get<int>("max_iter")),
         m_fd_step(m_parameters.template get<value_type>("fd_step")) {
     if (m_max_iter < 0 || !(m_tolerance >= 0) || !(m_fd_step > 0))
-      throw fatal_error("deformation_gradient_driver: max_iter and tolerance must be >= 0, fd_step > 0");
+      throw umat::fatal_error("deformation_gradient_driver: max_iter and tolerance must be >= 0, fd_step > 0");
     if (!text("time_source").empty())
       m_time = &m_point.template input<external_scalar_source<Traits>>(text("time_source"));
   }
@@ -157,6 +157,6 @@ private:
   value_type m_fd_step;
 };
 
-} // namespace numsim::materials::umat
+} // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_UMAT_DEFORMATION_GRADIENT_DRIVER_H
+#endif // NUMSIM_MATERIALS_DRIVER_DEFORMATION_GRADIENT_DRIVER_H
