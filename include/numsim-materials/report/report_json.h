@@ -3,6 +3,10 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
+#include <cstdint>
+#include <limits>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -29,6 +33,7 @@ struct load_case {
   tensor2 stress;              ///< stress target per unit load factor
   load_path<T> path;
   int tangent_every{1};        ///< finite-difference tangent check every n-th step; 0 = never
+  bool finite_strain{false};   ///< which of the two controls was parsed
 
   /// Prescribed strain at a step: linear between the points of its segment.
   [[nodiscard]] tensor2 strain_at(load_step<T> const &s) const {
@@ -58,6 +63,17 @@ inline bool is_finite_strain(nlohmann::json const &doc) {
 }
 
 namespace detail {
+/// `v` as an int of at least `min`; fractions and values beyond int throw.
+inline int as_count(nlohmann::json const &v, std::string const &what, int min) {
+  if (!v.is_number_integer() || v.get<std::int64_t>() < min || v.get<std::int64_t>() > std::numeric_limits<int>::max())
+    throw std::invalid_argument(what + ": expected an integer >= " + std::to_string(min) + ", got " + v.dump());
+  return v.get<int>();
+}
+
+inline int count(nlohmann::json const &c, std::string const &key, int fallback, int min) {
+  return c.contains(key) ? as_count(c[key], "case '" + c.value("name", std::string{}) + "': " + key, min) : fallback;
+}
+
 template <typename Control>
 Control parse_control(nlohmann::json const &c, Control all_prescribed) {
   auto const kind = c.value("control", std::string{"strain"});
@@ -86,9 +102,10 @@ umat::deformation_control<T> parse_deformation_control(nlohmann::json const &c) 
 }
 
 /// Proportional: "direction" times the factors of "path". Non-proportional: "points", strain states
-/// in order (the load factor then counts segments). Both are scaled by "scale".
+/// in order (the load factor then counts segments). Both are scaled by "scale". Only the control of
+/// the point's kinematics is parsed (is_finite_strain()); the other stays all prescribed.
 template <typename T>
-load_case<T> parse_case(nlohmann::json const &c) {
+load_case<T> parse_case(nlohmann::json const &c, bool finite_strain = false) {
   using tensor2 = tmech::tensor<T, 3, 2>;
   auto const scale{c.value("scale", T{1})};
   std::vector<tensor2> points;
@@ -108,10 +125,12 @@ load_case<T> parse_case(nlohmann::json const &c) {
     for (auto const f : factors)
       points.push_back(tensor2{scale * f * direction});
   }
-  return {c.at("name").get<std::string>(), parse_control<T>(c), parse_deformation_control<T>(c), std::move(points),
+  return {c.at("name").get<std::string>(), finite_strain ? load_control<T>::strain() : parse_control<T>(c),
+          finite_strain ? parse_deformation_control<T>(c) : umat::deformation_control<T>::deformation(), std::move(points),
           c.contains("stress") ? parse_symmetric<T>(c["stress"]) : tensor2{},
-          load_path<T>{std::move(factors), c.value("steps", 50), c.contains("points") ? T{1} : scale, c.value("dt", T{1})},
-          c.value("tangent_every", 1)};
+          load_path<T>{std::move(factors), detail::count(c, "steps", 50, 1), c.contains("points") ? T{1} : scale,
+                       c.value("dt", T{1})},
+          detail::count(c, "tangent_every", 1, 0), finite_strain};
 }
 
 /// A case run again with several step counts (document key "studies").
@@ -135,8 +154,32 @@ inline std::vector<refinement_study> parse_studies(nlohmann::json const &doc) {
     auto const it{std::find_if(cases.begin(), cases.end(), [&](auto const &c) { return c.at("name") == case_name; })};
     if (it == cases.end())
       throw std::invalid_argument("study '" + s.at("name").get<std::string>() + "': no case '" + case_name + "'");
-    out.push_back({s.at("name").get<std::string>(), *it, s.at("steps").get<std::vector<int>>()});
+    std::vector<int> steps;
+    for (auto const &n : s.at("steps"))
+      steps.push_back(detail::as_count(n, "study '" + s.at("name").get<std::string>() + "': steps", 1));
+    out.push_back({s.at("name").get<std::string>(), *it, std::move(steps)});
   }
+  return out;
+}
+
+/// The file stems the report writes, cases first, then <study>_<steps>: no path, all distinct.
+inline std::vector<std::string> output_stems(nlohmann::json const &doc) {
+  std::vector<std::string> out;
+  auto const add = [&](std::string stem) {
+    bool const plain{!stem.empty() && stem != "." && stem != ".." && std::ranges::none_of(stem, [](unsigned char ch) {
+      return ch == '/' || ch == '\\' || std::iscntrl(ch);
+    })};
+    if (!plain)
+      throw std::invalid_argument("report: '" + stem + "' is no file name in the output directory");
+    if (std::ranges::contains(out, stem))
+      throw std::invalid_argument("report: two outputs are named '" + stem + "'");
+    out.push_back(std::move(stem));
+  };
+  for (auto const &c : doc.at("cases"))
+    add(c.at("name").get<std::string>());
+  for (auto const &study : parse_studies(doc))
+    for (auto const n : study.steps)
+      add(study.name + "_" + std::to_string(n));
   return out;
 }
 
@@ -153,7 +196,7 @@ typename Traits::ParameterHandler parse_point(nlohmann::json const &doc) {
     else if (key == "tolerance" || key == "fd_step")
       out.template insert<T>(key, value.template get<T>());
     else if (key == "max_iter")
-      out.template insert<int>(key, value.template get<int>());
+      out.template insert<int>(key, detail::as_count(value, "report: \"point\": max_iter", 0));
     else
       throw std::invalid_argument("report: \"point\" has no parameter '" + key + "'");
   }

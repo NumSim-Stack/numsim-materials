@@ -1,6 +1,7 @@
 #ifndef NUMSIM_MATERIALS_REPORT_CASE_RUNNER_H
 #define NUMSIM_MATERIALS_REPORT_CASE_RUNNER_H
 
+#include <stdexcept>
 #include <string>
 #include <vector>
 #include <utility>
@@ -116,7 +117,9 @@ bool run_finite_strain(nlohmann::json const &doc, load_case<typename Traits::val
 template <typename Traits, typename Sink>
   requires step_sink<Sink, Traits>
 bool run_case(nlohmann::json const &doc, load_case<typename Traits::value_type> const &c, Sink &sink) {
-  if (is_finite_strain(doc))
+  if (c.finite_strain != is_finite_strain(doc))
+    throw std::invalid_argument("case '" + c.name + "': parsed for the other kinematics (parse_case's finite_strain)");
+  if (c.finite_strain)
     return detail::run_finite_strain<Traits>(doc, c, sink);
   return detail::run_small_strain<Traits>(doc, c, sink);
 }

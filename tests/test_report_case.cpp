@@ -186,11 +186,55 @@ TEST(ReportJson, FiniteStrainPointAndNineComponentTensors) {
   EXPECT_THROW(r::parse_tensor<T>(json::parse("[1, 2, 3]")), std::invalid_argument);
 }
 
+TEST(ReportJson, FiniteStrainMixedControlMayNameTheLowerComponents) {
+  auto const spec = json::parse(R"({"name": "f", "control": "mixed", "stress_components": ["22", "33", "21"],
+    "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1]})");
+  EXPECT_THROW(r::parse_case<T>(spec), std::invalid_argument) << "21 is no small-strain component";
+  auto const c{r::parse_case<T>(spec, true)};
+  tensor2 g;
+  g(1, 0) = 1;
+  EXPECT_DOUBLE_EQ(tensor2{tmech::dcontract(c.finite_control.stress_projector(), g)}(1, 0), 1);
+}
+
+TEST(ReportJson, CountsMustBeIntegersInRange) {
+  auto const with = [](std::string const &extra) {
+    return json::parse(R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], )" + extra + "}");
+  };
+  EXPECT_THROW(r::parse_case<T>(with(R"("steps": 2.5)")), std::invalid_argument);
+  EXPECT_THROW(r::parse_case<T>(with(R"("steps": 0)")), std::invalid_argument);
+  EXPECT_THROW(r::parse_case<T>(with(R"("steps": 1e12)")), std::invalid_argument);
+  EXPECT_THROW(r::parse_case<T>(with(R"("tangent_every": -1)")), std::invalid_argument);
+  EXPECT_EQ(r::parse_case<T>(with(R"("steps": 7)")).path.size(), 7u);
+  auto doc = json::parse(R"({"point": {"strain_source": "s", "stress_source": "m", "max_iter": 1e10}})");
+  EXPECT_THROW(static_cast<void>(r::parse_point<policy>(doc)), std::invalid_argument);
+  doc["point"]["max_iter"] = 2.5;
+  EXPECT_THROW(static_cast<void>(r::parse_point<policy>(doc)), std::invalid_argument);
+  auto const studies = json::parse(R"({"cases": [{"name": "u"}], "studies": [{"name": "s", "case": "u", "steps": [4, 2.5]}]})");
+  EXPECT_THROW(static_cast<void>(r::parse_studies(studies)), std::invalid_argument);
+}
+
+TEST(ReportJson, OutputNamesStayInTheOutputDirectoryAndAreUnique) {
+  for (auto const *bad : {"", ".", "..", "../x", "/tmp/x", "a/b", "a\\b", "a\tb"})
+    EXPECT_THROW(static_cast<void>(r::output_stems(json::object({{"cases", json::array({json::object({{"name", bad}})})}}))),
+                 std::invalid_argument) << bad;
+  EXPECT_THROW(static_cast<void>(r::output_stems(json::parse(R"({"cases": [{"name": "u"}, {"name": "u"}]})"))),
+               std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(r::output_stems(json::parse(
+                   R"({"cases": [{"name": "u_4"}, {"name": "u"}], "studies": [{"name": "u", "case": "u", "steps": [4]}]})"))),
+               std::invalid_argument) << "the study's u_4 collides with the case";
+  EXPECT_EQ(r::output_stems(json::parse(
+                R"({"cases": [{"name": "u-1.a"}], "studies": [{"name": "a study", "case": "u-1.a", "steps": [2, 4]}]})")),
+            (std::vector<std::string>{"u-1.a", "a study_2", "a study_4"}));
+}
+
 TEST(CaseRunner, FiniteStrainRecordsFPCauchyAndJ) {
   auto const doc = neo_hooke_report();
-  auto const c{r::parse_case<T>(json::parse(R"({"name": "u", "control": "uniaxial_stress",
-    "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], "steps": 2, "scale": 0.1})"))};
+  auto const spec = json::parse(R"({"name": "u", "control": "uniaxial_stress",
+    "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], "steps": 2, "scale": 0.1})");
+  auto const c{r::parse_case<T>(spec, true)};
   recording_sink sink;
+  EXPECT_THROW(r::run_case<policy>(doc, r::parse_case<T>(spec), sink), std::invalid_argument)
+      << "parsed with the small-strain control";
   ASSERT_TRUE(r::run_case<policy>(doc, c, sink));
   auto const col = [&](std::string const &n) {
     auto const it{std::find(sink.names.begin(), sink.names.end(), n)};

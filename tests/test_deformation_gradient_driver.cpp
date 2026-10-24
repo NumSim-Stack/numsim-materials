@@ -145,4 +145,36 @@ TEST(DeformationGradientDriver, AcceptAndRejectMoveTheStartOfTheStep) {
   EXPECT_LT(d.tangent_error(second), 1e-5);
 }
 
+// Back to F11 = 1 under uniaxial stress: P = 0 exactly, so |P| alone is no scale for the residual.
+TEST(DeformationGradientDriver, UnloadingToZeroStressConverges) {
+  ctx_type ctx;
+  build<nm::neo_hooke<policy>>(ctx);
+  driver d(ctx, parameters());
+  ASSERT_TRUE(d.step(stretch(1.1), tensor2{}, control::uniaxial_stress(), 0, 1).converged);
+  d.accept();
+  auto const res{d.step(stretch(1.0), tensor2{}, control::uniaxial_stress(), 1, 1)};
+  EXPECT_TRUE(res.converged);
+  EXPECT_NEAR(tmech::norm(tensor2{res.F - stretch(1.0)}), 0, 1e-10);
+}
+
+TEST(DeformationGradientDriver, UnconvergedStepReturnsTheFItEvaluated) {
+  ctx_type ctx;
+  build<nm::neo_hooke<policy>>(ctx);
+  auto p{parameters()};
+  p.insert<int>("max_iter", 0);
+  driver d(ctx, p);
+  auto const res{d.step(stretch(1.1), tensor2{}, control::uniaxial_stress(), 0, 1)};
+  ASSERT_FALSE(res.converged);
+  d.accept();
+  EXPECT_EQ(d.accepted_F(), res.F);
+}
+
+TEST(DeformationGradientDriver, InvalidSettingsAreFatal) {
+  ctx_type ctx;
+  build<nm::neo_hooke<policy>>(ctx);
+  auto p{parameters()};
+  p.insert<int>("max_iter", -1);
+  EXPECT_THROW(static_cast<void>(driver{ctx, p}), u::fatal_error);
+}
+
 } // namespace
