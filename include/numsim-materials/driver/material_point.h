@@ -2,6 +2,7 @@
 #define NUMSIM_MATERIALS_DRIVER_MATERIAL_POINT_H
 
 #include <algorithm>
+#include <cmath>
 #include <format>
 #include <memory>
 #include <span>
@@ -37,7 +38,7 @@ public:
     std::vector<std::string> inputs{};
     /// Further history kept out of load_history() / store_history(), as (material, property).
     std::vector<umat::statev_exclusion> host_owned{};
-    /// Optional "material::property" of a residual: evaluate() updates again until it is at most the tolerance.
+    /// Optional "material::property" of a residual: evaluate() updates again until its magnitude is at most the tolerance.
     std::string residual_property{};
     value_type residual_tolerance{1e-10};
     int max_passes{100};
@@ -54,6 +55,8 @@ public:
           m_exclusions.emplace_back(name, prop->traits().id.name);
     }
     m_exclusions.insert(m_exclusions.end(), m_cfg.host_owned.begin(), m_cfg.host_owned.end());
+    if (!(m_cfg.residual_tolerance >= 0) || m_cfg.max_passes < 1)
+      throw umat::fatal_error("material_point: residual_tolerance must be >= 0 and max_passes >= 1");
     if (!m_cfg.residual_property.empty())
       m_residual = &output<value_type>(m_cfg.residual_property);
     for (auto *material : m_ctx.materials())
@@ -133,11 +136,12 @@ public:
     m_ctx.update();
     if (!m_residual)
       return;
-    for (int pass{1}; *m_residual > m_cfg.residual_tolerance; ++pass) {
-      if (pass >= m_cfg.max_passes)
-        throw std::runtime_error(std::format("material_point: '{}' did not reach {:g} in {} passes (last {:g})",
-                                             m_cfg.residual_property, m_cfg.residual_tolerance, m_cfg.max_passes,
-                                             *m_residual));
+    // the negated test also keeps a NaN residual unconverged
+    for (int pass{1}; !(std::abs(*m_residual) <= m_cfg.residual_tolerance); ++pass) {
+      if (pass >= m_cfg.max_passes || std::isnan(*m_residual))
+        throw umat::cutback_error(std::format("material_point: '{}' did not reach {:g} in {} passes (last {:g})",
+                                              m_cfg.residual_property, m_cfg.residual_tolerance, m_cfg.max_passes,
+                                              *m_residual));
       m_ctx.update();
     }
   }
@@ -156,10 +160,10 @@ public:
   [[nodiscard]] std::vector<std::string> describe_history() const { return host_map().describe(); }
 
   /// Host-owned: the host's history at the start of the step, into both ends of every history output.
-  void load_history(value_type const *buffer) const { host_map().unpack(buffer); }
+  void load_history(std::span<value_type const> buffer) const { host_map().unpack(checked(buffer).data()); }
 
   /// Host-owned: the evaluated history back to the host.
-  void store_history(value_type *buffer) const { host_map().pack(buffer); }
+  void store_history(std::span<value_type> buffer) const { host_map().pack(checked(buffer).data()); }
 
   /// Host-owned: tensor history into the current configuration (after load_history()).
   void rotate_history(tensor2 const &R) const { host_map().rotate_history(R); }
@@ -173,6 +177,14 @@ private:
     if (auto *prop = m_ctx.find_property(material, property))
       return prop;
     throw umat::fatal_error("material_point: property '" + material + "::" + property + "' not found");
+  }
+
+  template <typename Span>
+  Span checked(Span buffer) const {
+    if (buffer.size() < history_width())
+      throw umat::fatal_error(std::format("material_point: the host buffer holds {} values, the history needs {}",
+                                          buffer.size(), history_width()));
+    return buffer;
   }
 
   /// Built on first use: an engine-owned point may hold history no host buffer can.
