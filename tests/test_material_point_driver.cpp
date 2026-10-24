@@ -10,7 +10,7 @@
 #include "numsim-materials/materials/j2_plasticity.h"
 #include "numsim-materials/solvers/local_newton.h"
 #include "numsim-materials/umat/external_state_source.h"
-#include "numsim-materials/umat/material_point_driver.h"
+#include "numsim-materials/driver/material_point_driver.h"
 
 namespace {
 
@@ -21,9 +21,9 @@ using policy = nm::material_policy_default;
 using T = policy::value_type;
 using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
-using driver = u::material_point_driver<policy>;
+using driver = nm::material_point_driver<policy>;
 using tensor2 = driver::tensor2;
-using control = u::load_control<T>;
+using control = nm::load_control<T>;
 
 constexpr T K{166.67};
 constexpr T G{76.92};

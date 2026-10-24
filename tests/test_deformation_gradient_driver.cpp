@@ -4,7 +4,7 @@
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/materials/neo_hooke.h"
 #include "numsim-materials/materials/saint_venant_kirchhoff.h"
-#include "numsim-materials/umat/deformation_gradient_driver.h"
+#include "numsim-materials/driver/deformation_gradient_driver.h"
 #include "numsim-materials/umat/external_state_source.h"
 
 namespace {
@@ -16,9 +16,9 @@ using policy = nm::material_policy_default;
 using T = policy::value_type;
 using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
-using driver = u::deformation_gradient_driver<policy>;
+using driver = nm::deformation_gradient_driver<policy>;
 using tensor2 = driver::tensor2;
-using control = u::deformation_control<T>;
+using control = nm::deformation_control<T>;
 
 constexpr T K{166.67};
 constexpr T G{76.92};
