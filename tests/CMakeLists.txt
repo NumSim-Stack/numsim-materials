@@ -61,6 +61,7 @@ add_numsim_test(test_short_fibre_composite test_short_fibre_composite.cpp)
 add_numsim_test(test_incremental_elasticity test_incremental_elasticity.cpp)
 add_numsim_test(test_thermal_eigenstrain test_thermal_eigenstrain.cpp)
 add_numsim_test(test_kamal_sourour_rate test_kamal_sourour_rate.cpp)
+add_numsim_test(test_material_point test_material_point.cpp)
 
 # Data dumper for plotting (not a test — standalone executable)
 add_executable(plot_data plot_data.cpp)

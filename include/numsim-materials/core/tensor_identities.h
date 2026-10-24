@@ -50,25 +50,26 @@ tmech::tensor<T, Dim, 4> const &dev_projector() noexcept {
   return value;
 }
 
-/// Component names in Abaqus order (11, 22, 33, 12, 13, 23) and their indices.
-inline constexpr std::array<std::string_view, 6> voigt_components{"11", "22", "33", "12", "13", "23"};
-inline constexpr std::array<std::pair<std::size_t, std::size_t>, 6> voigt_indices{
+/// Symmetric component names and indices in Abaqus/Standard (UMAT, CalculiX) order 11, 22, 33, 12, 13, 23.
+/// Not the Abaqus/Explicit (VUMAT) order 11, 22, 33, 12, 23, 31, nor Voigt order 11, 22, 33, 23, 13, 12.
+inline constexpr std::array<std::string_view, 6> symmetric_components{"11", "22", "33", "12", "13", "23"};
+inline constexpr std::array<std::pair<std::size_t, std::size_t>, 6> symmetric_indices{
     {{0, 0}, {1, 1}, {2, 2}, {0, 1}, {0, 2}, {1, 2}}};
 
 inline std::size_t component_index(std::string_view name) {
-  for (std::size_t a{0}; a < voigt_components.size(); ++a)
-    if (voigt_components[a] == name)
+  for (std::size_t a{0}; a < symmetric_components.size(); ++a)
+    if (symmetric_components[a] == name)
       return a;
   throw std::invalid_argument("unknown component '" + std::string{name} + "' (11, 22, 33, 12, 13, 23)");
 }
 
-/// Orthonormal basis of symmetric 3D tensors in Abaqus order.
+/// Orthonormal basis of symmetric 3D tensors in symmetric_components order.
 template <typename T>
 std::array<tmech::tensor<T, 3, 2>, 6> const &symmetric_basis() noexcept {
   static auto const basis = [] {
     std::array<tmech::tensor<T, 3, 2>, 6> b;
     for (std::size_t a{0}; a < 6; ++a) {
-      auto const [i, j]{voigt_indices[a]};
+      auto const [i, j]{symmetric_indices[a]};
       b[a](i, j) = b[a](j, i) = i == j ? T{1} : T{1} / std::sqrt(T{2});
     }
     return b;
@@ -109,12 +110,12 @@ tmech::tensor<T, 3, 2> general_tensor(std::span<T const, 9> v) noexcept {
   return t;
 }
 
-/// Symmetric tensor from its components in Abaqus order (tensor, not engineering, shears).
+/// Symmetric tensor from its components in symmetric_components order (tensor, not engineering, shears).
 template <typename T>
 tmech::tensor<T, 3, 2> symmetric_tensor(std::span<T const, 6> v) noexcept {
   tmech::tensor<T, 3, 2> t;
   for (std::size_t a{0}; a < 6; ++a) {
-    auto const [i, j]{voigt_indices[a]};
+    auto const [i, j]{symmetric_indices[a]};
     t(i, j) = t(j, i) = v[a];
   }
   return t;
