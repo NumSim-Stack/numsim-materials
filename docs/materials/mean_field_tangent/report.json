@@ -36,7 +36,7 @@
     {"type": "linear_stress", "name": "dilute_stress", "tangent_source": "dilute", "strain_source": "strain"},
     {"type": "linear_stress", "name": "scs_stress", "tangent_source": "scs", "strain_source": "strain"},
     {"type": "linear_stress", "name": "ud_stress", "tangent_source": "ud", "strain_source": "strain"}]},
-  "point": {"strain_source": "strain", "stress_source": "mt_stress", "tangent_source": "mt", "residual": "scs::residual", "tolerance": 1e-10, "max_passes": 200},
+  "point": {"strain_source": "strain", "stress_source": "mt_stress", "tangent_source": "mt", "residual_source": "scs::residual", "residual_tolerance": 1e-10, "max_passes": 200},
   "record": {"sig_dilute": "dilute_stress::stress", "sig_scs": "scs_stress::stress", "sig_ud": "ud_stress::stress",
              "A_m": "mt::concentration_matrix[1,1,1,1]", "A_i": "mt::concentration_spheres[1,1,1,1]", "res_scs": "scs::residual"},
   "checks": [

@@ -1031,7 +1031,8 @@ TEST(VectorNewtonJson, ReadsZeroBlocksAndKeepsTheRowColumnOrder) {
          "verify_zero_blocks": true,
          "zero_blocks": )") + blocks + R"(},
         {"type": "scalar_system_2", "name": "sys", "solver_name": "solver",
-         "mode": 3, "a": 5.0, "b": 10.0}
+         "mode": )" + std::to_string(static_cast<int>(system_mode::decoupled)) + R"(,
+         "a": 5.0, "b": 10.0}
       ]
     })");
     for (const auto& m : doc["materials"]) create_from_json(ctx, m);
@@ -1047,6 +1048,9 @@ TEST(VectorNewtonJson, ReadsZeroBlocksAndKeepsTheRowColumnOrder) {
     ASSERT_NE(solver, nullptr);
     EXPECT_NO_THROW(solver->solve())
         << "a true zero_blocks claim from a document must be accepted";
+    EXPECT_TRUE(solver->converged())
+        << "not throwing is not enough -- a solver that bailed immediately "
+           "would also pass";
   }
   {  // dR_y/dx is 1: the same pair, transposed, must be caught
     ctx_type ctx;
@@ -1086,8 +1090,12 @@ TEST(VectorNewtonJson, RejectsAZeroBlocksEntryThatIsNotAPair) {
       ADD_FAILURE() << "accepted a malformed zero_blocks entry: " << blocks;
     } catch (const std::exception& e) {
       const std::string msg = e.what();
+      // Weak alone: the registry names the parameter for EVERY reader failure.
       EXPECT_NE(msg.find("zero_blocks"), std::string::npos)
           << "the error must name the parameter: " << msg;
+      // "pair" is the one token only the parse-time check emits; rewording
+      // the converter breaks this on purpose. Without that check names[1] on
+      // a one-element entry is an out-of-bounds read.
       EXPECT_NE(msg.find("pair"), std::string::npos)
           << "rejected by the solver's name check rather than at parse time, "
              "so the message points at the wrong problem: " << msg;
