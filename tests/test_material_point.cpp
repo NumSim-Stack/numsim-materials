@@ -119,6 +119,20 @@ tensor2 strain_at(T e) {
   return eps;
 }
 
+/// Point parameters with the strain source as the only input.
+param_type strain_input() {
+  param_type p;
+  p.insert<std::vector<std::string>>("inputs", {"strain"});
+  return p;
+}
+
+/// Point parameters iterating to the residual `source`.
+param_type residual(std::string const &source) {
+  param_type p;
+  p.insert<std::string>("residual_source", source);
+  return p;
+}
+
 /// One engine-owned step from `from` to `to`.
 tensor2 trial(point_type &point, T from, T to) {
   point.reset();
@@ -129,7 +143,7 @@ tensor2 trial(point_type &point, T from, T to) {
 
 TEST(MaterialPoint, ResolvesInputsAndOutputs) {
   setup s;
-  point_type point{s.ctx, {.inputs = {"strain"}}};
+  point_type point{s.ctx, strain_input()};
   auto const stress{trial(point, 0, 1)};
   EXPECT_EQ(stress, tensor2{2 * strain_at(1)});
   EXPECT_EQ(&point.output<tensor2>("mem::stress"), &point.output<tensor2>("mem", "stress"));
@@ -138,8 +152,10 @@ TEST(MaterialPoint, ResolvesInputsAndOutputs) {
 
 TEST(MaterialPoint, RejectsUnknownOrMistypedNames) {
   setup s;
-  EXPECT_THROW((point_type{s.ctx, {.inputs = {"nothing"}}}), nm::umat::fatal_error);
-  point_type point{s.ctx, {.inputs = {"strain"}}};
+  auto unknown{strain_input()};
+  unknown.insert<std::vector<std::string>>("inputs", {"nothing"});
+  EXPECT_THROW((point_type{s.ctx, unknown}), nm::umat::fatal_error);
+  point_type point{s.ctx, strain_input()};
   EXPECT_THROW(point.input<nm::external_strain_source<policy>>("mem"), nm::umat::fatal_error) << "not an input";
   EXPECT_THROW(point.input<nm::external_scalar_source<policy>>("strain"), nm::umat::fatal_error) << "another source type";
   EXPECT_THROW(point.output<tensor2>("mem", "nothing"), nm::umat::fatal_error);
@@ -149,7 +165,7 @@ TEST(MaterialPoint, RejectsUnknownOrMistypedNames) {
 
 TEST(MaterialPoint, EngineOwnedHistoryAcceptsAndResets) {
   setup s;
-  point_type point{s.ctx, {.inputs = {"strain"}}};
+  point_type point{s.ctx, strain_input()};
   trial(point, 0, 1);
   point.accept();
   auto const first{trial(point, 1, 2)};
@@ -163,7 +179,7 @@ TEST(MaterialPoint, EngineOwnedHistoryAcceptsAndResets) {
 
 TEST(MaterialPoint, TheAcceptedLoadIsTheOldValueOfItsSource) {
   setup s;
-  point_type point{s.ctx, {.inputs = {"strain"}}};
+  point_type point{s.ctx, strain_input()};
   auto const &source{point.input<nm::external_strain_source<policy>>("strain")};
   trial(point, 0, 1);
   point.accept();
@@ -175,7 +191,7 @@ TEST(MaterialPoint, TheAcceptedLoadIsTheOldValueOfItsSource) {
 
 TEST(MaterialPoint, AFailedEvaluationRecoversAfterReset) {
   setup s{1.5};
-  point_type point{s.ctx, {.inputs = {"strain"}}};
+  point_type point{s.ctx, strain_input()};
   EXPECT_THROW(trial(point, 0, 2), std::runtime_error);
   EXPECT_NO_THROW(trial(point, 0, 1));
   point.accept();
@@ -184,8 +200,8 @@ TEST(MaterialPoint, AFailedEvaluationRecoversAfterReset) {
 
 TEST(MaterialPoint, HostOwnedHistoryMatchesEngineOwned) {
   setup engine, host;
-  point_type a{engine.ctx, {.inputs = {"strain"}}};
-  point_type b{host.ctx, {.inputs = {"strain"}}};
+  point_type a{engine.ctx, strain_input()};
+  point_type b{host.ctx, strain_input()};
   nm::umat::statev_map<policy> const reference{host.ctx, {{"strain", "strain"}}};
   ASSERT_EQ(b.history_width(), reference.nstatv()) << "the bound input's history stays with the host";
   EXPECT_EQ(b.describe_history(), reference.describe());
@@ -206,7 +222,7 @@ TEST(MaterialPoint, HostOwnedHistoryMatchesEngineOwned) {
 
 TEST(MaterialPoint, HostBufferShorterThanTheHistoryIsFatal) {
   setup s;
-  point_type point{s.ctx, {.inputs = {"strain"}}};
+  point_type point{s.ctx, strain_input()};
   std::vector<T> statev(point.history_width() - 1);
   EXPECT_THROW(point.load_history(statev), nm::umat::fatal_error);
   EXPECT_THROW(point.store_history(statev), nm::umat::fatal_error);
@@ -214,13 +230,28 @@ TEST(MaterialPoint, HostBufferShorterThanTheHistoryIsFatal) {
 
 TEST(MaterialPoint, HostOwnedKeepsFurtherExclusionsOut) {
   setup s;
-  point_type point{s.ctx, {.inputs = {"strain"}, .host_owned = {{"mem", "count"}}}};
+  auto parameters{strain_input()};
+  parameters.insert<std::vector<std::string>>("host_owned", {"mem::count"});
+  point_type point{s.ctx, parameters};
   EXPECT_EQ(point.history_width(), nm::umat::canonical_width);
+}
+
+TEST(MaterialPoint, ParametersHaveDefaultsAndAreChecked) {
+  setup s;
+  point_type plain{s.ctx, param_type{}};
+  EXPECT_FALSE(plain.has_live_props());
+  EXPECT_THROW(plain.input<nm::external_strain_source<policy>>("strain"), nm::umat::fatal_error) << "no inputs by default";
+  auto malformed{strain_input()};
+  malformed.insert<std::vector<std::string>>("host_owned", {"count"});
+  EXPECT_ANY_THROW((point_type{s.ctx, malformed})) << "host_owned names material::property";
+  auto mistyped{param_type{}};
+  mistyped.insert<std::string>("inputs", "strain");
+  EXPECT_ANY_THROW((point_type{s.ctx, mistyped})) << "inputs is a list";
 }
 
 TEST(MaterialPoint, EngineOwnedHistoryNeedsNoHostLayout) {
   setup s{1e30, true};
-  point_type point{s.ctx, {.inputs = {"strain"}}};
+  point_type point{s.ctx, strain_input()};
   trial(point, 0, 1);
   point.accept();
   trial(point, 1, 2);
@@ -235,7 +266,9 @@ TEST(MaterialPoint, IteratesToTheResidual) {
   p.insert<std::string>("name", "relax");
   ctx.create<relaxer<policy>>(p);
   ctx.finalize();
-  point_type point{ctx, {.residual_property = "relax::residual", .residual_tolerance = 1e-8}};
+  auto parameters{residual("relax::residual")};
+  parameters.insert<T>("residual_tolerance", 1e-8);
+  point_type point{ctx, parameters};
   point.evaluate();
   EXPECT_LE(point.output<T>("relax", "residual"), 1e-8);
   EXPECT_NEAR(point.output<T>("relax", "x"), 2, 1e-7);
@@ -243,7 +276,8 @@ TEST(MaterialPoint, IteratesToTheResidual) {
   ctx_type short_ctx;
   short_ctx.create<relaxer<policy>>(p);
   short_ctx.finalize();
-  point_type hurried{short_ctx, {.residual_property = "relax::residual", .residual_tolerance = 1e-8, .max_passes = 3}};
+  parameters.insert<int>("max_passes", 3);
+  point_type hurried{short_ctx, parameters};
   EXPECT_THROW(hurried.evaluate(), nm::umat::cutback_error) << "the host may cut the step back";
 }
 
@@ -255,7 +289,9 @@ TEST(MaterialPoint, ResidualCountsByMagnitudeAndNaNNeverConverges) {
     p.insert<T>("value", value);
     ctx.create<nm::constant_scalar<policy>>(p);
     ctx.finalize();
-    point_type point{ctx, {.residual_property = "stuck::value", .max_passes = 3}};
+    auto parameters{residual("stuck::value")};
+    parameters.insert<int>("max_passes", 3);
+    point_type point{ctx, parameters};
     EXPECT_THROW(point.evaluate(), nm::umat::cutback_error) << "residual " << value;
   }
 }
@@ -266,10 +302,14 @@ TEST(MaterialPoint, InvalidResidualSettingsAreFatal) {
   p.insert<std::string>("name", "relax");
   ctx.create<relaxer<policy>>(p);
   ctx.finalize();
-  for (T const tolerance : {T{-1}, std::numeric_limits<T>::quiet_NaN()})
-    EXPECT_THROW((point_type{ctx, {.residual_property = "relax::residual", .residual_tolerance = tolerance}}),
-                 nm::umat::fatal_error);
-  EXPECT_THROW((point_type{ctx, {.residual_property = "relax::residual", .max_passes = 0}}), nm::umat::fatal_error);
+  for (T const tolerance : {T{-1}, std::numeric_limits<T>::quiet_NaN()}) {
+    auto parameters{residual("relax::residual")};
+    parameters.insert<T>("residual_tolerance", tolerance);
+    EXPECT_THROW((point_type{ctx, parameters}), nm::umat::fatal_error);
+  }
+  auto parameters{residual("relax::residual")};
+  parameters.insert<int>("max_passes", 0);
+  EXPECT_THROW((point_type{ctx, parameters}), nm::umat::fatal_error);
 }
 
 } // namespace
