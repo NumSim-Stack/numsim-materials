@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -86,6 +87,32 @@ public:
 private:
   value_type &m_x;
   value_type &m_residual;
+};
+
+/// "residual" is the parameter "value", whatever the pass.
+template <typename Traits>
+class stuck final : public nm::material_base<stuck<Traits>, Traits> {
+public:
+  using base = nm::material_base<stuck<Traits>, Traits>;
+  using value_type = typename base::value_type;
+  using input_parameter_controller = typename base::input_parameter_controller;
+
+  template <typename... Args>
+  explicit stuck(Args &&...args)
+      : base(std::forward<Args>(args)...), m_residual(base::template add_output<value_type>("residual", &stuck::compute)),
+        m_value(base::template get_parameter<value_type>("value")) {}
+
+  static input_parameter_controller parameters() {
+    input_parameter_controller para{base::parameters()};
+    nm::required<value_type>(para, "value");
+    return para;
+  }
+
+  void compute() { m_residual = m_value; }
+
+private:
+  value_type &m_residual;
+  value_type const &m_value;
 };
 
 /// A history no host buffer can hold.
@@ -213,13 +240,21 @@ TEST(MaterialPoint, HostOwnedHistoryMatchesEngineOwned) {
     auto const expected{trial(a, step - 1, step)};
     a.accept();
     b.reset();
-    b.load_history(statev.data());
+    b.load_history(statev);
     b.input<nm::external_strain_source<policy>>("strain").bind(strain_at(step - 1), strain_at(step));
     b.evaluate();
     EXPECT_EQ(b.output<tensor2>("mem", "stress"), expected) << "step " << step;
-    b.store_history(statev.data());
+    b.store_history(statev);
   }
   EXPECT_EQ(statev[0], 3) << "count";
+}
+
+TEST(MaterialPoint, HostBufferShorterThanTheHistoryIsFatal) {
+  setup s;
+  point_type point{s.ctx, {.inputs = {"strain"}}};
+  std::vector<T> statev(point.history_width() - 1);
+  EXPECT_THROW(point.load_history(statev), nm::umat::fatal_error);
+  EXPECT_THROW(point.store_history(statev), nm::umat::fatal_error);
 }
 
 TEST(MaterialPoint, HostOwnedKeepsFurtherExclusionsOut) {
@@ -254,7 +289,32 @@ TEST(MaterialPoint, IteratesToTheResidual) {
   short_ctx.create<relaxer<policy>>(p);
   short_ctx.finalize();
   point_type hurried{short_ctx, {.residual_property = "relax::residual", .residual_tolerance = 1e-8, .max_passes = 3}};
-  EXPECT_THROW(hurried.evaluate(), std::runtime_error);
+  EXPECT_THROW(hurried.evaluate(), nm::umat::cutback_error) << "the host may cut the step back";
+}
+
+TEST(MaterialPoint, ResidualCountsByMagnitudeAndNaNNeverConverges) {
+  for (T const value : {T{-1}, std::numeric_limits<T>::quiet_NaN()}) {
+    ctx_type ctx;
+    param_type p;
+    p.insert<std::string>("name", "stuck");
+    p.insert<T>("value", value);
+    ctx.create<stuck<policy>>(p);
+    ctx.finalize();
+    point_type point{ctx, {.residual_property = "stuck::residual", .max_passes = 3}};
+    EXPECT_THROW(point.evaluate(), nm::umat::cutback_error) << "residual " << value;
+  }
+}
+
+TEST(MaterialPoint, InvalidResidualSettingsAreFatal) {
+  ctx_type ctx;
+  param_type p;
+  p.insert<std::string>("name", "relax");
+  ctx.create<relaxer<policy>>(p);
+  ctx.finalize();
+  for (T const tolerance : {T{-1}, std::numeric_limits<T>::quiet_NaN()})
+    EXPECT_THROW((point_type{ctx, {.residual_property = "relax::residual", .residual_tolerance = tolerance}}),
+                 nm::umat::fatal_error);
+  EXPECT_THROW((point_type{ctx, {.residual_property = "relax::residual", .max_passes = 0}}), nm::umat::fatal_error);
 }
 
 } // namespace

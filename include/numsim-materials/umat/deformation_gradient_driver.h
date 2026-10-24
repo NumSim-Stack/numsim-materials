@@ -10,6 +10,7 @@
 #include "numsim-materials/core/parameter_helpers.h"
 #include "numsim-materials/core/tensor_identities.h"
 #include "numsim-materials/driver/material_point.h"
+#include "numsim-materials/umat/errors.h"
 #include "numsim-materials/umat/external_state_source.h"
 #include "numsim-materials/umat/load_control.h"
 
@@ -60,6 +61,8 @@ public:
         m_tolerance(m_parameters.template get<value_type>("tolerance")),
         m_max_iter(m_parameters.template get<int>("max_iter")),
         m_fd_step(m_parameters.template get<value_type>("fd_step")) {
+    if (m_max_iter < 0 || !(m_tolerance >= 0) || !(m_fd_step > 0))
+      throw fatal_error("deformation_gradient_driver: max_iter and tolerance must be >= 0, fd_step > 0");
     if (!text("time_source").empty())
       m_time = &m_point.template input<external_scalar_source<Traits>>(text("time_source"));
   }
@@ -69,17 +72,23 @@ public:
   step_result step(tensor2 const &F, tensor2 const &P, control const &c, value_type time, value_type dt) {
     auto const &M{c.stress_projector()};
     tensor4 const N{c.deformation_projector()};
-    step_result res{.F = tmech::dcontract(N, F) + tmech::dcontract(M, accepted_F()), .time = time, .dt = dt};
+    tensor2 const start{accepted_F()};
+    step_result res{.F = tmech::dcontract(N, F) + tmech::dcontract(M, start), .time = time, .dt = dt};
     for (int it{0}; it <= m_max_iter; ++it) {
       evaluate(res.F, time, dt);
       res.stress = m_stress;
       res.tangent = m_tangent;
       tensor2 const r{tmech::dcontract(M, tensor2{res.stress - P})};
       res.residuals.push_back(tmech::norm(r));
-      if (res.residuals.back() <= m_tolerance * std::max(tmech::norm(res.stress), tmech::norm(tensor2{tmech::dcontract(M, P)}))) {
+      // as for small strain: the step's own stress scale when P passes through zero
+      auto const scale{std::max({tmech::norm(res.stress), tmech::norm(tensor2{tmech::dcontract(M, P)}),
+                                 tmech::norm(res.tangent) * tmech::norm(tensor2{res.F - start})})};
+      if (res.residuals.back() <= m_tolerance * scale) {
         res.converged = true;
         break;
       }
+      if (it == m_max_iter)
+        break; // the result stays the evaluated trial
       tensor4 const A{tmech::dcontract(tensor4{tmech::dcontract(M, res.tangent)}, M) + N};
       res.F = tmech::eval(res.F - tmech::dcontract(tensor4{tmech::invf(A)}, r));
     }
