@@ -10,7 +10,7 @@
 #include "numsim-materials/report/csv_sink.h"
 #include "numsim-materials/report/step_record.h"
 #include "numsim-materials/report/graph_description.h"
-#include "numsim-materials/umat/load_control.h"
+#include "numsim-materials/driver/load_control.h"
 #include "numsim-materials/report/load_path.h"
 #include "numsim-materials/report/report_json.h"
 #include "numsim-materials/umat/json_model.h"
@@ -24,7 +24,7 @@ using policy = nm::material_policy_default;
 using T = policy::value_type;
 using tensor2 = tmech::tensor<T, 3, 2>;
 using tensor4 = tmech::tensor<T, 3, 4>;
-using control = nm::umat::load_control<T>;
+using control = nm::load_control<T>;
 using json = nlohmann::json;
 
 TEST(LoadControl, StrainControlPrescribesNoStress) {
@@ -99,11 +99,12 @@ TEST(LoadPath, RejectsStepsOutsideThePath) {
 TEST(ReportJson, ParsesThePointAndTheColumns) {
   auto const doc = json::parse(R"({"point": {"strain_source": "s", "stress_source": "m", "tangent_source": "t"},
     "record": {"kappa": "m::kappa"}})");
-  auto const cfg{r::parse_point<policy>(doc)};
-  EXPECT_EQ(cfg.strain_source, "s");
-  EXPECT_EQ(cfg.stress_source, "m");
-  ASSERT_TRUE(cfg.tangent_source.has_value());
-  EXPECT_EQ(*cfg.tangent_source, "t");
+  auto const p{r::parse_point<policy>(doc)};
+  EXPECT_EQ(p.get<std::string>("strain_source"), "s");
+  EXPECT_EQ(p.get<std::string>("stress_source"), "m");
+  EXPECT_EQ(p.get<std::string>("tangent_source"), "t");
+  EXPECT_THROW(r::parse_point<policy>(json::parse(R"({"point": {"strain": "s"}})")), std::invalid_argument)
+      << "not a driver parameter";
   auto const cols{r::parse_columns(doc)};
   ASSERT_EQ(cols.size(), 3u);
   EXPECT_EQ(cols[0].name, "strain");
@@ -174,9 +175,9 @@ TEST(ReportJson, FiniteStrainPointAndNineComponentTensors) {
   auto const doc = neo_hooke_report();
   EXPECT_TRUE(r::is_finite_strain(doc));
   EXPECT_FALSE(r::is_finite_strain(elastic_report()));
-  auto const cfg{r::parse_point<policy>(doc)};
-  EXPECT_EQ(cfg.deformation_gradient_source, "F");
-  EXPECT_TRUE(cfg.strain_source.empty());
+  auto const p{r::parse_point<policy>(doc)};
+  EXPECT_EQ(p.get<std::string>("deformation_gradient_source"), "F");
+  EXPECT_FALSE(p.contains("strain_source"));
   auto const t{r::parse_tensor<T>(json::parse("[1, 2, 3, 4, 5, 6, 7, 8, 9]"))};
   EXPECT_EQ(t(0, 1), 4);
   EXPECT_EQ(t(1, 0), 7);
@@ -185,11 +186,55 @@ TEST(ReportJson, FiniteStrainPointAndNineComponentTensors) {
   EXPECT_THROW(r::parse_tensor<T>(json::parse("[1, 2, 3]")), std::invalid_argument);
 }
 
+TEST(ReportJson, FiniteStrainMixedControlMayNameTheLowerComponents) {
+  auto const spec = json::parse(R"({"name": "f", "control": "mixed", "stress_components": ["22", "33", "21"],
+    "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1]})");
+  EXPECT_THROW(r::parse_case<T>(spec), std::invalid_argument) << "21 is no small-strain component";
+  auto const c{r::parse_case<T>(spec, true)};
+  tensor2 g;
+  g(1, 0) = 1;
+  EXPECT_DOUBLE_EQ(tensor2{tmech::dcontract(c.finite_control.stress_projector(), g)}(1, 0), 1);
+}
+
+TEST(ReportJson, CountsMustBeIntegersInRange) {
+  auto const with = [](std::string const &extra) {
+    return json::parse(R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], )" + extra + "}");
+  };
+  EXPECT_THROW(r::parse_case<T>(with(R"("steps": 2.5)")), std::invalid_argument);
+  EXPECT_THROW(r::parse_case<T>(with(R"("steps": 0)")), std::invalid_argument);
+  EXPECT_THROW(r::parse_case<T>(with(R"("steps": 1e12)")), std::invalid_argument);
+  EXPECT_THROW(r::parse_case<T>(with(R"("tangent_every": -1)")), std::invalid_argument);
+  EXPECT_EQ(r::parse_case<T>(with(R"("steps": 7)")).path.size(), 7u);
+  auto doc = json::parse(R"({"point": {"strain_source": "s", "stress_source": "m", "max_iter": 1e10}})");
+  EXPECT_THROW(static_cast<void>(r::parse_point<policy>(doc)), std::invalid_argument);
+  doc["point"]["max_iter"] = 2.5;
+  EXPECT_THROW(static_cast<void>(r::parse_point<policy>(doc)), std::invalid_argument);
+  auto const studies = json::parse(R"({"cases": [{"name": "u"}], "studies": [{"name": "s", "case": "u", "steps": [4, 2.5]}]})");
+  EXPECT_THROW(static_cast<void>(r::parse_studies(studies)), std::invalid_argument);
+}
+
+TEST(ReportJson, OutputNamesStayInTheOutputDirectoryAndAreUnique) {
+  for (auto const *bad : {"", ".", "..", "../x", "/tmp/x", "a/b", "a\\b", "a\tb"})
+    EXPECT_THROW(static_cast<void>(r::output_stems(json::object({{"cases", json::array({json::object({{"name", bad}})})}}))),
+                 std::invalid_argument) << bad;
+  EXPECT_THROW(static_cast<void>(r::output_stems(json::parse(R"({"cases": [{"name": "u"}, {"name": "u"}]})"))),
+               std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(r::output_stems(json::parse(
+                   R"({"cases": [{"name": "u_4"}, {"name": "u"}], "studies": [{"name": "u", "case": "u", "steps": [4]}]})"))),
+               std::invalid_argument) << "the study's u_4 collides with the case";
+  EXPECT_EQ(r::output_stems(json::parse(
+                R"({"cases": [{"name": "u-1.a"}], "studies": [{"name": "a study", "case": "u-1.a", "steps": [2, 4]}]})")),
+            (std::vector<std::string>{"u-1.a", "a study_2", "a study_4"}));
+}
+
 TEST(CaseRunner, FiniteStrainRecordsFPCauchyAndJ) {
   auto const doc = neo_hooke_report();
-  auto const c{r::parse_case<T>(json::parse(R"({"name": "u", "control": "uniaxial_stress",
-    "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], "steps": 2, "scale": 0.1})"))};
+  auto const spec = json::parse(R"({"name": "u", "control": "uniaxial_stress",
+    "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], "steps": 2, "scale": 0.1})");
+  auto const c{r::parse_case<T>(spec, true)};
   recording_sink sink;
+  EXPECT_THROW(r::run_case<policy>(doc, r::parse_case<T>(spec), sink), std::invalid_argument)
+      << "parsed with the small-strain control";
   ASSERT_TRUE(r::run_case<policy>(doc, c, sink));
   auto const col = [&](std::string const &n) {
     auto const it{std::find(sink.names.begin(), sink.names.end(), n)};
@@ -234,10 +279,12 @@ TEST(CaseRunner, ChecksTheTangentOnlyEveryNthStep) {
 
 TEST(CaseRunner, StopsAtAStepThatDoesNotConverge) {
   auto const doc = elastic_report();
+  auto doc_without_iterations = doc;
+  doc_without_iterations["point"]["max_iter"] = 0;
   auto const c{r::parse_case<T>(json::parse(R"({"name": "u", "control": "uniaxial_stress",
     "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], "steps": 3})"))};
   recording_sink sink;
-  EXPECT_FALSE(r::run_case<policy>(doc, c, sink, {.tolerance = 1e-10, .max_iter = 0}));
+  EXPECT_FALSE(r::run_case<policy>(doc_without_iterations, c, sink));
   ASSERT_EQ(sink.records.size(), 2u);
   EXPECT_FALSE(sink.records.back().result.converged);
 }
