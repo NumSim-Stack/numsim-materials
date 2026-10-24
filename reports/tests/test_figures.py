@@ -2,9 +2,13 @@ import unittest
 
 import numpy as np
 
-from numsim_report import figures
 from numsim_report.data import COMPONENTS, CaseData, with_invariants
 from numsim_report.expressions import Expressions
+
+try:
+    from numsim_report import figures
+except ImportError:  # no matplotlib: the build warns, CI requires it
+    figures = None
 
 
 def case(name, n=5):
@@ -16,6 +20,7 @@ def case(name, n=5):
     return CaseData(name, with_invariants(cols), residuals)
 
 
+@unittest.skipIf(figures is None, "matplotlib is not installed")
 class PanelTest(unittest.TestCase):
     def test_builtin_kinds_are_registered(self):
         self.assertEqual(set(figures.PANELS), {"line", "residuals", "iterations"})

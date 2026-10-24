@@ -69,7 +69,7 @@ private:
       push(name, [s] { return *s; });
     } else if (auto const *t2{property_value<tensor2>(p)}) {
       if (idx.empty()) {
-        for (std::size_t a{0}; a < (full ? full_components.size() : voigt_components.size()); ++a)
+        for (std::size_t a{0}; a < (full ? full_components.size() : symmetric_components.size()); ++a)
           push(name + "_" + std::string{full_components[a]},
                [t2, i = full_indices[a].first, j = full_indices[a].second] { return (*t2)(i, j); });
       } else {
