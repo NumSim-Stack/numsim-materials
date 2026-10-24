@@ -3,6 +3,8 @@
 
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_base.h"
+#include "numsim-materials/core/parameter_helpers.h"
+#include "numsim-materials/core/tensor_identities.h"
 
 namespace numsim::materials {
 
@@ -28,17 +30,14 @@ public:
         m_G(base::template get_parameter<value_type>("G")),
         m_F_name(base::template get_parameter<std::string>("deformation_gradient_source")),
         m_F(base::template add_input<tensor2>(m_F_name, "deformation_gradient", EdgeKind::Global)) {
-    const auto I{tmech::eye<value_type, Dim, 2>()};
-    const auto IIsym{(tmech::otimesu(I, I) + tmech::otimesl(I, I)) * 0.5};
-    const auto IIvol{tmech::otimes(I, I) / Dim};
-    m_C = 3 * m_K * IIvol + 2 * m_G * (IIsym - IIvol);
+    m_C = 3 * m_K * vol_projector<value_type, Dim>() + 2 * m_G * dev_projector<value_type, Dim>();
   }
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
-    para.template insert<value_type>("K").template add<is_required>();
-    para.template insert<value_type>("G").template add<is_required>();
-    para.template insert<std::string>("deformation_gradient_source").template add<is_required>();
+    required<value_type>(para, "K");
+    required<value_type>(para, "G");
+    required<std::string>(para, "deformation_gradient_source");
     return para;
   }
 

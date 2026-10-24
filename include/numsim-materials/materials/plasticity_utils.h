@@ -4,25 +4,9 @@
 #include <cassert>
 #include <limits>
 #include <tmech/tmech.h>
+#include "numsim-materials/core/tensor_identities.h"
 
 namespace numsim::materials::plasticity_detail {
-
-/// Construct the fourth-order deviatoric projector IIdev = IIsym - 1/Dim * I⊗I.
-/// Shared by J2 and DP flow normal derivatives.
-template<typename T, std::size_t Dim>
-tmech::tensor<T, Dim, 4> make_IIdev() {
-  const auto I = tmech::eye<T, Dim, 2>();
-  const auto IIsym = (tmech::otimesu(I, I) + tmech::otimesl(I, I)) * T{0.5};
-  const auto IIvol = tmech::otimes(I, I) / T{Dim};
-  return tmech::tensor<T, Dim, 4>{IIsym - IIvol};
-}
-
-/// The same projector, built once per (T, Dim) and shared.
-template<typename T, std::size_t Dim>
-const tmech::tensor<T, Dim, 4>& cached_IIdev() {
-  static const tmech::tensor<T, Dim, 4> value{make_IIdev<T, Dim>()};
-  return value;
-}
 
 /// Isotropic elastic tangent C = K*I⊗I + 2G*IIdev.
 ///
@@ -41,7 +25,7 @@ template<typename T, std::size_t Dim>
 tmech::tensor<T, Dim, 4> make_isotropic_tangent(T K, T G) {
   const auto I = tmech::eye<T, Dim, 2>();
   return tmech::tensor<T, Dim, 4>{K * tmech::otimes(I, I) +
-                                  T{2} * G * make_IIdev<T, Dim>()};
+                                  T{2} * G * dev_projector<T, Dim>()};
 }
 
 /// Stress state evaluation at a given (ε_p, κ) state.

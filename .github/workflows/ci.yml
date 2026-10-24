@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        cxx: [g++-13, g++-14, clang++-19]
+        cxx: [g++-14, clang++-19]
 
     steps:
     - uses: actions/checkout@v4
@@ -26,7 +26,7 @@ jobs:
             sudo tee /etc/apt/sources.list.d/llvm.list
           sudo apt-get update
         fi
-        sudo apt-get install -y ${{ matrix.cxx }} cmake
+        sudo apt-get install -y ${{ matrix.cxx }} cmake libeigen3-dev # Eigen 3.4 from the Ubuntu archive, not a clone from gitlab.com
 
     - name: Configure
       run: |
@@ -34,6 +34,7 @@ jobs:
           -DCMAKE_BUILD_TYPE=Release \
           -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
           -DNUMSIM_MATERIALS_BUILD_TESTS=ON \
+          -DNUMSIM_MATERIALS_BUILD_REPORTS=ON \
           -DNUMSIM_MATERIALS_BUILD_EXAMPLES=OFF \
           -DNUMSIM_MATERIALS_ENABLE_PLOTTING=OFF
 
