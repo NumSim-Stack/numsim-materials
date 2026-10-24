@@ -4,9 +4,8 @@
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/materials/neo_hooke.h"
 #include "numsim-materials/materials/saint_venant_kirchhoff.h"
-#include "numsim-materials/umat/deformation_gradient_driver.h"
+#include "numsim-materials/driver/deformation_gradient_driver.h"
 #include "numsim-materials/umat/external_state_source.h"
-#include "numsim-materials/umat/material_point_evaluator.h"
 
 namespace {
 
@@ -17,10 +16,9 @@ using policy = nm::material_policy_default;
 using T = policy::value_type;
 using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
-using evaluator = u::material_point_evaluator<policy>;
-using driver = u::deformation_gradient_driver<policy>;
+using driver = nm::deformation_gradient_driver<policy>;
 using tensor2 = driver::tensor2;
-using control = u::deformation_control<T>;
+using control = nm::deformation_control<T>;
 
 constexpr T K{166.67};
 constexpr T G{76.92};
@@ -41,8 +39,11 @@ void build(ctx_type& ctx) {
   ctx.finalize();
 }
 
-evaluator::config config() {
-  return {.strain_source = {}, .stress_source = "model", .deformation_gradient_source = "F"};
+param_type parameters() {
+  param_type p;
+  p.insert<std::string>("deformation_gradient_source", "F");
+  p.insert<std::string>("stress_source", "model");
+  return p;
 }
 
 tensor2 stretch(T lambda) {
@@ -65,8 +66,7 @@ TEST(DeformationControl, UniaxialStressFreesEverythingButEleven) {
 TEST(DeformationGradientDriver, PrescribedFNeedsNoIteration) {
   ctx_type ctx;
   build<nm::neo_hooke<policy>>(ctx);
-  evaluator ev(ctx, config());
-  driver d(ev);
+  driver d(ctx, parameters());
   auto const res{d.step(stretch(1.1), tensor2{}, control::deformation(), 0, 1)};
   EXPECT_TRUE(res.converged);
   EXPECT_EQ(res.residuals.size(), 1u);
@@ -77,8 +77,7 @@ TEST(DeformationGradientDriver, PrescribedFNeedsNoIteration) {
 TEST(DeformationGradientDriver, SaintVenantKirchhoffUniaxialStressIsExact) {
   ctx_type ctx;
   build<nm::saint_venant_kirchhoff<policy>>(ctx);
-  evaluator ev(ctx, config());
-  driver d(ev);
+  driver d(ctx, parameters());
   T const lambda{1.05};
   auto const res{d.step(stretch(lambda), tensor2{}, control::uniaxial_stress(), 0, 1)};
   ASSERT_TRUE(res.converged);
@@ -97,8 +96,7 @@ TEST(DeformationGradientDriver, SaintVenantKirchhoffUniaxialStressIsExact) {
 TEST(DeformationGradientDriver, NeoHookeUniaxialStressAndTangent) {
   ctx_type ctx;
   build<nm::neo_hooke<policy>>(ctx);
-  evaluator ev(ctx, config());
-  driver d(ev);
+  driver d(ctx, parameters());
   auto const res{d.step(stretch(1.2), tensor2{}, control::uniaxial_stress(), 0, 1)};
   ASSERT_TRUE(res.converged);
   for (std::size_t a{1}; a < 9; ++a) { // every component but 11
@@ -109,7 +107,7 @@ TEST(DeformationGradientDriver, NeoHookeUniaxialStressAndTangent) {
   EXPECT_NEAR(res.F(1, 1), res.F(2, 2), 1e-12);
   EXPECT_LT(d.tangent_error(res), 1e-5);
   // Small stretch: P11 ~ E (lambda - 1)
-  driver d2(ev);
+  driver d2(ctx, parameters());
   auto const small{d2.step(stretch(1.0001), tensor2{}, control::uniaxial_stress(), 0, 1)};
   EXPECT_NEAR(small.stress(0, 0), E * 1e-4, 1e-2 * E * 1e-4);
 }
@@ -118,8 +116,7 @@ TEST(DeformationGradientDriver, NeoHookeUniaxialStressAndTangent) {
 TEST(DeformationGradientDriver, SimpleShearHasANormalStress) {
   ctx_type ctx;
   build<nm::neo_hooke<policy>>(ctx);
-  evaluator ev(ctx, config());
-  driver d(ev);
+  driver d(ctx, parameters());
   tensor2 F{tmech::eye<T, 3, 2>()};
   F(0, 1) = 0.3;
   auto const res{d.step(F, tensor2{}, control::deformation(), 0, 1)};
@@ -130,6 +127,54 @@ TEST(DeformationGradientDriver, SimpleShearHasANormalStress) {
   EXPECT_NEAR(sigma(1, 1), 0, 1e-9);
   EXPECT_NEAR(sigma(0, 1), G * 0.3, 1e-9);
   EXPECT_NEAR(sigma(0, 1), sigma(1, 0), 1e-12);
+}
+
+// The accepted F is the old value of the F source; a rejected trial leaves it.
+TEST(DeformationGradientDriver, AcceptAndRejectMoveTheStartOfTheStep) {
+  ctx_type ctx;
+  build<nm::neo_hooke<policy>>(ctx);
+  driver d(ctx, parameters());
+  auto const first{d.step(stretch(1.1), tensor2{}, control::uniaxial_stress(), 0, 1)};
+  EXPECT_EQ(d.accepted_F(), stretch(1.0));
+  d.accept();
+  EXPECT_EQ(d.accepted_F(), first.F);
+  (void)d.step(stretch(3.0), tensor2{}, control::uniaxial_stress(), 1, 1);
+  d.reject();
+  EXPECT_EQ(d.accepted_F(), first.F);
+  auto const second{d.step(stretch(1.2), tensor2{}, control::uniaxial_stress(), 1, 1)};
+  EXPECT_LT(d.tangent_error(second), 1e-5);
+}
+
+// Back to F11 = 1 under uniaxial stress: P = 0 exactly, so |P| alone is no scale for the residual.
+TEST(DeformationGradientDriver, UnloadingToZeroStressConverges) {
+  ctx_type ctx;
+  build<nm::neo_hooke<policy>>(ctx);
+  driver d(ctx, parameters());
+  ASSERT_TRUE(d.step(stretch(1.1), tensor2{}, control::uniaxial_stress(), 0, 1).converged);
+  d.accept();
+  auto const res{d.step(stretch(1.0), tensor2{}, control::uniaxial_stress(), 1, 1)};
+  EXPECT_TRUE(res.converged);
+  EXPECT_NEAR(tmech::norm(tensor2{res.F - stretch(1.0)}), 0, 1e-10);
+}
+
+TEST(DeformationGradientDriver, UnconvergedStepReturnsTheFItEvaluated) {
+  ctx_type ctx;
+  build<nm::neo_hooke<policy>>(ctx);
+  auto p{parameters()};
+  p.insert<int>("max_iter", 0);
+  driver d(ctx, p);
+  auto const res{d.step(stretch(1.1), tensor2{}, control::uniaxial_stress(), 0, 1)};
+  ASSERT_FALSE(res.converged);
+  d.accept();
+  EXPECT_EQ(d.accepted_F(), res.F);
+}
+
+TEST(DeformationGradientDriver, InvalidSettingsAreFatal) {
+  ctx_type ctx;
+  build<nm::neo_hooke<policy>>(ctx);
+  auto p{parameters()};
+  p.insert<int>("max_iter", -1);
+  EXPECT_THROW(static_cast<void>(driver{ctx, p}), u::fatal_error);
 }
 
 } // namespace
