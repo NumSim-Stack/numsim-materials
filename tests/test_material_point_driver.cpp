@@ -230,6 +230,37 @@ TEST(MaterialPointDriver, FiniteDifferenceStepIsAParameter) {
   EXPECT_GT(coarse.tangent_error(res), 10 * fine.tangent_error(res));
 }
 
+// Out of iterations: the result is the last evaluated trial, the one accept() commits.
+TEST(MaterialPointDriver, UnconvergedStepReturnsTheStrainItEvaluated) {
+  ctx_type ctx;
+  build_elastic(ctx);
+  auto parameters{parameters_for("elastic")};
+  parameters.insert<int>("max_iter", 0);
+  driver d(ctx, parameters);
+  auto const res{d.step(axial(1e-3), tensor2{}, control::uniaxial_stress(), 0, 1)};
+  ASSERT_FALSE(res.converged);
+  EXPECT_EQ(res.residuals.size(), 1u);
+  EXPECT_EQ(res.stress, d.point().output<tensor2>("elastic", "stress"));
+  d.accept();
+  EXPECT_EQ(d.accepted_strain(), res.strain);
+}
+
+TEST(MaterialPointDriver, InvalidSettingsAreFatal) {
+  ctx_type ctx;
+  build_elastic(ctx);
+  auto with = [](auto set) {
+    auto p{parameters_for("elastic")};
+    set(p);
+    return p;
+  };
+  EXPECT_THROW(static_cast<void>(driver{ctx, with([](auto &p) { p.template insert<int>("max_iter", -1); })}),
+               u::fatal_error);
+  EXPECT_THROW(static_cast<void>(driver{ctx, with([](auto &p) { p.template insert<T>("fd_step", 0); })}),
+               u::fatal_error);
+  EXPECT_THROW(static_cast<void>(driver{ctx, with([](auto &p) { p.template insert<T>("tolerance", -1); })}),
+               u::fatal_error);
+}
+
 TEST(MaterialPointDriver, ParametersAreChecked) {
   ctx_type ctx;
   build_elastic(ctx);
