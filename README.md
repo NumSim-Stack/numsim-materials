@@ -217,7 +217,7 @@ adaptor used by `solvers/unknown_layout.h`.
 
 ## Dependencies
 
-- C++23 with `std::expected`: GCC ≥ 13 or Clang ≥ 19 (the NumSim toolchain baseline)
+- C++23 with `std::expected`: GCC ≥ 14 or Clang ≥ 19
 - [numsim-core](https://github.com/NumSim-Stack/numsim-core) — sibling checkout, installed, or fetched at the pinned version
 - [tmech](https://github.com/petlenz/tmech) ≥ 1.2 — tensor library; sibling checkout, installed, or fetched
   (`-DFETCHCONTENT_SOURCE_DIR_TMECH=/path/to/tmech` for another local checkout)
