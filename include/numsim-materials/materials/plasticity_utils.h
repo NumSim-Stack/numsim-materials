@@ -8,17 +8,6 @@
 
 namespace numsim::materials::plasticity_detail {
 
-/// The deviatoric projector IIdev = IIsym - 1/Dim * I⊗I (core/tensor_identities.h).
-template<typename T, std::size_t Dim>
-tmech::tensor<T, Dim, 4> make_IIdev() {
-  return dev_projector<T, Dim>();
-}
-
-template<typename T, std::size_t Dim>
-const tmech::tensor<T, Dim, 4>& cached_IIdev() {
-  return dev_projector<T, Dim>();
-}
-
 /// Isotropic elastic tangent C = K*I⊗I + 2G*IIdev.
 ///
 /// The bulk term is K*I⊗I, NOT 3K*IIvol. Those are equal only at Dim = 3,
