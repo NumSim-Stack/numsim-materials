@@ -10,6 +10,7 @@
 #include "numsim-materials/core/parameter_helpers.h"
 #include "numsim-materials/core/tensor_identities.h"
 #include "numsim-materials/driver/material_point.h"
+#include "numsim-materials/umat/errors.h"
 #include "numsim-materials/umat/external_state_source.h"
 #include "numsim-materials/umat/load_control.h"
 
@@ -60,6 +61,8 @@ public:
         m_tolerance(m_parameters.template get<value_type>("tolerance")),
         m_max_iter(m_parameters.template get<int>("max_iter")),
         m_fd_step(m_parameters.template get<value_type>("fd_step")) {
+    if (m_max_iter < 0 || !(m_tolerance >= 0) || !(m_fd_step > 0))
+      throw fatal_error("material_point_driver: max_iter and tolerance must be >= 0, fd_step > 0");
     if (!text("time_source").empty())
       m_time = &m_point.template input<external_scalar_source<Traits>>(text("time_source"));
   }
@@ -85,6 +88,8 @@ public:
         res.converged = true;
         break;
       }
+      if (it == m_max_iter)
+        break; // the result stays the evaluated trial
       tensor4 const A{tmech::dcontract(tensor4{tmech::dcontract(P, res.tangent)}, P) + Q};
       res.strain = tmech::eval(res.strain - tmech::dcontract(tensor4{tmech::invf(A)}, r));
     }
