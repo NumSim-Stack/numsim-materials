@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_UMAT_LOAD_CONTROL_H
-#define NUMSIM_MATERIALS_UMAT_LOAD_CONTROL_H
+#ifndef NUMSIM_MATERIALS_DRIVER_LOAD_CONTROL_H
+#define NUMSIM_MATERIALS_DRIVER_LOAD_CONTROL_H
 
 #include <initializer_list>
 #include <string_view>
@@ -7,7 +7,7 @@
 #include <tmech/tmech.h>
 #include "numsim-materials/core/tensor_identities.h"
 
-namespace numsim::materials::umat {
+namespace numsim::materials {
 
 /// Which symmetric components are stress controlled; the rest are strain controlled.
 template <typename T>
@@ -74,6 +74,6 @@ private:
   tensor4 m_M;
 };
 
-} // namespace numsim::materials::umat
+} // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_UMAT_LOAD_CONTROL_H
+#endif // NUMSIM_MATERIALS_DRIVER_LOAD_CONTROL_H
