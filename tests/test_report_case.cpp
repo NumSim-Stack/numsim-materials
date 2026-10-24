@@ -105,6 +105,11 @@ TEST(ReportJson, ParsesThePointAndTheColumns) {
   EXPECT_EQ(p.get<std::string>("tangent_source"), "t");
   EXPECT_THROW(r::parse_point<policy>(json::parse(R"({"point": {"strain": "s"}})")), std::invalid_argument)
       << "not a driver parameter";
+  auto const fixed_point{r::parse_point<policy>(json::parse(R"({"point": {"strain_source": "s", "stress_source": "m",
+    "residual_source": "scs::residual", "residual_tolerance": 1e-11, "max_passes": 200}})"))};
+  EXPECT_EQ(fixed_point.get<std::string>("residual_source"), "scs::residual");
+  EXPECT_EQ(fixed_point.get<T>("residual_tolerance"), 1e-11);
+  EXPECT_EQ(fixed_point.get<int>("max_passes"), 200);
   auto const cols{r::parse_columns(doc)};
   ASSERT_EQ(cols.size(), 3u);
   EXPECT_EQ(cols[0].name, "strain");
@@ -208,6 +213,9 @@ TEST(ReportJson, CountsMustBeIntegersInRange) {
   auto doc = json::parse(R"({"point": {"strain_source": "s", "stress_source": "m", "max_iter": 1e10}})");
   EXPECT_THROW(static_cast<void>(r::parse_point<policy>(doc)), std::invalid_argument);
   doc["point"]["max_iter"] = 2.5;
+  EXPECT_THROW(static_cast<void>(r::parse_point<policy>(doc)), std::invalid_argument);
+  doc["point"].erase("max_iter");
+  doc["point"]["max_passes"] = 0;
   EXPECT_THROW(static_cast<void>(r::parse_point<policy>(doc)), std::invalid_argument);
   auto const studies = json::parse(R"({"cases": [{"name": "u"}], "studies": [{"name": "s", "case": "u", "steps": [4, 2.5]}]})");
   EXPECT_THROW(static_cast<void>(r::parse_studies(studies)), std::invalid_argument);

@@ -182,19 +182,22 @@ inline std::vector<std::string> output_stems(nlohmann::json const &doc) {
 }
 
 /// "point": the parameters of the material-point driver (strain_source or deformation_gradient_source,
-/// stress_source, optional tangent_source and time_source, and optionally tolerance, max_iter, fd_step).
+/// stress_source, optional tangent_source and time_source, and optionally tolerance, max_iter, fd_step, and the
+/// fixed point residual_source, residual_tolerance, max_passes).
 template <typename Traits>
 typename Traits::ParameterHandler parse_point(nlohmann::json const &doc) {
   using T = typename Traits::value_type;
   typename Traits::ParameterHandler out;
   for (auto const &[key, value] : doc.at("point").items()) {
     if (key == "strain_source" || key == "deformation_gradient_source" || key == "stress_source" ||
-        key == "tangent_source" || key == "time_source")
+        key == "tangent_source" || key == "time_source" || key == "residual_source")
       out.template insert<std::string>(key, value.template get<std::string>());
-    else if (key == "tolerance" || key == "fd_step")
+    else if (key == "tolerance" || key == "fd_step" || key == "residual_tolerance")
       out.template insert<T>(key, value.template get<T>());
     else if (key == "max_iter")
       out.template insert<int>(key, detail::as_count(value, "report: \"point\": max_iter", 0));
+    else if (key == "max_passes")
+      out.template insert<int>(key, detail::as_count(value, "report: \"point\": max_passes", 1));
     else
       throw std::invalid_argument("report: \"point\" has no parameter '" + key + "'");
   }
