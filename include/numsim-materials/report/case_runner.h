@@ -7,12 +7,12 @@
 #include <utility>
 
 #include <nlohmann/json.hpp>
+#include "numsim-materials/driver/deformation_gradient_driver.h"
+#include "numsim-materials/driver/material_point_driver.h"
 #include "numsim-materials/report/property_columns.h"
 #include "numsim-materials/report/report_json.h"
 #include "numsim-materials/report/step_record.h"
-#include "numsim-materials/umat/deformation_gradient_driver.h"
 #include "numsim-materials/umat/json_model.h"
-#include "numsim-materials/umat/material_point_driver.h"
 
 namespace numsim::materials::report {
 
@@ -51,12 +51,12 @@ bool run_small_strain(nlohmann::json const &doc, load_case<typename Traits::valu
   using T = typename Traits::value_type;
   using tensor2 = tmech::tensor<T, 3, 2>;
   case_model<Traits> model(doc);
-  umat::material_point_driver<Traits> driver{model.context(), parse_point<Traits>(doc)};
+  material_point_driver<Traits> driver{model.context(), parse_point<Traits>(doc)};
   property_columns<Traits> const columns{model.context(), parse_columns(doc)};
   sink.begin(columns.names());
   auto const values = [&](auto const &) { return columns.values(); };
 
-  auto const initial{driver.step(tensor2{}, tensor2{}, umat::load_control<T>::strain(), 0, 0)};
+  auto const initial{driver.step(tensor2{}, tensor2{}, load_control<T>::strain(), 0, 0)};
   if (!record_step<Traits>(driver, initial, c.path.unloaded(), 0, sink, values))
     return false;
   for (auto const &s : c.path.steps())
@@ -83,7 +83,7 @@ bool run_finite_strain(nlohmann::json const &doc, load_case<typename Traits::val
   using T = typename Traits::value_type;
   using tensor2 = tmech::tensor<T, 3, 2>;
   case_model<Traits> model(doc);
-  umat::deformation_gradient_driver<Traits> driver{model.context(), parse_point<Traits>(doc)};
+  deformation_gradient_driver<Traits> driver{model.context(), parse_point<Traits>(doc)};
   property_columns<Traits> const columns{model.context(), parse_columns(doc)};
   auto names{columns.names()};
   for (auto const &comp : symmetric_components)
@@ -98,7 +98,7 @@ bool run_finite_strain(nlohmann::json const &doc, load_case<typename Traits::val
   };
 
   auto const I{tmech::eye<T, 3, 2>()};
-  auto const initial{driver.step(I, tensor2{}, umat::deformation_control<T>::deformation(), 0, 0)};
+  auto const initial{driver.step(I, tensor2{}, deformation_control<T>::deformation(), 0, 0)};
   if (!record_step<Traits>(driver, initial, c.path.unloaded(), 0, sink, values))
     return false;
   for (auto const &s : c.path.steps())
