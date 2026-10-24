@@ -8,8 +8,10 @@
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/core/parameter_helpers.h"
 #include "numsim-materials/driver/material_point.h"
+#include "numsim-materials/materials/constant_scalar.h"
 #include "numsim-materials/umat/external_state_source.h"
 #include "numsim-materials/umat/statev_map.h"
+#include "test_fixture_materials.h"
 
 // The material point core (#184 phase 2): input variables, output variables and history management, with the
 // history owned either by the host (load/store) or by the engine (accept/reset).
@@ -89,54 +91,7 @@ private:
   value_type &m_residual;
 };
 
-/// "residual" is the parameter "value", whatever the pass.
-template <typename Traits>
-class stuck final : public nm::material_base<stuck<Traits>, Traits> {
-public:
-  using base = nm::material_base<stuck<Traits>, Traits>;
-  using value_type = typename base::value_type;
-  using input_parameter_controller = typename base::input_parameter_controller;
-
-  template <typename... Args>
-  explicit stuck(Args &&...args)
-      : base(std::forward<Args>(args)...), m_residual(base::template add_output<value_type>("residual", &stuck::compute)),
-        m_value(base::template get_parameter<value_type>("value")) {}
-
-  static input_parameter_controller parameters() {
-    input_parameter_controller para{base::parameters()};
-    nm::required<value_type>(para, "value");
-    return para;
-  }
-
-  void compute() { m_residual = m_value; }
-
-private:
-  value_type &m_residual;
-  value_type const &m_value;
-};
-
-/// A history no host buffer can hold.
-template <typename Traits>
-class tagger final : public nm::material_base<tagger<Traits>, Traits> {
-public:
-  using base = nm::material_base<tagger<Traits>, Traits>;
-  using input_parameter_controller = typename base::input_parameter_controller;
-
-  template <typename... Args>
-  explicit tagger(Args &&...args)
-      : base(std::forward<Args>(args)...), m_tag(base::template add_history_output<int>("tag", &tagger::compute)),
-        m_strain(base::template add_input<tensor2>("strain", "strain", nm::EdgeKind::Global)) {}
-
-  static input_parameter_controller parameters() { return input_parameter_controller{base::parameters()}; }
-
-  void compute() { m_tag.new_value() = m_tag.old_value() + 1; }
-
-private:
-  nm::history_property<int> &m_tag;
-  nm::input_property<tensor2, nm::property_traits> const &m_strain;
-};
-
-/// strain (external) and "mem", or "tag" with `tagged`.
+/// strain (external) and "mem", plus an int_counter "tag" with `tagged`.
 struct setup {
   ctx_type ctx;
 
@@ -151,7 +106,7 @@ struct setup {
     if (tagged) {
       p.clear();
       p.insert<std::string>("name", "tag");
-      ctx.create<tagger<policy>>(p);
+      ctx.create<nm::test::int_counter<policy>>(p);
     }
     ctx.finalize();
   }
@@ -270,7 +225,7 @@ TEST(MaterialPoint, EngineOwnedHistoryNeedsNoHostLayout) {
   point.accept();
   trial(point, 1, 2);
   point.accept();
-  EXPECT_EQ(point.history<int>("tag", "tag").new_value(), 2);
+  EXPECT_EQ(point.history<int>("tag", "count").new_value(), 2);
   EXPECT_THROW(static_cast<void>(point.history_width()), nm::umat::fatal_error) << "an int has no STATEV layout";
 }
 
@@ -298,9 +253,9 @@ TEST(MaterialPoint, ResidualCountsByMagnitudeAndNaNNeverConverges) {
     param_type p;
     p.insert<std::string>("name", "stuck");
     p.insert<T>("value", value);
-    ctx.create<stuck<policy>>(p);
+    ctx.create<nm::constant_scalar<policy>>(p);
     ctx.finalize();
-    point_type point{ctx, {.residual_property = "stuck::residual", .max_passes = 3}};
+    point_type point{ctx, {.residual_property = "stuck::value", .max_passes = 3}};
     EXPECT_THROW(point.evaluate(), nm::umat::cutback_error) << "residual " << value;
   }
 }
