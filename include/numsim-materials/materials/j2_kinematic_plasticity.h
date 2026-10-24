@@ -123,7 +123,7 @@ public:
         m_db_de(base::template add_input<tensor4>(
             base::template get_parameter<std::string>("solver_source"),
             "d_dbeta_d_strain", EdgeKind::Local)),
-        m_IIdev(plasticity_detail::cached_IIdev<value_type, Dim>()),
+        m_IIdev(dev_projector<value_type, Dim>()),
         m_IIsym(m_IIdev + tmech::otimes(tmech::eye<value_type, Dim, 2>(),
                                         tmech::eye<value_type, Dim, 2>()) /
                               value_type{Dim}),
