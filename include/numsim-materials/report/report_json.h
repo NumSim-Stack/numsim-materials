@@ -15,20 +15,18 @@
 
 #include <nlohmann/json.hpp>
 #include "numsim-materials/core/tensor_identities.h"
+#include "numsim-materials/driver/load_control.h"
 #include "numsim-materials/report/load_path.h"
-#include "numsim-materials/umat/load_control.h"
 
 /// Parsing of report documents into value types; nothing here runs a material.
 namespace numsim::materials::report {
-
-using umat::load_control;
 
 template <typename T>
 struct load_case {
   using tensor2 = tmech::tensor<T, 3, 2>;
   std::string name;
   load_control<T> control;                     ///< small strain
-  umat::deformation_control<T> finite_control; ///< the same components, for F / P
+  deformation_control<T> finite_control; ///< the same components, for F / P
   std::vector<tensor2> points; ///< strain states (or F - I) the path interpolates (already scaled)
   tensor2 stress;              ///< stress target per unit load factor
   load_path<T> path;
@@ -97,8 +95,8 @@ load_control<T> parse_control(nlohmann::json const &c) {
 
 /// The same "control" for finite strain; "mixed" may name 21, 31, 32 as well.
 template <typename T>
-umat::deformation_control<T> parse_deformation_control(nlohmann::json const &c) {
-  return detail::parse_control(c, umat::deformation_control<T>::deformation());
+deformation_control<T> parse_deformation_control(nlohmann::json const &c) {
+  return detail::parse_control(c, deformation_control<T>::deformation());
 }
 
 /// Proportional: "direction" times the factors of "path". Non-proportional: "points", strain states
@@ -126,7 +124,7 @@ load_case<T> parse_case(nlohmann::json const &c, bool finite_strain = false) {
       points.push_back(tensor2{scale * f * direction});
   }
   return {c.at("name").get<std::string>(), finite_strain ? load_control<T>::strain() : parse_control<T>(c),
-          finite_strain ? parse_deformation_control<T>(c) : umat::deformation_control<T>::deformation(), std::move(points),
+          finite_strain ? parse_deformation_control<T>(c) : deformation_control<T>::deformation(), std::move(points),
           c.contains("stress") ? parse_symmetric<T>(c["stress"]) : tensor2{},
           load_path<T>{std::move(factors), detail::count(c, "steps", 50, 1), c.contains("points") ? T{1} : scale,
                        c.value("dt", T{1})},

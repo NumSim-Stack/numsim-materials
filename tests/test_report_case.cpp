@@ -10,7 +10,7 @@
 #include "numsim-materials/report/csv_sink.h"
 #include "numsim-materials/report/step_record.h"
 #include "numsim-materials/report/graph_description.h"
-#include "numsim-materials/umat/load_control.h"
+#include "numsim-materials/driver/load_control.h"
 #include "numsim-materials/report/load_path.h"
 #include "numsim-materials/report/report_json.h"
 #include "numsim-materials/umat/json_model.h"
@@ -24,7 +24,7 @@ using policy = nm::material_policy_default;
 using T = policy::value_type;
 using tensor2 = tmech::tensor<T, 3, 2>;
 using tensor4 = tmech::tensor<T, 3, 4>;
-using control = nm::umat::load_control<T>;
+using control = nm::load_control<T>;
 using json = nlohmann::json;
 
 TEST(LoadControl, StrainControlPrescribesNoStress) {
