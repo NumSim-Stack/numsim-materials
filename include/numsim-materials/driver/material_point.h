@@ -12,6 +12,7 @@
 
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_context.h"
+#include "numsim-materials/core/parameter_helpers.h"
 #include "numsim-materials/core/property_value.h"
 #include "numsim-materials/materials/props_scalar.h"
 #include "numsim-materials/umat/errors.h"
@@ -32,33 +33,44 @@ public:
   using value_type = typename Traits::value_type;
   using context_type = material_context<Traits>;
   using tensor2 = tmech::tensor<value_type, 3, 2>;
+  using parameter_handler = typename Traits::ParameterHandler;
+  using input_parameter_controller = typename Traits::InputParameterController;
 
-  struct config {
-    /// Host-driven source materials (external_*_source); their history stays with the host.
-    std::vector<std::string> inputs{};
-    /// Further history kept out of load_history() / store_history(), as (material, property).
-    std::vector<umat::statev_exclusion> host_owned{};
-    /// Optional "material::property" of a residual: evaluate() updates again until its magnitude is at most the tolerance.
-    std::string residual_property{};
-    value_type residual_tolerance{1e-10};
-    int max_passes{100};
-  };
+  static input_parameter_controller parameters() {
+    input_parameter_controller para;
+    // host-driven sources (external_*_source); their history stays with the host
+    optional<std::vector<std::string>>(para, "inputs", {});
+    // further "material::property" history kept out of load_history() / store_history()
+    optional<std::vector<std::string>>(para, "host_owned", {});
+    // "material::property": evaluate() updates again until its magnitude is at most the tolerance
+    optional<std::string>(para, "residual_source", std::string{});
+    optional<value_type>(para, "residual_tolerance", value_type{1e-10});
+    optional<int>(para, "max_passes", 100);
+    return para;
+  }
 
-  material_point(context_type &ctx, config cfg) : m_ctx(ctx), m_cfg(std::move(cfg)) {
+  material_point(context_type &ctx, parameter_handler parameters)
+      : m_ctx(ctx), m_parameters(checked(std::move(parameters))),
+        m_inputs(m_parameters.template get<std::vector<std::string>>("inputs")),
+        m_tolerance(m_parameters.template get<value_type>("residual_tolerance")),
+        m_max_passes(m_parameters.template get<int>("max_passes")) {
     if (!m_ctx.is_finalized())
       throw umat::fatal_error("material_point: the context must be finalized first");
-    for (auto const &name : m_cfg.inputs) {
+    for (auto const &name : m_inputs) {
       if (!m_ctx.find(name))
         throw umat::fatal_error("material_point: input '" + name + "' is not a material in this context");
       for (auto const *prop : m_ctx.property_execution_order())
         if (prop->is_history() && prop->traits().id.owner == name)
           m_exclusions.emplace_back(name, prop->traits().id.name);
     }
-    m_exclusions.insert(m_exclusions.end(), m_cfg.host_owned.begin(), m_cfg.host_owned.end());
-    if (!(m_cfg.residual_tolerance >= 0) || m_cfg.max_passes < 1)
+    for (auto const &source : m_parameters.template get<std::vector<std::string>>("host_owned")) {
+      auto const src{connection_source::parse(source)};
+      m_exclusions.emplace_back(src.material, src.property);
+    }
+    if (!(m_tolerance >= 0) || m_max_passes < 1)
       throw umat::fatal_error("material_point: residual_tolerance must be >= 0 and max_passes >= 1");
-    if (!m_cfg.residual_property.empty())
-      m_residual = &output<value_type>(m_cfg.residual_property);
+    if (auto const &source{m_parameters.template get<std::string>("residual_source")}; !source.empty())
+      m_residual = &output<value_type>(source);
     for (auto *material : m_ctx.materials())
       if (auto *reader = dynamic_cast<props_scalar<Traits> *>(material)) {
         m_props_readers.push_back(reader);
@@ -74,7 +86,7 @@ public:
   /// The input source `name`, to bind its old and new values.
   template <typename Source>
   Source &input(std::string const &name) const {
-    if (!std::ranges::contains(m_cfg.inputs, name))
+    if (!std::ranges::contains(m_inputs, name))
       throw umat::fatal_error("material_point: '" + name + "' is not an input of this material point");
     auto *source = dynamic_cast<Source *>(m_ctx.find(name));
     if (!source)
@@ -137,10 +149,11 @@ public:
     if (!m_residual)
       return;
     // the negated test also keeps a NaN residual unconverged
-    for (int pass{1}; !(std::abs(*m_residual) <= m_cfg.residual_tolerance); ++pass) {
-      if (pass >= m_cfg.max_passes || std::isnan(*m_residual))
+    for (int pass{1}; !(std::abs(*m_residual) <= m_tolerance); ++pass) {
+      if (pass >= m_max_passes || std::isnan(*m_residual))
         throw umat::cutback_error(std::format("material_point: '{}' did not reach {:g} in {} passes (last {:g})",
-                                              m_cfg.residual_property, m_cfg.residual_tolerance, m_cfg.max_passes,
+                                              m_parameters.template get<std::string>("residual_source"), m_tolerance,
+                                              m_max_passes,
                                               *m_residual));
       m_ctx.update();
     }
@@ -173,6 +186,12 @@ public:
   [[nodiscard]] context_type &context() const noexcept { return m_ctx; }
 
 private:
+  static parameter_handler checked(parameter_handler parameters) {
+    static auto const check{material_point::parameters()};
+    check.check_parameter(parameters);
+    return parameters;
+  }
+
   property_base *find(std::string const &material, std::string const &property) const {
     if (auto *prop = m_ctx.find_property(material, property))
       return prop;
@@ -195,7 +214,10 @@ private:
   }
 
   context_type &m_ctx;
-  config m_cfg;
+  parameter_handler m_parameters;
+  std::vector<std::string> m_inputs;
+  value_type m_tolerance;
+  int m_max_passes;
   std::vector<umat::statev_exclusion> m_exclusions;
   value_type const *m_residual{nullptr};
   std::vector<props_scalar<Traits> *> m_props_readers;

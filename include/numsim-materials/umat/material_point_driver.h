@@ -53,7 +53,7 @@ public:
   }
 
   material_point_driver(material_context<Traits> &ctx, parameter_handler parameters)
-      : m_parameters(checked(std::move(parameters))), m_point(ctx, {.inputs = inputs()}),
+      : m_parameters(checked(std::move(parameters))), m_point(ctx, point_parameters()),
         m_strain(m_point.template input<external_strain_source<Traits>>(text("strain_source"))),
         m_stress(m_point.template output<tensor2>(text("stress_source"), "stress")),
         m_tangent(m_point.template output<tensor4>(
@@ -129,10 +129,13 @@ private:
 
   std::string const &text(std::string const &key) const { return m_parameters.template get<std::string>(key); }
 
-  std::vector<std::string> inputs() const {
-    std::vector<std::string> out{text("strain_source")};
+  /// The point's inputs: the kinematics source and the optional time source.
+  parameter_handler point_parameters() const {
+    std::vector<std::string> inputs{text("strain_source")};
     if (!text("time_source").empty())
-      out.push_back(text("time_source"));
+      inputs.push_back(text("time_source"));
+    parameter_handler out;
+    out.template insert<std::vector<std::string>>("inputs", std::move(inputs));
     return out;
   }
 
