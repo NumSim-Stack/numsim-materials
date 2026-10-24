@@ -1,0 +1,18 @@
+{
+  "title": "linear_elasticity",
+  "include": ["../standard_small_strain.json"],
+  "parameters": {"K": 166666.67, "G": 76923.08},
+  "derived": {"E": "9 * K * G / (3 * K + G)", "nu": "(3 * K - 2 * G) / (2 * (3 * K + G))"},
+  "model": {"materials": [
+    {"type": "external_strain_source", "name": "strain"},
+    {"type": "linear_elasticity", "name": "elastic", "strain_producer_name": "strain", "K": "$K", "G": "$G"}]},
+  "point": {"strain_source": "strain", "stress_source": "elastic"},
+  "checks": [
+    {"name": "σ11 = (K + 4G/3) ε11", "case": "uniaxial_strain", "value": "stress_11", "expected": "(K + 4 * G / 3) * strain_11", "tolerance": 1e-10, "relative": true},
+    {"name": "σ22 = (K − 2G/3) ε11", "case": "uniaxial_strain", "value": "stress_22", "expected": "(K - 2 * G / 3) * strain_11", "tolerance": 1e-10, "relative": true},
+    {"name": "σ11 = E ε11", "case": "uniaxial_stress", "value": "stress_11", "expected": "E * strain_11", "tolerance": 1e-10, "relative": true, "plot": {"x": "strain_11"}},
+    {"name": "ε22 = ε33 = −ν ε11", "case": "uniaxial_stress", "value": "np.maximum(abs(strain_22 + nu * strain_11), abs(strain_33 + nu * strain_11))", "tolerance": 1e-14},
+    {"name": "σ12 = 2G ε12", "case": "simple_shear", "value": "stress_12", "expected": "2 * G * strain_12", "tolerance": 1e-10, "relative": true, "plot": {"x": "strain_12"}},
+    {"name": "p = 3K ε11", "case": "hydrostatic_strain", "value": "p", "expected": "3 * K * strain_11", "tolerance": 1e-10, "relative": true}
+  ]
+}

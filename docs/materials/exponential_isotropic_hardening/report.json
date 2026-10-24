@@ -1,0 +1,37 @@
+{
+  "title": "exponential_isotropic_hardening",
+  "include": ["../standard_small_strain.json"],
+  "parameters": {"K": 166666.67, "G": 76923.08, "sigma_0": 250.0, "K_inf": 200.0, "delta": 100.0},
+  "model": {"materials": [
+    {"type": "external_strain_source", "name": "strain"},
+    {"type": "local_newton", "name": "solver"},
+    {"type": "exponential_isotropic_hardening", "name": "hardening", "source": "j2", "K_inf": "$K_inf", "delta": "$delta"},
+    {"type": "j2_plasticity", "name": "j2", "strain_source": "strain", "solver_source": "solver",
+     "hardening_source": "hardening", "K": "$K", "G": "$G", "sigma_0": "$sigma_0"}]},
+  "point": {"strain_source": "strain", "stress_source": "j2"},
+  "record": {"kappa": "j2::equivalent_plastic_strain", "R": "hardening::hardening_stress", "dR": "hardening::hardening_modulus",
+             "return_map_iterations": "solver::iterations"},
+  "cases": [
+    {"name": "uniaxial_stress_monotonic", "control": "uniaxial_stress", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], "scale": "$amplitude", "steps": "$steps", "tangent_every": 0},
+    {"name": "tension_then_shear", "points": [[0, 0, 0, 0, 0, 0], [1, 0, 0, 0, 0, 0], [1, 0, 0, 1, 0, 0]], "scale": "$amplitude", "steps": "$steps", "tangent_every": "$tangent_every"}
+  ],
+  "studies": [
+    {"name": "radial return on a proportional path", "case": "uniaxial_stress_monotonic", "steps": [5, 10, 20, 40, 80], "quantity": "stress_11"},
+    {"name": "backward Euler on a non-proportional path", "case": "tension_then_shear", "steps": [5, 10, 20, 40, 80, 160, 320], "quantity": "stress_12", "min_order": 0.9}
+  ],
+  "checks": [
+    {"name": "R = K∞ (1 − exp(−δ κ))", "cases": "*", "value": "R", "expected": "K_inf * (1 - np.exp(-delta * kappa))", "tolerance": 1e-12, "relative": true, "plot": {"x": "kappa", "xlabel": "κ"}},
+    {"name": "R' = K∞ δ exp(−δ κ)", "cases": "*", "value": "dR", "expected": "K_inf * delta * np.exp(-delta * kappa)", "tolerance": 1e-12, "relative": true},
+    {"name": "on or inside the yield surface", "cases": "*", "value": "np.maximum(q - sigma_0 - R, 0)", "tolerance": 1e-8},
+    {"name": "at most 6 Newton iterations", "case": "uniaxial_stress", "value": "np.maximum(iterations - 6, 0)", "tolerance": 0},
+    {"name": "at most 8 return-map iterations", "cases": "*", "value": "np.maximum(return_map_iterations - 8, 0)", "tolerance": 0}
+  ],
+  "figures": [
+    {"title": "Return map", "columns": 2,
+     "text": "Iterations of the material's own Newton (local_newton) per step, shown where κ grows.",
+     "panels": [
+      {"title": "uniaxial stress", "case": "uniaxial_stress", "x": "step",
+       "y": [{"expr": "np.where(np.diff(kappa, prepend=0) > 0, return_map_iterations, 0)", "label": "iterations"}]},
+      {"title": "equivalent plastic strain", "cases": ["uniaxial_stress", "simple_shear"], "x": "step", "y": ["kappa"]}]}
+  ]
+}

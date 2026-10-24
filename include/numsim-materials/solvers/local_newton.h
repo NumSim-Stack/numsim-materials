@@ -3,6 +3,7 @@
 
 #include <string>
 #include "numsim-materials/core/material_base.h"
+#include "numsim-materials/core/parameter_helpers.h"
 #include "numsim-materials/solvers/newton_scalar.h"
 
 namespace numsim::materials {
@@ -39,14 +40,14 @@ public:
   template <typename... Args>
   explicit local_newton(Args&&... args)
       : base(std::forward<Args>(args)...),
+        m_iterations(base::template add_output<value_type>("iterations")),
         m_solver(base::template get_parameter<value_type>("tolerance"),
                  base::template get_parameter<int>("max_iter")) {}
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
-    para.template insert<value_type>("tolerance")
-        .template add<set_default>(value_type{1e-10});
-    para.template insert<int>("max_iter").template add<set_default>(50);
+    optional<value_type>(para, "tolerance", value_type{1e-10});
+    optional<int>(para, "max_iter", 50);
     return para;
   }
 
@@ -55,12 +56,16 @@ public:
   /// The result carries its own convergence flag, so it cannot be read without
   /// being available -- unlike a converged() queried separately, which a caller
   /// can forget and which goes stale between solves.
+  /// Iterations of the last solve are published as "iterations" (for reports; an elastic step leaves it).
   template <typename Eval>
   [[nodiscard]] result solve(Eval&& eval, value_type x0 = value_type{}) const {
-    return m_solver.solve(std::forward<Eval>(eval), x0);
+    auto const r{m_solver.solve(std::forward<Eval>(eval), x0)};
+    m_iterations = static_cast<value_type>(r.iterations);
+    return r;
   }
 
 private:
+  value_type& m_iterations;
   newton_scalar<value_type> m_solver;
 };
 

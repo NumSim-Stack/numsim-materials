@@ -1,0 +1,16 @@
+{
+  "title": "saint_venant_kirchhoff",
+  "include": ["../standard_finite_strain.json"],
+  "parameters": {"K": 166666.67, "G": 76923.08},
+  "derived": {"E": "9 * K * G / (3 * K + G)", "nu": "(3 * K - 2 * G) / (2 * (3 * K + G))"},
+  "model": {"materials": [
+    {"type": "external_deformation_gradient_source", "name": "F"},
+    {"type": "saint_venant_kirchhoff", "name": "svk", "deformation_gradient_source": "F", "K": "$K", "G": "$G"}]},
+  "point": {"deformation_gradient_source": "F", "stress_source": "svk"},
+  "checks": [
+    {"name": "S11 = E E11 (uniaxial stress, S = F⁻¹P)", "case": "uniaxial_stress", "value": "P_11 / F_11", "expected": "E * (F_11**2 - 1) / 2", "tolerance": 1e-9, "relative": true, "plot": {"x": "F_11", "xlabel": "λ"}},
+    {"name": "E22 = −ν E11 (uniaxial stress)", "case": "uniaxial_stress", "value": "F_22", "expected": "np.sqrt(1 - nu * (F_11**2 - 1))", "tolerance": 1e-12, "relative": true},
+    {"name": "P12 = G γ (1 + γ²) + ... (simple shear, S = C:E)", "case": "simple_shear", "value": "P_12", "expected": "G * F_12 * (1 + F_12**2 / 2) + (K - 2 * G / 3) * F_12 * F_12**2 / 2 + G * F_12 * F_12**2 / 2", "tolerance": 1e-9, "relative": true, "plot": {"x": "F_12", "xlabel": "γ"}},
+    {"name": "volumetric: P = (K − 2G/3 + 2G/3) 3 E11 λ on the diagonal", "case": "volumetric", "value": "P_11", "expected": "(3 * K) * (F_11**2 - 1) / 2 * F_11", "tolerance": 1e-9, "relative": true}
+  ]
+}
