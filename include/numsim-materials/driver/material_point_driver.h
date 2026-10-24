@@ -43,8 +43,10 @@ public:
   static input_parameter_controller parameters() {
     input_parameter_controller para;
     required<std::string>(para, "strain_source");                  // external_strain_source
-    required<std::string>(para, "stress_source");                  // material publishing "stress"
-    optional<std::string>(para, "tangent_source", std::string{});  // publishing "tangent"; empty: stress_source
+    required<std::string>(para, "stress_source");                  // material publishing stress_property
+    optional<std::string>(para, "tangent_source", std::string{});  // publishing tangent_property; empty: stress_source
+    optional<std::string>(para, "stress_property", std::string{"stress"});   // e.g. "damaged_stress"
+    optional<std::string>(para, "tangent_property", std::string{"tangent"});
     optional<std::string>(para, "time_source", std::string{});     // external_scalar_source; empty: none
     optional<value_type>(para, "tolerance", value_type{1e-10});    // on |P:(sigma - sigma*)|, relative
     optional<int>(para, "max_iter", 25);
@@ -59,9 +61,10 @@ public:
   material_point_driver(material_context<Traits> &ctx, parameter_handler parameters)
       : m_parameters(checked(std::move(parameters))), m_point(ctx, point_parameters()),
         m_strain(m_point.template input<external_strain_source<Traits>>(text("strain_source"))),
-        m_stress(m_point.template output<tensor2>(text("stress_source"), "stress")),
+        m_stress(m_point.template output<tensor2>(text("stress_source"), text("stress_property"))),
         m_tangent(m_point.template output<tensor4>(
-            text("tangent_source").empty() ? text("stress_source") : text("tangent_source"), "tangent")),
+            text("tangent_source").empty() ? text("stress_source") : text("tangent_source"),
+            text("tangent_property"))),
         m_tolerance(m_parameters.template get<value_type>("tolerance")),
         m_max_iter(m_parameters.template get<int>("max_iter")),
         m_fd_step(m_parameters.template get<value_type>("fd_step")) {

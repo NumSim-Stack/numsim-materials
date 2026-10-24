@@ -185,6 +185,20 @@ TEST(DeformationGradientDriver, InvalidSettingsAreFatal) {
   EXPECT_THROW(static_cast<void>(driver{ctx, p}), u::fatal_error);
 }
 
+TEST(DeformationGradientDriver, StressAndTangentPropertiesAreParameters) {
+  ctx_type ctx;
+  build<nm::neo_hooke<policy>>(ctx);
+  for (auto const *key : {"stress_property", "tangent_property"}) {
+    auto p{parameters()};
+    p.insert<std::string>(key, "no_such_property");
+    EXPECT_ANY_THROW(static_cast<void>(driver{ctx, p})) << key;
+  }
+  auto p{parameters()};
+  p.insert<std::string>("stress_property", "stress");
+  p.insert<std::string>("tangent_property", "tangent");
+  EXPECT_TRUE(driver(ctx, p).step(stretch(1.01), tensor2{}, control::deformation(), 0, 1).converged);
+}
+
 TEST(DeformationGradientDriver, PassesTheResidualSettingsToThePoint) {
   ctx_type ctx;
   build<nm::neo_hooke<policy>>(ctx, true);

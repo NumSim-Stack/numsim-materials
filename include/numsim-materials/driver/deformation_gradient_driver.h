@@ -43,8 +43,10 @@ public:
   static input_parameter_controller parameters() {
     input_parameter_controller para;
     required<std::string>(para, "deformation_gradient_source");    // external_deformation_gradient_source
-    required<std::string>(para, "stress_source");                  // material publishing "stress" (P)
-    optional<std::string>(para, "tangent_source", std::string{});  // publishing "tangent" (dP/dF); empty: stress_source
+    required<std::string>(para, "stress_source");                  // material publishing stress_property (P)
+    optional<std::string>(para, "tangent_source", std::string{});  // publishing tangent_property (dP/dF); empty: stress_source
+    optional<std::string>(para, "stress_property", std::string{"stress"});   // e.g. "damaged_stress"
+    optional<std::string>(para, "tangent_property", std::string{"tangent"});
     optional<std::string>(para, "time_source", std::string{});     // external_scalar_source; empty: none
     optional<value_type>(para, "tolerance", value_type{1e-10});    // on |M:(P - P*)| relative to |P|
     optional<int>(para, "max_iter", 25);
@@ -59,9 +61,10 @@ public:
   deformation_gradient_driver(material_context<Traits> &ctx, parameter_handler parameters)
       : m_parameters(checked(std::move(parameters))), m_point(ctx, point_parameters()),
         m_F(m_point.template input<external_deformation_gradient_source<Traits>>(text("deformation_gradient_source"))),
-        m_stress(m_point.template output<tensor2>(text("stress_source"), "stress")),
+        m_stress(m_point.template output<tensor2>(text("stress_source"), text("stress_property"))),
         m_tangent(m_point.template output<tensor4>(
-            text("tangent_source").empty() ? text("stress_source") : text("tangent_source"), "tangent")),
+            text("tangent_source").empty() ? text("stress_source") : text("tangent_source"),
+            text("tangent_property"))),
         m_tolerance(m_parameters.template get<value_type>("tolerance")),
         m_max_iter(m_parameters.template get<int>("max_iter")),
         m_fd_step(m_parameters.template get<value_type>("fd_step")) {
