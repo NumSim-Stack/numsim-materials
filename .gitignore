@@ -24,4 +24,7 @@ third_party/qcustomplot/qcp.tar.gz
 # Generated plots
 *.png
 *.user*
+
+# Python
 __pycache__/
+*.pyc
