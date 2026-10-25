@@ -54,7 +54,6 @@ public:
       : base(std::forward<Args>(args)...),
         m_func(base::template get_parameter<std::string>("function")),
         m_tol(base::template get_parameter<value_type>("tolerance")),
-        m_lin_tol(base::template get_parameter<value_type>("linear_tolerance")),
         m_max_iter(base::template get_parameter<int>("max_iter")),
         m_strain_derivative(
             base::template get_parameter<bool>("strain_derivative")),
@@ -132,9 +131,6 @@ public:
         .template add<is_required>();
     para.template insert<value_type>("tolerance")
         .template add<set_default>(value_type{1e-10});
-    // Backward-error tolerance for the linear solve; guards a singular Jacobian.
-    para.template insert<value_type>("linear_tolerance")
-        .template add<set_default>(value_type{1e-8});
     para.template insert<int>("max_iter").template add<set_default>(50);
     // Opt-in: wires d_residual_<name>_d_strain inputs and produces
     // d_<name>_d_strain outputs, solved from the converged factorization.
@@ -216,14 +212,10 @@ public:
       m_lu.compute(m_J);
       m_dx = m_lu.solve(m_R);
 
-      // Guard a singular / rank-deficient Jacobian. A backward-error check is
-      // cheaper than rank-revealing pivoting every iteration and catches the
-      // same failures; finiteness alone would not.
+      // An exactly singular Jacobian divides by a zero pivot and leaves inf or
+      // NaN in dx. No residual check: the LU is backward stable, so J*dx - R is
+      // rounding noise whose size depends on the toolchain (FMA or not), see #21.
       if (!m_dx.allFinite()) return;
-      const auto rn = m_R.template lpNorm<Eigen::Infinity>();
-      const auto back_err =
-          (m_J * m_dx - m_R).template lpNorm<Eigen::Infinity>();
-      if (back_err > m_lin_tol * rn) return;
 
       m_x -= m_dx;
     }
@@ -508,7 +500,6 @@ private:
 private:
   const std::string& m_func;
   const value_type& m_tol;
-  const value_type& m_lin_tol;
   const int& m_max_iter;
 
   std::vector<std::unique_ptr<state_layout_base<value_type>>> m_state;
