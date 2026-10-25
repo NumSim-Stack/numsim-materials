@@ -2,12 +2,11 @@
 #include <memory>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_context.h"
+#include "numsim-materials/driver/material_point_driver.h"
 #include "numsim-materials/materials/incremental_linear_elasticity.h"
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/umat/external_state_source.h"
 #include "numsim-materials/umat/json_model.h"
-#include "numsim-materials/umat/load_control.h"
-#include "numsim-materials/umat/material_point_driver.h"
 #include "numsim-materials/umat/material_point_evaluator.h"
 
 namespace {
@@ -22,6 +21,14 @@ using tensor2 = tmech::tensor<T, 3, 2>;
 using tensor4 = tmech::tensor<T, 3, 4>;
 
 constexpr T K{100}, G{40};
+
+/// The driver on "strain" -> "inc".
+nm::material_point_driver<policy> driver_for(ctx_type &ctx) {
+  param_type p;
+  p.insert<std::string>("strain_source", "strain");
+  p.insert<std::string>("stress_source", "inc");
+  return {ctx, p};
+}
 
 /// strain -> linear_elasticity "total" and incremental_linear_elasticity "inc" reading total's tangent.
 std::unique_ptr<ctx_type> build() {
@@ -47,34 +54,34 @@ std::unique_ptr<ctx_type> build() {
 
 TEST(IncrementalElasticity, EqualsTheTotalFormAlongAPathAndClosesACycle) {
   auto ctx{build()};
-  u::material_point_evaluator<policy> ev(*ctx, {.strain_source = "strain", .stress_source = "inc"});
-  u::material_point_driver<policy> d(ev);
+  auto d{driver_for(*ctx)};
   tensor2 eps;
   for (int n{1}; n <= 20; ++n) {
     T const load{n <= 10 ? n * 1e-3 : (20 - n) * 1e-3};
     eps(0, 0) = load;
     eps(0, 1) = eps(1, 0) = 0.5 * load;
-    auto const res{d.step(eps, tensor2{}, u::load_control<T>::strain(), n - 1, 1)};
+    auto const res{d.step(eps, tensor2{}, nm::load_control<T>::strain(), n - 1, 1)};
     ASSERT_TRUE(res.converged);
+    d.accept();
     tensor2 const expected{tmech::dcontract(ctx->get<tensor4>("total", "tangent"), eps)};
     EXPECT_NEAR(tmech::norm(tensor2{res.stress - expected}), 0, 1e-12) << n;
     EXPECT_NEAR(tmech::norm(tensor4{res.tangent - ctx->get<tensor4>("total", "tangent")}), 0, 1e-12);
   }
-  EXPECT_NEAR(tmech::norm(d.state().strain), 0, 1e-15); // back at zero
-  EXPECT_EQ(ev.nstatv(), 6u); // the stress is history (the strain source is the host's)
+  EXPECT_NEAR(tmech::norm(d.accepted_strain()), 0, 1e-15); // back at zero
+  EXPECT_EQ(d.point().history_width(), 6u); // the stress is history (the strain source is the host's)
 }
 
 // Under stress control the stress passes exactly through zero at the reversal; the round-off
 // of the incremental sum must still count as converged (the driver scales with |C| |d eps|).
 TEST(IncrementalElasticity, UniaxialStressCycleThroughZeroConverges) {
   auto ctx{build()};
-  u::material_point_evaluator<policy> ev(*ctx, {.strain_source = "strain", .stress_source = "inc"});
-  u::material_point_driver<policy> d(ev);
+  auto d{driver_for(*ctx)};
   for (int n{1}; n <= 40; ++n) {
     tensor2 eps;
     eps(0, 0) = (n <= 10 ? n : 20 - n) * 1e-3; // 0 -> 1e-2 -> -2e-2
-    auto const res{d.step(eps, tensor2{}, u::load_control<T>::uniaxial_stress(), n - 1, 1)};
+    auto const res{d.step(eps, tensor2{}, nm::load_control<T>::uniaxial_stress(), n - 1, 1)};
     EXPECT_TRUE(res.converged) << n;
+    d.accept();
   }
 }
 
