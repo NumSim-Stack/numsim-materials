@@ -21,15 +21,13 @@
 #include "numsim-materials/materials/strain_threshold_yield.h"
 #include "numsim-materials/materials/von_mises_state_function.h"
 #include "numsim-materials/solvers/local_newton.h"
+#include "numsim-materials/driver/material_point_driver.h"
 #include "numsim-materials/umat/external_state_source.h"
 #include "numsim-materials/umat/json_model.h"
-#include "numsim-materials/umat/material_point_driver.h"
-#include "numsim-materials/umat/material_point_evaluator.h"
 
 namespace {
 
 namespace nm = numsim::materials;
-namespace u = numsim::materials::umat;
 using policy = nm::material_policy_default;
 using T = policy::value_type;
 using ctx_type = nm::material_context<policy>;
@@ -245,27 +243,37 @@ TEST(MeanFieldDamage, ResidualDecreasesOverThePassesOfAStep) {
   EXPECT_LT(ctx->get<T>("mt", "residual"), 1e-10);
 }
 
+/// The driver on "strain" -> "mt", closing the fixed point on "mt::residual".
+policy::ParameterHandler mt_point() {
+  policy::ParameterHandler p;
+  p.insert<std::string>("strain_source", "strain");
+  p.insert<std::string>("stress_source", "mt");
+  p.insert<std::string>("residual_source", "mt::residual");
+  return p;
+}
+
 // the tangent sum c_r C_r : A_r is exact as the step vanishes: central differences on a small step after
-// loading through the driver, whose evaluator closes the fixed point per call
+// loading through the driver, whose material point closes the fixed point per call
 TEST(MeanFieldDamage, TangentMatchesFiniteDifferencesOnASmallStep) {
   auto ctx{build(true)};
-  u::material_point_evaluator<policy> ev(*ctx, {.strain_source = "strain", .stress_source = "mt", .residual_property = "mt::residual"});
-  u::material_point_driver<policy> d(ev);
-  for (int n{1}; n <= 6; ++n)
-    ASSERT_TRUE(d.step(uniaxial(n * 1e-3), tensor2{}, u::load_control<T>::strain(), n - 1, 1).converged) << n;
-  auto const res{d.step(uniaxial(0.006 + 1e-6), tensor2{}, u::load_control<T>::strain(), 6, 1)};
+  nm::material_point_driver<policy> d(*ctx, mt_point());
+  for (int n{1}; n <= 6; ++n) {
+    ASSERT_TRUE(d.step(uniaxial(n * 1e-3), tensor2{}, nm::load_control<T>::strain(), n - 1, 1).converged) << n;
+    d.accept();
+  }
+  auto const res{d.step(uniaxial(0.006 + 1e-6), tensor2{}, nm::load_control<T>::strain(), 6, 1)};
   ASSERT_TRUE(res.converged);
   EXPECT_LT(d.tangent_error(res), 1e-2);
 }
 
 TEST(MeanFieldDamage, StressControlReEvaluatesFromTheCommittedLocalStrains) {
   auto ctx{build(true)};
-  u::material_point_evaluator<policy> ev(*ctx, {.strain_source = "strain", .stress_source = "mt", .residual_property = "mt::residual"});
-  u::material_point_driver<policy> d(ev);
+  nm::material_point_driver<policy> d(*ctx, mt_point());
   for (int n{1}; n <= 16; ++n) {
-    auto const res{d.step(uniaxial(n * 5e-4), tensor2{}, u::load_control<T>::uniaxial_stress(), n - 1, 1)};
+    auto const res{d.step(uniaxial(n * 5e-4), tensor2{}, nm::load_control<T>::uniaxial_stress(), n - 1, 1)};
     ASSERT_TRUE(res.converged) << n;
     EXPECT_NEAR(res.stress(1, 1), 0, 1e-8 * std::abs(res.stress(0, 0))) << n;
+    d.accept();
   }
   EXPECT_GT(ctx->get<T>("law", "damage"), 0);
 }
