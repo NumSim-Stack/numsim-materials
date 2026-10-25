@@ -29,7 +29,7 @@
     {"type": "phase", "name": "matrix_intact", "tangent_source": "C_m", "fraction_source": "cm_"},
     {"type": "mean_field_composite_global", "name": "mt_intact", "phases": ["matrix_intact", "spheres"], "kernel": {"type": "mori_tanaka"}},
     {"type": "linear_stress", "name": "intact", "tangent_source": "mt_intact", "strain_source": "strain"}]},
-  "point": {"strain_source": "strain", "stress_source": "mt", "residual": "mt::residual", "tolerance": 1e-10, "max_passes": 200},
+  "point": {"strain_source": "strain", "stress_source": "mt", "residual_source": "mt::residual", "residual_tolerance": 1e-10, "max_passes": 200},
   "record": {"d": "law::damage", "eps_m": "mt_strain::strain_matrix", "eps_i": "mt_strain::strain_spheres", "sig_m": "damage::damaged_stress", "sig_i": "stiff::stress", "res": "mt::residual", "sig_intact": "intact::stress"},
   "checks": [
     {"name": "local strains partition the composite strain", "cases": "*", "value": "(1 - c) * eps_m_11 + c * eps_i_11", "expected": "strain_11", "tolerance": 1e-10, "relative": true},
