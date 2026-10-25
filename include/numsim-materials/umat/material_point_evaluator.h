@@ -207,7 +207,7 @@ public:
     // on an unconverged iterate starts from t_n, not from the previous trial.
     // reset() first: it also clears a context a failed call left failed.
     m_point.reset();
-    m_point.load_history(statev);
+    m_point.load_history({statev, m_point.history_width()});
 
     // Co-rotational update. STATEV was written in the previous configuration,
     // so it must be rotated after unpack and before the material runs.
@@ -262,7 +262,7 @@ public:
           "material_point_evaluator: evaluate_deformation_gradient needs a "
           "deformation_gradient_source");
     m_point.reset(); // as in evaluate()
-    m_point.load_history(statev);
+    m_point.load_history({statev, m_point.history_width()});
     m_F_src->bind(F_old, F_new);
     if (m_time_src) m_time_src->bind(time, time + dtime);
     run();
@@ -277,7 +277,9 @@ public:
   /// Tangent of the last evaluation (dP/dF for finite strain).
   [[nodiscard]] const tensor4& tangent() const noexcept { return *m_tangent; }
 
-  void store_statev(value_type* statev) const { m_point.store_history(statev); }
+  void store_statev(value_type* statev) const {
+    m_point.store_history({statev, m_point.history_width()});
+  }
 
   void check_nstatv(std::size_t host_nstatv) const {
     if (host_nstatv < nstatv())
@@ -373,7 +375,7 @@ private:
 
   /// The material point's inputs: the strain or deformation gradient source,
   /// and the time source. The checks come first, for their messages.
-  static typename material_point<Traits>::config point_config(
+  static typename material_point<Traits>::parameter_handler point_config(
       context_type& ctx, const config& cfg) {
     if (!ctx.is_finalized())
       throw fatal_error(
@@ -382,11 +384,7 @@ private:
       throw fatal_error(
           "material_point_evaluator: set exactly one of strain_source and "
           "deformation_gradient_source");
-    typename material_point<Traits>::config point{
-        .host_owned = cfg.extra_exclusions,
-        .residual_property = cfg.residual_property,
-        .residual_tolerance = cfg.residual_tolerance,
-        .max_passes = cfg.max_passes};
+    std::vector<std::string> inputs, host_owned;
     for (const auto* source : {&cfg.strain_source,
                                &cfg.deformation_gradient_source,
                                &cfg.time_source})
@@ -394,8 +392,16 @@ private:
         if (!ctx.find(*source))
           throw fatal_error("material_point_evaluator: '" + *source +
                             "' is not a material in this context");
-        point.inputs.push_back(*source);
+        inputs.push_back(*source);
       }
+    for (const auto& [material, property] : cfg.extra_exclusions)
+      host_owned.push_back(material + "::" + property);
+    typename material_point<Traits>::parameter_handler point;
+    point.template insert<std::vector<std::string>>("inputs", inputs);
+    point.template insert<std::vector<std::string>>("host_owned", host_owned);
+    point.template insert<std::string>("residual_source", cfg.residual_property);
+    point.template insert<value_type>("residual_tolerance", cfg.residual_tolerance);
+    point.template insert<int>("max_passes", cfg.max_passes);
     return point;
   }
 

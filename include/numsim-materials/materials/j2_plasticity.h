@@ -86,7 +86,6 @@ public:
         m_dH(base::template add_input<value_type>(
             base::template get_parameter<std::string>("hardening_source"),
             "hardening_modulus", EdgeKind::Local)),
-        m_IIdev(plasticity_detail::make_IIdev<value_type, Dim>()),
         m_C_e(plasticity_detail::make_isotropic_tangent<value_type, Dim>(
             m_K, m_G))
   {
@@ -188,7 +187,7 @@ public:
     const auto a = value_type{6} * GG * dlambda / sig_eq;
     const auto b = value_type{4} * GG * dlambda / sig_eq -
                    value_type{4} * GG / (G_eff + m_dH.get());
-    m_tangent = C_e - a * m_IIdev + b * tmech::otimes(N, N);
+    m_tangent = C_e - a * dev_projector<value_type, Dim>() + b * tmech::otimes(N, N);
   }
 
 private:
@@ -206,7 +205,6 @@ private:
   const input_property<value_type, property_traits>& m_H;
   const input_property<value_type, property_traits>& m_dH;
 
-  const tensor4 m_IIdev;
   const tensor4 m_C_e;
 };
 

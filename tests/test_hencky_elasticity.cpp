@@ -8,7 +8,7 @@
 #include "numsim-materials/materials/hencky_elasticity.h"
 #include "numsim-materials/materials/isotropic_tangent.h"
 #include "numsim-materials/materials/thermal_eigenstrain.h"
-#include "numsim-materials/umat/deformation_gradient_driver.h"
+#include "numsim-materials/driver/deformation_gradient_driver.h"
 #include "numsim-materials/umat/external_state_source.h"
 #include "numsim-materials/umat/json_model.h"
 #include "numsim-materials/umat/material_point_evaluator.h"
@@ -22,8 +22,16 @@ using T = policy::value_type;
 using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
 using tensor2 = tmech::tensor<T, 3, 2>;
-using driver = u::deformation_gradient_driver<policy>;
-using control = u::deformation_control<T>;
+using driver = nm::deformation_gradient_driver<policy>;
+using control = nm::deformation_control<T>;
+
+/// The driver on "F" -> "hencky".
+policy::ParameterHandler point() {
+  policy::ParameterHandler p;
+  p.insert<std::string>("deformation_gradient_source", "F");
+  p.insert<std::string>("stress_source", "hencky");
+  return p;
+}
 
 constexpr T K{166.67}, G{76.92}, alpha{1e-4}, T0{20};
 constexpr T E{9 * K * G / (3 * K + G)}, nu{(3 * K - 2 * G) / (2 * (3 * K + G))};
@@ -98,16 +106,14 @@ TEST(Hencky, SmallStrainLimitIsLinearElasticity) {
 
 TEST(Hencky, UniaxialStressHasLogarithmicPoissonContractionAndTangent) {
   auto ctx{build()};
-  u::material_point_evaluator<policy> ev(*ctx, {.strain_source = {}, .stress_source = "hencky", .deformation_gradient_source = "F"});
-  driver d(ev);
-  for (T const l : {1.1, 1.5, 0.7}) {
-    driver d2(ev);
-    auto const res{d2.step(stretch(l), tensor2{}, control::uniaxial_stress(), 0, 1)};
+  driver d(*ctx, point());
+  for (T const l : {1.1, 1.5, 0.7}) { // never accepted: every step starts from F = I
+    auto const res{d.step(stretch(l), tensor2{}, control::uniaxial_stress(), 0, 1)};
     ASSERT_TRUE(res.converged) << l;
     EXPECT_NEAR(res.F(1, 1), std::pow(l, -nu), 1e-10) << l;       // ln F22 = -nu ln F11 exactly
     EXPECT_NEAR(res.F(2, 2), std::pow(l, -nu), 1e-10) << l;
     EXPECT_NEAR(res.stress(0, 0), E * std::log(l) / l, 1e-8) << l; // tau11 = E ln l, P11 = tau11 / F11
-    EXPECT_LT(d2.tangent_error(res), 1e-6) << l;
+    EXPECT_LT(d.tangent_error(res), 1e-6) << l;
   }
   // non-symmetric F: simple shear, the Kirchhoff stress P F^T is symmetric
   tensor2 F{tmech::eye<T, 3, 2>()};
@@ -121,9 +127,8 @@ TEST(Hencky, UniaxialStressHasLogarithmicPoissonContractionAndTangent) {
 // the symptom of tmech#37: the tangent at repeated and nearly repeated stretches
 TEST(Hencky, TangentIsConsistentAtRepeatedStretches) {
   auto ctx{build()};
-  u::material_point_evaluator<policy> ev(*ctx, {.strain_source = {}, .stress_source = "hencky", .deformation_gradient_source = "F"});
+  driver d(*ctx, point());
   for (auto const &F : {stretch(1.15, 1.15, 1.0), stretch(1.2, 1.2, 1.2), stretch(1.15, 1.15 + 1e-9, 1.0), stretch(1.204, 0.9458, 0.9458)}) {
-    driver d(ev);
     auto const res{d.step(F, tensor2{}, control::deformation(), 0, 1)};
     EXPECT_LT(d.tangent_error(res), 1e-6) << F(0, 0) << " " << F(1, 1) << " " << F(2, 2);
   }

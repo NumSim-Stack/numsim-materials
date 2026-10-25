@@ -112,7 +112,9 @@ struct model {
     }
     ctx.finalize();
     ctx.fold_constants(fold);
-    point.emplace(ctx, nm::material_point<policy>::config{.inputs = {"strain", "temperature"}});
+    param_type inputs;
+    inputs.insert<std::vector<std::string>>("inputs", {"strain", "temperature"});
+    point.emplace(ctx, inputs);
   }
 
   /// A trial evaluation from the accepted state: strain eps and temperature temp at the end of the step.
