@@ -13,10 +13,10 @@ namespace numsim::materials::report {
 template <typename Traits>
 nlohmann::json describe_graph(nlohmann::json const &doc) {
   using nlohmann::json;
-  material_point<Traits> point(doc);
+  case_model<Traits> model(doc);
   auto &factory{object_store<Traits>::factory_type::instance()};
   auto out = json::array();
-  for (auto const &d : materials::describe_graph(point.context())) {
+  for (auto const &d : materials::describe_graph(model.context())) {
     auto const *spec{[&]() -> json const * {
       for (auto const &m : doc.at("model").at("materials"))
         if (m.at("name") == d.name)
