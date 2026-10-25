@@ -35,6 +35,9 @@ option(NUMSIM_MATERIALS_INSTALL         "Install the library and its CMake packa
 set(NUMSIM_MATERIALS_DEBUG_CHECKS AUTO CACHE STRING
     "Read check and verification of constants: AUTO (off in Release, RelWithDebInfo, MinSizeRel), ON or OFF")
 set_property(CACHE NUMSIM_MATERIALS_DEBUG_CHECKS PROPERTY STRINGS AUTO ON OFF)
+set(NUMSIM_MATERIALS_REPORT_TESTS AUTO CACHE STRING
+    "Report regression tests (Python 3 + numpy, figures: matplotlib): AUTO skips what is missing, ON requires it, OFF")
+set_property(CACHE NUMSIM_MATERIALS_REPORT_TESTS PROPERTY STRINGS AUTO ON OFF)
 
 include(cmake/numsim_bootstrap.cmake)
 include(NumSimDependency)

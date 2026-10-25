@@ -13,10 +13,9 @@
 #include "numsim-materials/core/orientation.h"
 #include "numsim-materials/default_materials.h"
 #include "numsim-materials/io/json_material_factory.h"
+#include "numsim-materials/driver/material_point_driver.h"
 #include "numsim-materials/umat/external_state_source.h"
 #include "numsim-materials/umat/json_model.h"
-#include "numsim-materials/umat/material_point_driver.h"
-#include "numsim-materials/umat/material_point_evaluator.h"
 
 namespace {
 
@@ -298,13 +297,17 @@ TEST(DamagingFibres, FibresAlongTheLoadDamageFirst) {
 // with the concentrations fixed the tangent sum c_r C_r : A_r is the exact derivative of the stress
 TEST(DamagingFibres, TangentMatchesFiniteDifferences) {
   auto ctx{build(deck(injection, damaging_fibres(), true))};
-  u::material_point_evaluator<policy> ev(*ctx, {.strain_source = "strain", .stress_source = "sf"});
-  u::material_point_driver<policy> d(ev);
-  for (int n{1}; n <= 10; ++n)
-    ASSERT_TRUE(d.step(uniaxial(n * 6e-4), tensor2{}, u::load_control<T>::strain(), n - 1, 1).converged) << n;
+  policy::ParameterHandler point;
+  point.insert<std::string>("strain_source", "strain");
+  point.insert<std::string>("stress_source", "sf");
+  nm::material_point_driver<policy> d(*ctx, point);
+  for (int n{1}; n <= 10; ++n) {
+    ASSERT_TRUE(d.step(uniaxial(n * 6e-4), tensor2{}, nm::load_control<T>::strain(), n - 1, 1).converged) << n;
+    d.accept();
+  }
   auto const [along, across]{along_and_across(*ctx)};
   ASSERT_GT(along, 0); // a loading step on damaging phases
-  auto const res{d.step(uniaxial(10 * 6e-4 + 1e-6), tensor2{}, u::load_control<T>::strain(), 10, 1)};
+  auto const res{d.step(uniaxial(10 * 6e-4 + 1e-6), tensor2{}, nm::load_control<T>::strain(), 10, 1)};
   ASSERT_TRUE(res.converged);
   EXPECT_LT(d.tangent_error(res), 1e-4);
 }
@@ -337,8 +340,14 @@ TEST(NonlinearFibres, NeedALocalTangentEdge) {
   EXPECT_THROW((void)expand(e), std::invalid_argument);
 }
 
-u::material_point_evaluator<policy>::config nonlinear_point() {
-  return {.strain_source = "strain", .stress_source = "sf", .residual_property = "sf::residual", .max_passes = 200};
+/// The driver on "strain" -> "sf", closing the local fixed point on "sf::residual".
+nm::material_point_driver<policy> nonlinear_driver(ctx_type &ctx) {
+  policy::ParameterHandler p;
+  p.insert<std::string>("strain_source", "strain");
+  p.insert<std::string>("stress_source", "sf");
+  p.insert<std::string>("residual_source", "sf::residual");
+  p.insert<int>("max_passes", 200);
+  return {ctx, p};
 }
 
 // before any damage the current tangents are the initial ones: the first pass is converged and linear
@@ -357,12 +366,12 @@ TEST(NonlinearFibres, BelowTheThresholdAreTheLinearLocalisation) {
 TEST(NonlinearFibres, ConvergedPassesSendTheStrainToTheDamagedFibres) {
   auto lin{build(deck(injection, damaging_fibres(), true))};
   auto nl{build(deck(injection, damaging_fibres(), true, true))};
-  u::material_point_evaluator<policy> ev(*nl, nonlinear_point());
-  u::material_point_driver<policy> d(ev);
+  auto d{nonlinear_driver(*nl)};
   for (int n{1}; n <= 10; ++n) {
     step(*lin, uniaxial(0.0006 * (n - 1)), uniaxial(0.0006 * n));
-    ASSERT_TRUE(d.step(uniaxial(n * 6e-4), tensor2{}, u::load_control<T>::strain(), n - 1, 1).converged) << n;
+    ASSERT_TRUE(d.step(uniaxial(n * 6e-4), tensor2{}, nm::load_control<T>::strain(), n - 1, 1).converged) << n;
     EXPECT_LE(nl->get<T>("sf", "residual"), 1e-10) << n;
+    d.accept();
   }
   auto const [along, across]{along_and_across(*nl)};
   EXPECT_GT(along, 0);
@@ -374,12 +383,13 @@ TEST(NonlinearFibres, ConvergedPassesSendTheStrainToTheDamagedFibres) {
 // the published tangent sum c_r C_r : A_r holds the concentrations fixed: first order in the step
 TEST(NonlinearFibres, TangentMatchesFiniteDifferencesOnASmallStep) {
   auto ctx{build(deck(injection, damaging_fibres(), true, true))};
-  u::material_point_evaluator<policy> ev(*ctx, nonlinear_point());
-  u::material_point_driver<policy> d(ev);
-  for (int n{1}; n <= 10; ++n)
-    ASSERT_TRUE(d.step(uniaxial(n * 6e-4), tensor2{}, u::load_control<T>::strain(), n - 1, 1).converged) << n;
+  auto d{nonlinear_driver(*ctx)};
+  for (int n{1}; n <= 10; ++n) {
+    ASSERT_TRUE(d.step(uniaxial(n * 6e-4), tensor2{}, nm::load_control<T>::strain(), n - 1, 1).converged) << n;
+    d.accept();
+  }
   ASSERT_GT(along_and_across(*ctx).first, 0);
-  auto const res{d.step(uniaxial(10 * 6e-4 + 1e-6), tensor2{}, u::load_control<T>::strain(), 10, 1)};
+  auto const res{d.step(uniaxial(10 * 6e-4 + 1e-6), tensor2{}, nm::load_control<T>::strain(), 10, 1)};
   ASSERT_TRUE(res.converged);
   EXPECT_LT(d.tangent_error(res), 1e-2);
 }

@@ -142,8 +142,8 @@
   "point": {
     "strain_source": "strain",
     "stress_source": "mt",
-    "residual": "mt::residual",
-    "tolerance": 1e-10,
+    "residual_source": "mt::residual",
+    "residual_tolerance": 1e-10,
     "max_passes": 200
   },
   "record": {
