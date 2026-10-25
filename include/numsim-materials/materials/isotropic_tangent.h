@@ -62,7 +62,7 @@ public:
     const auto I{tmech::eye<value_type, Dim, 2>()};
     const auto IIvol{tmech::otimes(I, I) / Dim};
     m_C = 3 * m_K.get() * IIvol +
-          2 * m_G.get() * plasticity_detail::make_IIdev<value_type, Dim>();
+          2 * m_G.get() * dev_projector<value_type, Dim>();
   }
 
 private:
