@@ -44,7 +44,7 @@
     {"type": "short_fibre_composite", "name": "intact_tangent", "matrix": "matrix", "fibre": "fibre", "orientation": [0.7, 0.25, 0.05, 0.0, 0.0, 0.0], "precision": 11},
     {"type": "linear_stress", "name": "intact", "tangent_source": "intact_tangent", "strain_source": "strain"}
   ]},
-  "point": {"strain_source": "strain", "stress_source": "sf", "residual": "sf::residual", "tolerance": 1e-10, "max_passes": 200},
+  "point": {"strain_source": "strain", "stress_source": "sf", "residual_source": "sf::residual", "residual_tolerance": 1e-10, "max_passes": 200},
   "record": {"d_along": "fl_0::damage", "d_x2": "fl_1::damage", "d_x3": "fl_2::damage", "dl_along": "lfl_0::damage",
              "res": "sf::residual", "sig_lin": "sfl::stress", "sig_intact": "intact::stress"},
   "checks": [

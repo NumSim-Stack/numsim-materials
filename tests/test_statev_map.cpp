@@ -9,6 +9,7 @@
 #include "numsim-materials/umat/statev_map.h"
 #include "numsim-materials/solvers/local_newton.h"
 #include "numsim-materials/materials/j2_plasticity.h"
+#include "test_fixture_materials.h"
 
 namespace {
 
@@ -122,25 +123,6 @@ public:
 
 private:
   nm::history_property<value_type>& m_v;
-};
-
-/// History of a type STATEV cannot represent, to exercise the rejection branch.
-template <typename Traits>
-class int_history_material final
-    : public nm::material_base<int_history_material<Traits>, Traits> {
-public:
-  using base = nm::material_base<int_history_material<Traits>, Traits>;
-  using input_parameter_controller = typename base::input_parameter_controller;
-
-  template <typename... Args>
-  explicit int_history_material(Args&&... args)
-      : base(std::forward<Args>(args)...),
-        m_flag(base::template add_history_output<int>("flag")) {}
-
-  static input_parameter_controller parameters() { return base::parameters(); }
-
-private:
-  nm::history_property<int>& m_flag;
 };
 
 /// Isotropic (hence minor-symmetric) rank-4 tensor.
@@ -487,7 +469,7 @@ TEST(StatevMap, RejectsUnsupportedHistoryType) {
   ctx_type ctx;
   param_type p;
   p.insert<std::string>("name", "weird");
-  ctx.create<int_history_material<policy>>(p);
+  ctx.create<nm::test::int_counter<policy>>(p);
   ctx.finalize();
   EXPECT_THROW(map_type(ctx, {}), u::fatal_error);
 }
