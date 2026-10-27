@@ -136,7 +136,11 @@ Without `.stateful()`, a stepper that reads nothing would run once. A recorder o
 
   `ctx.check_reads(false)` turns this off.
 - **Not checked:** reads of the material's own outputs are plain references, which the check cannot see. Declare them carefully (section 7).
-- **After a throw:** the callback has written its outputs already, so the context is partly updated. `revert()` restores history only. Treat the step as failed.
+- **After a throw:** the context is partly updated, so it is failed. `update()`, `update_property()` and `commit()` throw until the host calls `revert()`, which restores the history and clears the failure.
+- **From inside a callback:**
+  - `update()` throws.
+  - `update_property()` re-evaluates the upstream callbacks, constants included, and leaves the running update untouched (as `numerical_diff_checker` does).
+  - A callback must not suspend or move to another thread while it runs: with the debug checks on, the read check's scope is per thread.
 - **Inspecting the graph:**
   - `ctx.dump()` prints the execution order and marks the constant outputs;
   - `ctx.is_constant(material, property)` asks for one output.
