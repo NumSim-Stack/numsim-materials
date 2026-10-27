@@ -16,7 +16,9 @@ public:
   template <typename... Args>
   explicit int_counter(Args &&...args)
       : base(std::forward<Args>(args)...),
-        m_count(base::template add_history_output<int>("count", &int_counter::compute)) {}
+        m_count(base::template add_history_output<int>("count")) {
+    base::add_callback(&int_counter::compute, m_count).reads();
+  }
 
   static input_parameter_controller parameters() { return input_parameter_controller{base::parameters()}; }
 

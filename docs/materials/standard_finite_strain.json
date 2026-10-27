@@ -24,7 +24,7 @@
      "text": "The Cauchy stress of simple shear at finite strain has normal components that small strain does not.",
      "panels": [{"case": "simple_shear", "x": "F_12", "y": ["stress_11", "stress_22", "stress_12"], "xlabel": "γ"}]},
     {"title": "Tangent check", "columns": 1,
-     "text": "Relative difference between dP/dF and central differences of P, every tangent_every-th step.",
+     "text": "Relative difference between dP/dF and central differences of P (step fd_step, default 1e-7), every tangent_every-th step.",
      "panels": [{"cases": "*", "x": "step", "y": [{"expr": "np.maximum(tangent_error, 1e-17)", "label": "‖A − A_fd‖ / ‖A‖"}], "logy": true}]}
   ],
   "checks": [

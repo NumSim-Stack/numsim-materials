@@ -28,6 +28,7 @@ Abaqus or CalculiX.
 |---|---|
 | [docs/plasticity.md](docs/plasticity.md) | Using the plasticity materials: parameters, wiring, worked decks |
 | [docs/plasticity-theory.md](docs/plasticity-theory.md) | J2 and Drucker-Prager from kinematics to the consistent tangent |
+| [docs/mean_field.md](docs/mean_field.md) | Composites: phase nodes, tangent homogenisation, strain localisation, the self-consistent and nonlinear fixed points |
 
 ## Architecture
 
@@ -41,13 +42,27 @@ material_context (facade)
 └── materials         — scalar_stepper, linear_elasticity, j2_plasticity, ...
 ```
 
-**Core API:**
-- `add_output<T>("name", &callback)` — produce a property
+**Core API** (a step-by-step guide: [docs/writing_a_material.md](docs/writing_a_material.md)):
+- `add_output<T>("name")`, `add_history_output<T>("name")` — produce a property
 - `add_input<T>(source, prop, EdgeKind)` — consume a property (wired at `finalize()`)
-- `ctx.update()` — execute all properties in topological order
+- `add_callback(&callback, outputs...)` — one callback filling a group of outputs (references, pointers, null
+  skipped, or ranges of pointers); the handle declares what it reads, and order and constness follow:
+  - `.reads(inputs and own outputs...)` — runs after their sources and the callbacks of those outputs; computed
+    once while every read is constant (`set_parameter()` and `get_mutable()` recompute the constants)
+  - `.reads()` — the parameters alone; `.reads_all_inputs()` — every input the material has at `finalize()`
+  - `.stateful()` — keeps state of its own or acts outside its outputs: runs on every update
+  - `.drives(local inputs...)` — reruns their source callbacks (a solver): runs after what those read
+- Debug checks (CMake option `NUMSIM_MATERIALS_DEBUG_CHECKS`, on except in release configurations) rerun the
+  constants and throw when one changes (`ctx.verify_constants(bool)`), and throw when a callback reads an input
+  it did not declare (`ctx.check_reads(bool)`); `ctx.is_constant("mat", "prop")`
+- Deprecated: a callback passed to `add_output`, `constant_output`, `written_by`, `runs_after`, `.constant()`
+- `ctx.update()` — execute all properties in topological order (the constant ones until they have run)
 - `ctx.update_property("mat", "prop")` — selective upstream update
-- `ctx.commit()` / `ctx.revert()` — timestep history management
-- `ctx.save_state("checkpoint.bin")` / `ctx.load_state(...)` — binary checkpoint/restart
+- `ctx.commit()` / `ctx.revert()` — timestep history management; after an update threw, the context refuses
+  `update()` and `commit()` until `revert()`
+- `ctx.save_state("checkpoint.bin")` / `ctx.load_state(...)` — binary checkpoint/restart of the history,
+  keyed by property: it restores into a context created in any order and refuses one with other properties
+- `ctx.fold_constants(false)` — run the constant callbacks on every update too (a reference run)
 
 `commit()` and `revert()` belong to the driver. Materials and solvers never call
 them.
@@ -115,10 +130,15 @@ the graph's properties). The UMAT entry points stay small strain.
 
 ## Material catalogue
 
-All 31 types registered by `register_default_materials<policy>()`.
+The types registered by `register_default_materials<policy>()`.
 
 **Elasticity and stress** — `linear_elasticity`, `linear_stress`,
 `isotropic_tangent`, `weighted_sum`
+
+**Composites** (see [docs/mean_field.md](docs/mean_field.md)) — `phase`, `mean_field_composite_global`
+(kernels voigt, reuss, hill, dilute, mori_tanaka, self_consistent), `mean_field_strain`, `mean_field_composite_local_linear`, `mean_field_composite_local_nonlinear`, `short_fibre_composite`;
+`eshelby_sphere` / `_cylinder` / `_spheroid` / `_ellipsoid`, `depolarisation_sphere` / `_cylinder` /
+`_spheroid` / `_ellipsoid`, `poisson_ratio_from_moduli`, `isotropic_moduli`
 
 **Hyperelasticity (finite strain)** — `saint_venant_kirchhoff`, `neo_hooke`
 (driven by `external_deformation_gradient_source`)

@@ -222,8 +222,8 @@ TEST(TangentGenerator, StiffnessFollowsAChangedModulus) {
   EXPECT_TRUE(tmech::almost_equal(ctx.get<tensor2>("elastic", "stress"),
                                   expected, 1e-12));
 
-  // Write the constant material's published value directly.
-  ctx.get_mutable<T>("K", "value") = 2 * K;
+  // Change the constant material's parameter; its callback republishes the value.
+  ctx.find("K")->set_parameter<T>("value", 2 * K);
   ctx.update();
 
   expected = tmech::dcontract(isotropic(2 * K, G), eps);

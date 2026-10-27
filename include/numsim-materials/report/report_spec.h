@@ -1,6 +1,7 @@
 #ifndef NUMSIM_MATERIALS_REPORT_REPORT_SPEC_H
 #define NUMSIM_MATERIALS_REPORT_REPORT_SPEC_H
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
@@ -8,16 +9,30 @@
 
 #include <nlohmann/json.hpp>
 
-/// Report documents: "include" files are merged first (arrays appended, local keys win),
-/// then every string "$name" is replaced by parameters.name.
+/// Report documents: "include" files are merged first (arrays appended, named entries replaced
+/// by name, local keys win), then every string "$name" is replaced by parameters.name.
 namespace numsim::materials::report {
 
 namespace detail {
 
+/// Appends `value` to the array `target`; an object with a "name" replaces an entry of the same name.
+inline void merge_array(nlohmann::json &target, nlohmann::json const &value) {
+  for (auto const &entry : value) {
+    auto const it{entry.is_object() && entry.contains("name")
+                      ? std::find_if(target.begin(), target.end(),
+                                     [&](auto const &e) { return e.is_object() && e.contains("name") && e.at("name") == entry.at("name"); })
+                      : target.end()};
+    if (it == target.end())
+      target.push_back(entry);
+    else
+      *it = entry;
+  }
+}
+
 inline void merge_into(nlohmann::json &base, nlohmann::json const &local) {
   for (auto const &[key, value] : local.items()) {
     if (base.contains(key) && base[key].is_array() && value.is_array())
-      base[key].insert(base[key].end(), value.begin(), value.end());
+      merge_array(base[key], value);
     else if (base.contains(key) && base[key].is_object() && value.is_object())
       merge_into(base[key], value);
     else

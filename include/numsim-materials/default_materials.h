@@ -9,6 +9,7 @@
 #include "numsim-materials/solvers/vector_newton.h"
 #include "numsim-materials/materials/scalar_stepper.h"
 #include "numsim-materials/materials/constant_scalar.h"
+#include "numsim-materials/materials/scalar_split.h"
 #include "numsim-materials/materials/props_scalar.h"
 #include "numsim-materials/materials/j2_plasticity.h"
 #include "numsim-materials/materials/j2_rk_plasticity.h"
@@ -21,6 +22,29 @@
 #include "numsim-materials/materials/vector_strain_state_function.h"
 #include "numsim-materials/materials/isotropic_tangent.h"
 #include "numsim-materials/materials/linear_elasticity.h"
+#include "numsim-materials/materials/eshelby_cylinder.h"
+#include "numsim-materials/materials/eshelby_ellipsoid.h"
+#include "numsim-materials/materials/eshelby_sphere.h"
+#include "numsim-materials/materials/eshelby_spheroid.h"
+#include "numsim-materials/materials/depolarisation_cylinder.h"
+#include "numsim-materials/materials/depolarisation_ellipsoid.h"
+#include "numsim-materials/materials/depolarisation_sphere.h"
+#include "numsim-materials/materials/depolarisation_spheroid.h"
+#include "numsim-materials/materials/isotropic_moduli.h"
+#include "numsim-materials/materials/poisson_ratio_from_moduli.h"
+#include "numsim-materials/materials/phase.h"
+#include "numsim-materials/materials/mean_field_strain.h"
+#include "numsim-materials/materials/mean_field_composite_local_linear.h"
+#include "numsim-materials/materials/mean_field_composite_local_nonlinear.h"
+#include "numsim-materials/materials/mean_field_composite_global.h"
+#include "numsim-materials/materials/short_fibre_composite.h"
+#include "numsim-materials/materials/incremental_linear_elasticity.h"
+#include "numsim-materials/materials/thermal_eigenstrain.h"
+#include "numsim-materials/materials/kamal_sourour_rate.h"
+#include "numsim-materials/materials/power_damage_law.h"
+#include "numsim-materials/materials/saturation_damage_law.h"
+#include "numsim-materials/materials/peerlings_damage_law.h"
+#include "numsim-materials/materials/hencky_elasticity.h"
 #include "numsim-materials/materials/neo_hooke.h"
 #include "numsim-materials/materials/saint_venant_kirchhoff.h"
 #include "numsim-materials/materials/linear_stress.h"
@@ -86,9 +110,35 @@ void register_default_materials() {
   auto& factory = material_factory<Traits>::instance();
   factory.template register_type<scalar_stepper<Traits>>("scalar_stepper");
   factory.template register_type<linear_elasticity<Traits>>("linear_elasticity");
+  factory.template register_type<isotropic_moduli<Traits>>("isotropic_moduli");
+  factory.template register_type<poisson_ratio_from_moduli<Traits>>("poisson_ratio_from_moduli");
+  if constexpr (Traits::Dim == 3) { // closed-form Eshelby tensors exist for three dimensions
+    factory.template register_type<eshelby_sphere<Traits>>("eshelby_sphere");
+    factory.template register_type<eshelby_cylinder<Traits>>("eshelby_cylinder");
+    factory.template register_type<eshelby_spheroid<Traits>>("eshelby_spheroid");
+    factory.template register_type<eshelby_ellipsoid<Traits>>("eshelby_ellipsoid");
+    factory.template register_type<depolarisation_sphere<Traits>>("depolarisation_sphere");
+    factory.template register_type<depolarisation_cylinder<Traits>>("depolarisation_cylinder");
+    factory.template register_type<depolarisation_spheroid<Traits>>("depolarisation_spheroid");
+    factory.template register_type<depolarisation_ellipsoid<Traits>>("depolarisation_ellipsoid");
+    factory.template register_type<mean_field_composite_global<Traits>>("mean_field_composite_global");
+    factory.template register_type<mean_field_strain<Traits>>("mean_field_strain");
+    factory.template register_type<short_fibre_composite<Traits>>("short_fibre_composite");
+  }
+  factory.template register_type<phase<Traits>>("phase");
+  factory.template register_type<mean_field_composite_local_linear<Traits>>("mean_field_composite_local_linear");
+  factory.template register_type<mean_field_composite_local_nonlinear<Traits>>("mean_field_composite_local_nonlinear");
+  factory.template register_type<incremental_linear_elasticity<Traits>>("incremental_linear_elasticity");
+  factory.template register_type<thermal_eigenstrain<Traits>>("thermal_eigenstrain");
+  factory.template register_type<kamal_sourour_rate<Traits>>("kamal_sourour_rate");
+  factory.template register_type<power_damage_law<Traits>>("power_damage_law");
+  factory.template register_type<saturation_damage_law<Traits>>("saturation_damage_law");
+  factory.template register_type<peerlings_damage_law<Traits>>("peerlings_damage_law");
+  factory.template register_type<hencky_elasticity<Traits>>("hencky_elasticity");
   factory.template register_type<saint_venant_kirchhoff<Traits>>("saint_venant_kirchhoff");
   factory.template register_type<neo_hooke<Traits>>("neo_hooke");
   factory.template register_type<constant_scalar<Traits>>("constant_scalar");
+  factory.template register_type<scalar_split<Traits>>("scalar_split");
   factory.template register_type<props_scalar<Traits>>("props_scalar");
 
   // Plasticity. Each model is its own class -- j2_plasticity,

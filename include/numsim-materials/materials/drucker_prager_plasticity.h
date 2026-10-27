@@ -8,6 +8,7 @@
 #include <utility>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_base.h"
+#include "numsim-materials/core/parameter_helpers.h"
 #include "numsim-materials/core/material_ref.h"
 #include "numsim-materials/materials/drucker_prager_yield_function.h"
 #include "numsim-materials/materials/plasticity_utils.h"
@@ -35,8 +36,7 @@ public:
   template <typename... Args>
   explicit drucker_prager_plasticity(Args&&... args)
       : base(std::forward<Args>(args)...),
-        m_stress(base::template add_output<tensor2>(
-            "stress", &drucker_prager_plasticity::compute)),
+        m_stress(base::template add_output<tensor2>("stress")),
         m_tangent(base::template add_output<tensor4>("tangent")),
         m_eps_p(base::template add_history_output<tensor2>("plastic_strain")),
         m_kappa(base::template add_history_output<value_type>("equivalent_plastic_strain")),
@@ -47,7 +47,7 @@ public:
             base::template get_parameter<std::string>("solver_source"))),
         m_strain(base::template add_input<tensor2>(
             base::template get_parameter<std::string>("strain_source"),
-            "strain", EdgeKind::Global)),
+            base::template get_parameter<std::string>("strain_property"), EdgeKind::Global)),
         m_H(base::template add_input<value_type>(
             base::template get_parameter<std::string>("hardening_source"),
             "hardening_stress", EdgeKind::Local)),
@@ -60,22 +60,24 @@ public:
                     m_K_bulk);
     m_C_e = plasticity_detail::make_isotropic_tangent<value_type, Dim>(
         m_K_bulk, m_G);
+    base::add_callback(&drucker_prager_plasticity::compute, m_stress, m_tangent, m_eps_p, m_kappa).reads(m_strain, m_H, m_dH).drives(m_H, m_dH);
   }
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
-    para.template insert<std::string>("hardening_source").template add<is_required>();
-    para.template insert<std::string>("strain_source").template add<is_required>();
-    para.template insert<std::string>("solver_source").template add<is_required>();
-    para.template insert<value_type>("G").template add<is_required>();
-    para.template insert<value_type>("sigma_0").template add<is_required>();
+    required<std::string>(para, "hardening_source");
+    required<std::string>(para, "strain_source");
+    optional<std::string>(para, "strain_property", std::string{"strain"});
+    required<std::string>(para, "solver_source");
+    required<value_type>(para, "G");
+    required<value_type>(para, "sigma_0");
     // The cone's friction, dilatancy and bulk modulus, as plain scalars.
     // They used to arrive inside a "yield_function" C++ object, which the JSON
     // reader cannot convert -- so the material could not be configured from a
     // document at all (see #33).
-    para.template insert<value_type>("eta").template add<is_required>();
-    para.template insert<value_type>("beta").template add<is_required>();
-    para.template insert<value_type>("K_bulk").template add<is_required>();
+    required<value_type>(para, "eta");
+    required<value_type>(para, "beta");
+    required<value_type>(para, "K_bulk");
     return para;
   }
 

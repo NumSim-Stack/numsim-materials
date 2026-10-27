@@ -97,20 +97,27 @@ TEST(LoadPath, RejectsStepsOutsideThePath) {
 }
 
 TEST(ReportJson, ParsesThePointAndTheColumns) {
-  auto const doc = json::parse(R"({"point": {"strain_source": "s", "stress_source": "m", "tangent_source": "t"},
-    "record": {"kappa": "m::kappa"}})");
+  auto const doc = json::parse(R"({"point": {"strain_source": "s", "stress_source": "m", "tangent_source": "t",
+    "stress_property": "damaged_stress", "tangent_property": "damaged_tangent"}, "record": {"kappa": "m::kappa"}})");
   auto const p{r::parse_point<policy>(doc)};
   EXPECT_EQ(p.get<std::string>("strain_source"), "s");
   EXPECT_EQ(p.get<std::string>("stress_source"), "m");
   EXPECT_EQ(p.get<std::string>("tangent_source"), "t");
+  EXPECT_EQ(p.get<std::string>("stress_property"), "damaged_stress");
+  EXPECT_EQ(p.get<std::string>("tangent_property"), "damaged_tangent");
   EXPECT_THROW(r::parse_point<policy>(json::parse(R"({"point": {"strain": "s"}})")), std::invalid_argument)
       << "not a driver parameter";
+  auto const fixed_point{r::parse_point<policy>(json::parse(R"({"point": {"strain_source": "s", "stress_source": "m",
+    "residual_source": "scs::residual", "residual_tolerance": 1e-11, "max_passes": 200}})"))};
+  EXPECT_EQ(fixed_point.get<std::string>("residual_source"), "scs::residual");
+  EXPECT_EQ(fixed_point.get<T>("residual_tolerance"), 1e-11);
+  EXPECT_EQ(fixed_point.get<int>("max_passes"), 200);
   auto const cols{r::parse_columns(doc)};
   ASSERT_EQ(cols.size(), 3u);
   EXPECT_EQ(cols[0].name, "strain");
   EXPECT_EQ(cols[0].source, "s::strain");
   EXPECT_FALSE(cols[0].full);
-  EXPECT_EQ(cols[1].source, "m::stress");
+  EXPECT_EQ(cols[1].source, "m::damaged_stress");
   EXPECT_EQ(cols[2].name, "kappa");
   EXPECT_EQ(cols[2].source, "m::kappa");
 }
@@ -141,6 +148,8 @@ TEST(ReportJson, ParsesALoadCase) {
   EXPECT_DOUBLE_EQ(free(1, 1), 1);
   EXPECT_DOUBLE_EQ(free(0, 0), 0);
   EXPECT_EQ(c.tangent_every, 1);
+  EXPECT_FALSE(c.fd_step.has_value()); // the driver's default applies
+  EXPECT_DOUBLE_EQ(r::parse_case<T>(json::parse(R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], "fd_step": 1e-6})")).fd_step.value(), 1e-6);
   EXPECT_EQ(r::parse_case<T>(json::parse(R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], "tangent_every": 0})")).tangent_every, 0);
   EXPECT_THROW(r::parse_case<T>(json::parse(R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0]})")), std::exception);
   EXPECT_THROW(r::parse_case<T>(json::parse(R"({"name": "u", "control": "x", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1]})")),
@@ -209,6 +218,9 @@ TEST(ReportJson, CountsMustBeIntegersInRange) {
   EXPECT_THROW(static_cast<void>(r::parse_point<policy>(doc)), std::invalid_argument);
   doc["point"]["max_iter"] = 2.5;
   EXPECT_THROW(static_cast<void>(r::parse_point<policy>(doc)), std::invalid_argument);
+  doc["point"].erase("max_iter");
+  doc["point"]["max_passes"] = 0;
+  EXPECT_THROW(static_cast<void>(r::parse_point<policy>(doc)), std::invalid_argument);
   auto const studies = json::parse(R"({"cases": [{"name": "u"}], "studies": [{"name": "s", "case": "u", "steps": [4, 2.5]}]})");
   EXPECT_THROW(static_cast<void>(r::parse_studies(studies)), std::invalid_argument);
 }
@@ -247,6 +259,14 @@ TEST(CaseRunner, FiniteStrainRecordsFPCauchyAndJ) {
   EXPECT_NEAR(col("stress_11"), col("P_11") * col("F_11") / col("J"), 1e-10);
   EXPECT_LT(col("J"), 1.1);
   EXPECT_EQ(sink.names.size(), 9u + 9u + 6u + 1u);
+}
+
+TEST(CaseRunner, TheCaseFdStepReachesTheDriver) {
+  auto const spec = json::parse(R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], "steps": 1,
+    "scale": 0.001, "fd_step": 0})");
+  recording_sink sink;
+  EXPECT_THROW(static_cast<void>(r::run_case<policy>(elastic_report(), r::parse_case<T>(spec), sink)),
+               nm::umat::fatal_error) << "fd_step must be > 0";
 }
 
 TEST(CaseRunner, RecordsTheUnloadedStateAndEveryStep) {

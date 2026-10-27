@@ -21,8 +21,18 @@ class Expressions:
         self.spec = spec
         self.cases = cases
         self.scope = {"np": np, **spec.get("parameters", {})}
-        for name, expr in spec.get("derived", {}).items():
-            self.scope[name] = self(expr)
+        pending = dict(spec.get("derived", {}))
+        while pending:  # derived values may use each other in any key order
+            resolved = {}
+            for name, expr in pending.items():
+                try:
+                    resolved[name] = self(expr)
+                except NameError:
+                    continue
+            if not resolved:
+                raise NameError("derived values cannot be resolved: " + ", ".join(pending))
+            self.scope.update(resolved)
+            pending = {k: v for k, v in pending.items() if k not in resolved}
 
     def __call__(self, expr, case: str | None = None):
         if not isinstance(expr, str):
