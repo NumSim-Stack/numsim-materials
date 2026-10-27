@@ -25,6 +25,10 @@
 #include "numsim-materials/materials/eshelby_ellipsoid.h"
 #include "numsim-materials/materials/eshelby_sphere.h"
 #include "numsim-materials/materials/eshelby_spheroid.h"
+#include "numsim-materials/materials/depolarisation_cylinder.h"
+#include "numsim-materials/materials/depolarisation_ellipsoid.h"
+#include "numsim-materials/materials/depolarisation_sphere.h"
+#include "numsim-materials/materials/depolarisation_spheroid.h"
 #include "numsim-materials/materials/isotropic_moduli.h"
 #include "numsim-materials/materials/poisson_ratio_from_moduli.h"
 #include "numsim-materials/materials/neo_hooke.h"
@@ -99,6 +103,10 @@ void register_default_materials() {
     factory.template register_type<eshelby_cylinder<Traits>>("eshelby_cylinder");
     factory.template register_type<eshelby_spheroid<Traits>>("eshelby_spheroid");
     factory.template register_type<eshelby_ellipsoid<Traits>>("eshelby_ellipsoid");
+    factory.template register_type<depolarisation_sphere<Traits>>("depolarisation_sphere");
+    factory.template register_type<depolarisation_cylinder<Traits>>("depolarisation_cylinder");
+    factory.template register_type<depolarisation_spheroid<Traits>>("depolarisation_spheroid");
+    factory.template register_type<depolarisation_ellipsoid<Traits>>("depolarisation_ellipsoid");
   }
   factory.template register_type<saint_venant_kirchhoff<Traits>>("saint_venant_kirchhoff");
   factory.template register_type<neo_hooke<Traits>>("neo_hooke");

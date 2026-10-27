@@ -52,6 +52,8 @@ add_numsim_test(test_eshelby test_eshelby.cpp)
 add_numsim_test(test_eshelby_materials test_eshelby_materials.cpp)
 add_numsim_test(test_isotropize test_isotropize.cpp)
 add_numsim_test(test_scalar_producers test_scalar_producers.cpp)
+add_numsim_test(test_sphere_tools test_sphere_tools.cpp)
+add_numsim_test(test_depolarisation_materials test_depolarisation_materials.cpp)
 add_numsim_test(test_material_point test_material_point.cpp)
 
 # Data dumper for plotting (not a test — standalone executable)
