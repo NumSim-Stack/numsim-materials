@@ -9,7 +9,7 @@
 #include "numsim-materials/materials/linear_isotropic_hardening.h"
 #include "numsim-materials/materials/linear_stress.h"
 #include "numsim-materials/materials/phase.h"
-#include "numsim-materials/materials/rule_of_mixture.h"
+#include "numsim-materials/materials/mean_field_composite_global.h"
 #include "numsim-materials/materials/weighted_sum.h"
 #include "numsim-materials/solvers/local_newton.h"
 #include "numsim-materials/umat/external_state_source.h"
@@ -79,8 +79,8 @@ std::unique_ptr<ctx_type> build() {
   p.clear();
   p.insert<std::string>("name", "linear_voigt");
   p.insert<std::vector<std::string>>("phases", {"plastic_phase", "elastic_phase"});
-  p.insert<std::string>("kernel", "voigt");
-  ctx.create<nm::rule_of_mixture<policy>>(p);
+  p.insert<nm::object_spec<param_type>>("kernel", {"voigt", {}});
+  ctx.create<nm::mean_field_composite_global<policy>>(p);
   p.clear();
   p.insert<std::string>("name", "linear_voigt_stress");
   p.insert<std::string>("tangent_source", "linear_voigt");

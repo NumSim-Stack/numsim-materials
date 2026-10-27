@@ -53,7 +53,6 @@ class Converter:
         self.materials: list[dict] = [{"type": "external_strain_source", "name": strain_source}]
         self.names: set[str] = {strain_source}
         self.tangent_sources: dict[str, str] = {}  # top material -> the node producing its tangent, when not itself
-        self.nu_of: dict[str, float] = {}          # tangent producer -> its Poisson ratio
         self.residual: str | None = None           # "node::residual" of a fixed point the point has to close
         self.strain_property = "strain"            # the property of strain_source the materials read
 
@@ -118,7 +117,6 @@ class Converter:
             K = self.add({"type": "constant_scalar", "name": f"{name}_K", "value": kg["K"]})
             G = self.add({"type": "constant_scalar", "name": f"{name}_G", "value": kg["G"]})
             node = self.add({"type": "isotropic_tangent", "name": f"{name}_C", "K_source": K, "G_source": G})
-            self.nu_of[node] = (3 * kg["K"] - 2 * kg["G"]) / (2 * (3 * kg["K"] + kg["G"]))
             return node, "tangent", True
         return self.convert(spec, name), TANGENT_PROPERTY.get(spec["name"], "tangent"), False
 
@@ -131,7 +129,7 @@ class Converter:
     convert_hencky_strains_linear_thermo_chemo_elastic = convert_hencky_strains_linear_elastic
 
     def convert_small_strain_rule_of_mixture_composite(self, card, name):
-        """Linear phases: rule_of_mixture tangent + linear_stress. Nonlinear phases: mean_field_strain with the
+        """Linear phases: mean_field_composite_global tangent + linear_stress. Nonlinear phases: mean_field_strain with the
         kernel localises, every material reads its phase strain, mean_field_stress averages; a nonlinear phase
         reads its tangent over a local edge (not for Voigt, whose concentrations need no tangent) and the
         point closes the fixed point."""
@@ -142,7 +140,7 @@ class Converter:
                 node, _, _ = self.phase_tangent(spec, f"{name}_{key}_material")
                 phases.append(self.add({"type": "phase", "name": f"{name}_{key}", "tangent_source": node,
                                         "fraction_source": self.fraction(spec["volume_fraction"], f"{name}_{key}")}))
-            rom = self.add({"type": "rule_of_mixture", "name": f"{name}_tangent", "phases": phases, "kernel": kernel})
+            rom = self.add({"type": "mean_field_composite_global", "name": f"{name}_tangent", "phases": phases, "kernel": {"type": kernel}})
             self.tangent_sources[name] = rom
             return self.add({"type": "linear_stress", "name": name, "tangent_source": rom, "strain_source": self.strain_source})
         strain_node = f"{name}_strain"
@@ -186,30 +184,28 @@ class Converter:
 
     ESHELBY_DIRECTIONS = {"long_fibre_x1": [1, 0, 0], "long_fibre_x2": [0, 1, 0], "long_fibre_x3": [0, 0, 1]}
 
-    def poisson_ratio(self, tangent: str, initial_of: str | None = None) -> dict:
-        """nu as a produced property (isotropic_moduli of a tangent node), made once. For the effective medium of
-        the self-consistent scheme (initial_of: the matrix tangent) the Eshelby nodes read it over a local edge,
-        starting from the matrix value."""
+    def poisson_ratio(self, tangent: str) -> dict:
+        """nu as a produced property (isotropic_moduli of a tangent node), made once."""
         name = f"{tangent}_moduli"
         if name not in self.names:
-            self.add({"type": "isotropic_moduli", "name": name, "tangent_source": tangent, **({"tolerance": 0} if initial_of else {})})
-        nu = {"nu_source": name, "nu_property": "poisson_ratio"}
-        if initial_of:
-            nu |= {"nu_edge": "local", "nu_initial": self.nu_of[initial_of]}
-        return nu
+            self.add({"type": "isotropic_moduli", "name": name, "tangent_source": tangent})
+        return {"nu_source": name, "nu_property": "poisson_ratio"}
+
+    def shape(self, es: dict) -> dict:
+        """A uvwmaterial eshelby_tensor as a shape object (the kernel data of the self-consistent scheme)."""
+        kind, parameter = es["type"], es.get("parameter", {})
+        if kind == "sphere":
+            return {"type": "sphere"}
+        if kind in ("long_fibre_x1", "long_fibre_x2", "long_fibre_x3", "long_fibre"):
+            return {"type": "cylinder", "direction": parameter.get("direction_vector", self.ESHELBY_DIRECTIONS.get(kind, [1, 0, 0]))}
+        if kind in ("ellipsoid", "general"):
+            return {"type": "spheroid", "aspect_ratio": parameter["aspec_ratio"], "direction": parameter.get("direction_vector", [1, 0, 0])}
+        raise ValueError(f"eshelby_tensor type {kind}: not supported ({'#122' if 'finite' in kind else '#110'})")
 
     def eshelby(self, es: dict, nu: dict, name: str) -> str:
         """One Eshelby node per uvwmaterial eshelby_tensor, consuming the produced Poisson ratio `nu`."""
-        kind, parameter = es["type"], es.get("parameter", {})
-        if kind == "sphere":
-            return self.add({"type": "eshelby_sphere", "name": name, **nu})
-        if kind in ("long_fibre_x1", "long_fibre_x2", "long_fibre_x3", "long_fibre"):
-            direction = parameter.get("direction_vector", self.ESHELBY_DIRECTIONS.get(kind, [1, 0, 0]))
-            return self.add({"type": "eshelby_cylinder", "name": name, **nu, "direction": direction})
-        if kind in ("ellipsoid", "general"):
-            return self.add({"type": "eshelby_spheroid", "name": name, **nu, "aspect_ratio": parameter["aspec_ratio"],
-                             "direction": parameter.get("direction_vector", [1, 0, 0])})
-        raise ValueError(f"eshelby_tensor type {kind}: not supported ({'#122' if 'finite' in kind else '#110'})")
+        shape = self.shape(es)
+        return self.add({"type": f"eshelby_{shape.pop('type')}", "name": name, **nu, **shape})
 
     def linear_phase(self, spec: dict, name: str, what: str) -> str:
         node, _, linear = self.phase_tangent(spec, name)
@@ -217,17 +213,18 @@ class Converter:
             raise ValueError(f"{what}: a nonlinear phase needs the local strains of #116 (mean_field_strain, by hand)")
         return node
 
-    def inclusion(self, key: str, spec: dict, name: str, nu: dict) -> tuple[str, float]:
+    def inclusion(self, key: str, spec: dict, name: str, nu: dict | None) -> tuple[str, float]:
+        """A phase; with `nu` its Eshelby node (dilute, Mori-Tanaka), without it the shape is the kernel's."""
         tangent = self.linear_phase(spec["material"], f"{name}_{key}_material", "mean field composite")
-        shape = self.eshelby(spec["eshelby_tensor"], nu, f"{name}_{key}_shape")
-        return self.add({"type": "phase", "name": f"{name}_{key}", "tangent_source": tangent, "eshelby_source": shape,
-                         "fraction_source": self.fraction(spec["volume_fraction"], f"{name}_{key}")}), spec["volume_fraction"]
+        phase = {"type": "phase", "name": f"{name}_{key}", "tangent_source": tangent,
+                 "fraction_source": self.fraction(spec["volume_fraction"], f"{name}_{key}")}
+        if nu is not None:
+            phase["eshelby_source"] = self.eshelby(spec["eshelby_tensor"], nu, f"{name}_{key}_shape")
+        return self.add(phase), spec["volume_fraction"]
 
-    def matrix_phase(self, tangent: str, fraction: float, name: str, shape: str | None = None) -> str:
-        phase = {"type": "phase", "name": f"{name}_matrix", "tangent_source": tangent, "fraction_source": self.fraction(fraction, f"{name}_matrix")}
-        if shape:
-            phase["eshelby_source"] = shape
-        return self.add(phase)
+    def matrix_phase(self, tangent: str, fraction: float, name: str) -> str:
+        return self.add({"type": "phase", "name": f"{name}_matrix", "tangent_source": tangent,
+                         "fraction_source": self.fraction(fraction, f"{name}_matrix")})
 
     def stress_of(self, tangent: str, name: str) -> str:
         """The composite is a tangent producer: its stress is a linear_stress, the point reads the tangent there."""
@@ -237,17 +234,15 @@ class Converter:
     def convert_small_strain_mean_field_composite(self, card, name):
         kernel = KERNELS[card["kernal"]]
         matrix = self.linear_phase(card["matrix"]["material"], f"{name}_matrix_material", "mean field composite")
-        composite = self.unique(f"{name}_tangent")
-        self.names.discard(composite)
         sc = kernel == "self_consistent"
-        nu = self.poisson_ratio(composite if sc else matrix, matrix if sc else None)
-        inclusions = [self.inclusion(key, spec, name, nu) for key, spec in card["inclusions"].items()]
-        shape = self.add({"type": "eshelby_sphere", "name": f"{name}_matrix_shape", **nu}) if sc else None
-        matrix_phase = self.matrix_phase(matrix, 1 - sum(c for _, c in inclusions), name, shape)
-        tangent = self.add({"type": "mean_field_tangent", "name": composite, "matrix": matrix_phase,
-                            "phases": [p for p, _ in inclusions], "kernel": kernel})
-        if sc:
-            self.residual = f"{tangent}::residual"
+        inclusions = [self.inclusion(key, spec, name, None if sc else self.poisson_ratio(matrix)) for key, spec in card["inclusions"].items()]
+        matrix_phase = self.matrix_phase(matrix, 1 - sum(c for _, c in inclusions), name)
+        kernel_doc = {"type": kernel}
+        if sc:  # every phase embedded in the effective medium: the shapes are data of the kernel
+            kernel_doc["shapes"] = {matrix_phase: {"type": "sphere"}} | {
+                phase: self.shape(spec["eshelby_tensor"]) for (phase, _), spec in zip(inclusions, card["inclusions"].values())}
+        tangent = self.add({"type": "mean_field_composite_global", "name": f"{name}_tangent",
+                            "phases": [matrix_phase] + [p for p, _ in inclusions], "kernel": kernel_doc})
         return self.stress_of(tangent, name)
 
     def convert_small_strain_short_fibre_composite(self, card, name):

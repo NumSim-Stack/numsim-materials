@@ -1,5 +1,5 @@
 {
-  "title": "rule_of_mixture",
+  "title": "mean_field_composite_global (rule-of-mixture kernels)",
   "include": ["../standard_small_strain.json"],
   "parameters": {"K1": 166666.67, "G1": 76923.08, "K2": 3333.33, "G2": 1153.85, "c1": 0.3},
   "derived": {
@@ -19,9 +19,9 @@
     {"type": "constant_scalar", "name": "c_soft", "value": 0.7},
     {"type": "phase", "name": "stiff", "tangent_source": "C_stiff", "fraction_source": "c_stiff"},
     {"type": "phase", "name": "soft", "tangent_source": "C_soft", "fraction_source": "c_soft"},
-    {"type": "rule_of_mixture", "name": "voigt", "phases": ["stiff", "soft"], "kernel": "voigt"},
-    {"type": "rule_of_mixture", "name": "reuss", "phases": ["stiff", "soft"], "kernel": "reuss"},
-    {"type": "rule_of_mixture", "name": "hill", "phases": ["stiff", "soft"], "kernel": "hill"},
+    {"type": "mean_field_composite_global", "name": "voigt", "phases": ["stiff", "soft"], "kernel": {"type": "voigt"}},
+    {"type": "mean_field_composite_global", "name": "reuss", "phases": ["stiff", "soft"], "kernel": {"type": "reuss"}},
+    {"type": "mean_field_composite_global", "name": "hill", "phases": ["stiff", "soft"], "kernel": {"type": "hill"}},
     {"type": "linear_stress", "name": "voigt_stress", "tangent_source": "voigt", "strain_source": "strain"},
     {"type": "linear_stress", "name": "reuss_stress", "tangent_source": "reuss", "strain_source": "strain"},
     {"type": "linear_stress", "name": "hill_stress", "tangent_source": "hill", "strain_source": "strain"}]},

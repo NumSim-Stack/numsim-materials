@@ -99,7 +99,7 @@ TEST(MeanFieldKernels, DiluteSpheresAreTheEshelbySolution) {
   auto k{make("dilute")};
   EXPECT_TRUE(k->needs().eshelby);
   auto const A{concentrations(*k, ph)};
-  EXPECT_LT(rel(A[0], Is()), 1e-14);
+  expect_partition(A); // the matrix takes the rest of the strain
   T const vol{(3 * Km + 4 * Gm) / (3 * Ki + 4 * Gm)}, dev{(Gm + zeta(Km, Gm)) / (Gi + zeta(Km, Gm))};
   tensor4 const expected{vol * nm::vol_projector<T, 3>() + dev * nm::dev_projector<T, 3>()};
   EXPECT_LT(rel(A[1], expected), 1e-12);

@@ -12,9 +12,8 @@
 #include "numsim-materials/materials/linear_stress.h"
 #include "numsim-materials/materials/mean_field_strain.h"
 #include "numsim-materials/materials/mean_field_stress.h"
-#include "numsim-materials/materials/mean_field_tangent.h"
+#include "numsim-materials/materials/mean_field_composite_global.h"
 #include "numsim-materials/materials/phase.h"
-#include "numsim-materials/materials/rule_of_mixture.h"
 #include "numsim-materials/umat/external_state_source.h"
 #include "numsim-materials/umat/json_model.h"
 
@@ -139,10 +138,10 @@ void load(ctx_type &ctx, tensor2 const &eps, int steps) {
 
 TEST(MeanFieldLocal, LinearPhasesReproduceTheTangentHomogenisationInOnePass) {
   auto ctx{build()};
-  param_type p; // the same phases through mean_field_tangent (approach A)
+  param_type p; // the same phases through the global composite (approach A)
   p.insert<std::string>("name", "mf");
-  p.insert<std::string>("matrix", "matrix");
-  p.insert<std::vector<std::string>>("phases", {"spheres"});
+  p.insert<std::vector<std::string>>("phases", {"matrix", "spheres"});
+  p.insert<nm::object_spec<param_type>>("kernel", {"mori_tanaka", {}});
   ctx_type ref;
   // approach A on the same producers: built inline to keep one graph per context
   for (auto const &[name, K, G] : {std::tuple{"m", Km, Gm}, std::tuple{"i", Ki, Gi}}) {
@@ -173,7 +172,7 @@ TEST(MeanFieldLocal, LinearPhasesReproduceTheTangentHomogenisationInOnePass) {
     q.insert<std::string>("eshelby_source", "sphere");
     ref.create<nm::phase<policy>>(q);
   }
-  ref.create<nm::mean_field_tangent<policy>>(p);
+  ref.create<nm::mean_field_composite_global<policy>>(p);
   ref.finalize();
   ref.update();
   tensor2 const eps{uniaxial(1e-3)};
@@ -215,8 +214,8 @@ TEST(MeanFieldLocal, RuleOfMixtureKernelsEqualTheirTangentProducer) {
     param_type q;
     q.insert<std::string>("name", "rom");
     q.insert<std::vector<std::string>>("phases", {"matrix", "spheres"});
-    q.insert<std::string>("kernel", kernel);
-    ref.create<nm::rule_of_mixture<policy>>(q);
+    q.insert<nm::object_spec<param_type>>("kernel", {kernel, {}});
+    ref.create<nm::mean_field_composite_global<policy>>(q);
     ref.finalize();
     ref.update();
     auto const &C{ref.get<tensor4>("rom", "tangent")};
