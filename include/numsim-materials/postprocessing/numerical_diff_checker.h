@@ -152,7 +152,7 @@ public:
   template<typename... Args>
   explicit numerical_diff_checker(Args&&... args)
       : base(std::forward<Args>(args)...),
-        m_error(base::template add_output<value_type>("error", &numerical_diff_checker::compute)),
+        m_error(base::template add_output<value_type>("error")),
         m_rel_error(base::template add_output<value_type>("rel_error")),
         m_ctx(base::template get_parameter<context_type*>("context")),
         m_output_src(connection_source::parse(
@@ -165,12 +165,14 @@ public:
         m_report_threshold(base::template get_parameter<value_type>("report_threshold")),
         m_history_strs(base::template get_parameter<std::vector<std::string>>("history_sources"))
   {
-    base::template add_input<Input>(
-        m_input_src.material, m_input_src.property, EdgeKind::Global);
-    base::template add_input<result_type>(
-        m_analytical_src.material, m_analytical_src.property, EdgeKind::Global);
-    base::template add_input<Output>(
-        m_output_src.material, m_output_src.property, EdgeKind::Global);
+    auto const& input{base::template add_input<Input>(
+        m_input_src.material, m_input_src.property, EdgeKind::Global)};
+    auto const& analytical{base::template add_input<result_type>(
+        m_analytical_src.material, m_analytical_src.property, EdgeKind::Global)};
+    auto const& output{base::template add_input<Output>(
+        m_output_src.material, m_output_src.property, EdgeKind::Global)};
+    // perturbs the graph through the context: never constant
+    base::add_callback(&numerical_diff_checker::compute, m_error, m_rel_error).reads(input, analytical, output).stateful();
 
     for (auto& s : m_history_strs)
       m_history_srcs.push_back(connection_source::parse(s));

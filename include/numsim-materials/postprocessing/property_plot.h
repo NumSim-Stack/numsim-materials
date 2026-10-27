@@ -2,6 +2,7 @@
 #define PROPERTY_PLOT_H
 
 #include <memory>
+#include <ranges>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -42,7 +43,7 @@ public:
         m_y_source_strs(base::template get_parameter<std::vector<std::string>>("y_sources"))
   {
     // Register a dummy output so the property engine calls our update()
-    base::template add_output<int>("_plot_tick", &property_plot::update);
+    auto& tick{base::template add_output<int>("_plot_tick")};
 
     // Parse x-axis source
     auto x_src = connection_source::parse(m_x_source_str);
@@ -56,6 +57,9 @@ public:
           src.material, src.property, EdgeKind::Global);
       m_y_inputs.push_back({src_str, &input});
     }
+    base::add_callback(&property_plot::update, tick)
+        .reads(m_x_input, m_y_inputs | std::views::values)
+        .stateful(); // plots a point per update
   }
 
   static input_parameter_controller parameters() {

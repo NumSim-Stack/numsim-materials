@@ -8,6 +8,7 @@
 #include <tmech/tmech.h>
 
 #include "numsim-materials/core/material_context.h"
+#include "numsim-materials/materials/constant_scalar.h"
 #include "numsim-materials/materials/scalar_stepper.h"
 #include "numsim-materials/materials/tensor_component_stepper.h"
 #include "numsim-materials/postprocessing/property_recorder.h"
@@ -79,6 +80,23 @@ TEST(PropertyRecorder, BuffersOneRowPerUpdateWithCorrectValues) {
     // strain(0,0) is component (i=0,j=0) → the first tensor column, index 1.
     EXPECT_NEAR(buf.at(r, 1), f.exp_s00[r], 1e-12) << "row " << r;
   }
+}
+
+TEST(PropertyRecorder, RecordsEveryUpdateOfConstantSources) {
+  ctx_type ctx;
+  ctx.verify_constants(false); // as in release builds: no verifying reruns
+  param_type p;
+  p.insert<std::string>("name", "c");
+  p.insert<T>("value", T{2});
+  ctx.create<numsim::materials::constant_scalar<policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "rec");
+  p.insert<std::vector<std::string>>("scalar_sources", {"c::value"});
+  auto& rec{ctx.create<property_recorder<policy>>(p)};
+  ctx.finalize();
+  for (int i{0}; i < 3; ++i)
+    ctx.update();
+  EXPECT_EQ(rec.buffer().rows(), 3u);
 }
 
 TEST(PropertyRecorder, RejectsRecipeWithNoSources) {
