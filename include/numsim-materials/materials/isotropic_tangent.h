@@ -18,10 +18,7 @@ namespace numsim::materials {
 /// K_property/G_property if it does not publish under "value". Which one you
 /// wire IS the choice, so no flag can disagree with it.
 ///
-/// Rebuilds on every update: no memo, so no cached state to go stale. The pair
-/// costs ~315 ns per update against ~26 ns for linear_elasticity, which
-/// computes its tangent once — so where the moduli are fixed and 12x matters,
-/// that is still the cheaper material.
+/// A constant output: computed once when K and G are constant, on every update otherwise.
 template <typename Traits>
 class isotropic_tangent final
     : public material_base<isotropic_tangent<Traits>, Traits> {
@@ -44,7 +41,9 @@ public:
         m_G(base::template add_input<value_type>(
             base::template get_parameter<std::string>("G_source"),
             base::template get_parameter<std::string>("G_property"),
-            EdgeKind::Global)) {}
+            EdgeKind::Global)) {
+    base::constant_output(m_C);
+  }
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};

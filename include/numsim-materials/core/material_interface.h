@@ -1,14 +1,24 @@
 #ifndef MATERIAL_INTERFACE_H
 #define MATERIAL_INTERFACE_H
 
+#include <algorithm>
 #include <any>
+#include <cmath>
+#include <concepts>
+#include <cstddef>
 #include <functional>
+#include <limits>
+#include <optional>
+#include <ranges>
+#include <utility>
 #include <stdexcept>
 #include <type_traits>
 #include <memory>
 #include <string>
 #include <typeinfo>
+#include <unordered_map>
 #include <vector>
+#include <tmech/tmech.h>
 
 #include "numsim-materials/core/property_traits.h"
 #include "numsim-materials/core/property.h"
@@ -31,6 +41,48 @@ std::string parameter_type_label() {
   else if constexpr (requires { typename T::value_type; typename T::iterator; }) return "a list";
   else return std::string{"of type "} + typeid(T).name();
 }
+
+/// Types whose recomputed value same_value() can compare with the stored one; only these can be constant.
+template <typename T>
+concept verifiable = std::copy_constructible<T> &&
+                     (std::is_arithmetic_v<T> || requires(T const& a) { tmech::norm(a - a); } || std::equality_comparable<T>);
+
+/// Whether a recomputed value equals the stored one, to sqrt(eps) relative: independent of the units.
+template <verifiable T>
+bool same_value(T const& a, T const& b) {
+  using std::abs;
+  if constexpr (std::is_arithmetic_v<T>) {
+    return abs(a - b) <= std::sqrt(std::numeric_limits<T>::epsilon()) * std::max(abs(a), abs(b));
+  } else if constexpr (requires { tmech::norm(a - b); }) {
+    auto const tol{std::sqrt(std::numeric_limits<std::decay_t<decltype(tmech::norm(a))>>::epsilon())};
+    return tmech::norm(a - b) <= tol * std::max(tmech::norm(a), tmech::norm(b));
+  } else {
+    return a == b;
+  }
+}
+
+/// Whether a value is finite; types without a norm are.
+template <verifiable T>
+bool is_finite(T const& a) {
+  if constexpr (std::is_floating_point_v<T>)
+    return std::isfinite(a);
+  else if constexpr (!std::is_arithmetic_v<T> && requires { tmech::norm(a - a); })
+    return std::isfinite(tmech::norm(a));
+  else
+    return true;
+}
+
+/// std::ranges::to<std::vector>(), which libstdc++ 13 lacks.
+template <std::ranges::input_range R>
+auto to_vector(R&& range) {
+  std::vector<std::ranges::range_value_t<R>> result;
+  for (auto&& value : range)
+    result.push_back(std::forward<decltype(value)>(value));
+  return result;
+}
+
+/// A rerun constant compared with its stored value.
+enum class verdict { same, changed, not_finite };
 } // namespace detail
 
 /// Virtual base for all materials: property registration, typed input wiring and material references;
@@ -92,6 +144,8 @@ public:
           "identity and cannot be changed after construction");
     try {
       m_parameter_handler.template get<T>(key) = value;
+      if (m_revision)
+        ++*m_revision; // the engine recomputes its constant properties
     } catch (const std::bad_any_cast&) {
       // Otherwise this surfaces as a bare "bad any_cast" naming nothing, and
       // from a type that is neither invalid_argument nor runtime_error.
@@ -161,17 +215,57 @@ public:
     return m_typed_inputs;
   }
 
+  using property_base_type = numsim_core::property_base<property_traits>;
+  /// Copies a value; the returned check compares it with the current one. Empty for types never constant.
+  using snapshot = std::function<std::function<detail::verdict()>()>;
+
+  /// An output declared a function of the parameters, of `reads` (all inputs when unset) and of the outputs
+  /// `own_reads` of this material (material_base::constant_output, callback_handle::reads).
+  struct constant_declaration {
+    property_base_type const* output;
+    std::optional<std::vector<input_wire_base const*>> reads;
+    std::vector<property_base_type const*> own_reads;
+    snapshot take;
+  };
+  const std::vector<constant_declaration>& constant_outputs() const noexcept { return m_constant_outputs; }
+
+  /// (output, writer): the output has no callback of its own, the writer's callback fills it.
+  const auto& written_outputs() const noexcept { return m_written_by; }
+  /// (earlier, later): callbacks of this material in the order they must run.
+  const auto& callback_order() const noexcept { return m_callback_order; }
+
+  /// Throws when an output read by a callback of this material has no writer; at finalize(), when all are bound.
+  void check_reads() const {
+    for (auto const& [read, reader] : m_callback_order)
+      if (std::ranges::contains(m_read_declared, reader) && !read->traits().update &&
+          !std::ranges::contains(m_written_by, read, &decltype(m_written_by)::value_type::first))
+        throw std::logic_error("reads(): '" + m_name + "::" + read->traits().id.name + "' has no callback or writer to run after");
+  }
+
+  /// The engine's revision counter, bumped by set_parameter(); bound at finalize().
+  void bind_revision(std::size_t* revision) noexcept { m_revision = revision; }
+
 protected:
   template <typename T>
   T& add_property(std::string const& property_name, T&& data = T()) {
-    return m_property_handler.template add_property<T>(
-        name(), property_name, std::forward<T>(data));
+    T& value{m_property_handler.template add_property<T>(name(), property_name, std::forward<T>(data))};
+    snapshot take;
+    if constexpr (detail::verifiable<T>)
+      take = [&value] {
+        return std::function<detail::verdict()>{[&value, copy = value] {
+          using enum detail::verdict;
+          return !detail::is_finite(value) ? not_finite : detail::same_value(copy, value) ? same : changed;
+        }};
+      };
+    m_outputs[&value] = {*m_property_handler.find(name(), property_name), std::move(take)};
+    return value;
   }
 
   template <typename T>
   history_property<T>& add_history(std::string const& property_name, T&& data = T()) {
-    return m_property_handler.template add_history<T>(
-        name(), property_name, std::forward<T>(data));
+    auto& value{m_property_handler.template add_history<T>(name(), property_name, std::forward<T>(data))};
+    m_outputs[&value] = {*m_property_handler.find(name(), property_name), {}}; // never constant
+    return value;
   }
 
   template <typename T>
@@ -195,6 +289,73 @@ protected:
     return ref;
   }
 
+  /// `output` is the value add_property() returned, its address identifies the property.
+  void declare_constant(void const* output, std::optional<std::vector<input_wire_base const*>> reads) {
+    auto const& entry{output_entry_of("constant_output", output)};
+    if (entry.property->is_history())
+      throw std::logic_error("constant_output(): '" + key_of(entry) + "' is history, never constant");
+    if (!entry.take)
+      throw std::logic_error("constant_output(): '" + key_of(entry) + "' has a type that cannot be compared");
+    if (reads)
+      check_inputs("constant_output", entry, *reads);
+    check_undeclared("constant_output", entry);
+    m_constant_outputs.push_back({entry.property, std::move(reads), {}, entry.take});
+  }
+
+  /// The callback filling `outputs` reads the parameters, `inputs` and the outputs `own` of this material only:
+  /// it runs after their writers, and its outputs are constant once all reads are (when they can be constant).
+  void declare_reads(std::vector<void const*> const& outputs, std::vector<input_wire_base const*> inputs,
+                     std::vector<void const*> const& own, bool verifiable) {
+    auto const& callback{output_entry_of("reads", outputs.front())};
+    if (std::ranges::contains(m_read_declared, callback.property))
+      throw std::logic_error("reads(): '" + key_of(callback) + "' declares its reads twice");
+    m_read_declared.push_back(callback.property);
+    check_inputs("reads", callback, inputs);
+    std::vector<property_base_type const*> own_reads;
+    for (auto const* output : own) {
+      auto const& read{output_entry_of("reads", output)};
+      if (std::ranges::contains(outputs, output))
+        throw std::logic_error("reads(): '" + key_of(callback) + "' reads its own output '" + key_of(read) + "'");
+      m_callback_order.emplace_back(read.property, callback.property); // after its writer: writer -> read
+      own_reads.push_back(read.property);
+    }
+    auto const entries{detail::to_vector(
+        outputs | std::views::transform([this](void const* output) { return &output_entry_of("reads", output); }))};
+    if (verifiable && std::ranges::none_of(entries, [](auto const* entry) { return entry->property->is_history(); }))
+      for (auto const* entry : entries) {
+        check_undeclared("reads", *entry);
+        m_constant_outputs.push_back({entry->property, inputs, own_reads, entry->take});
+      }
+  }
+
+  void declare_written_by(void const* output, void const* writer) {
+    auto const& out{output_entry_of("written_by", output)};
+    auto const& by{output_entry_of("written_by", writer)};
+    if (has_callback(out) || has_writer(out))
+      throw std::logic_error("written_by(): '" + key_of(out) + "' has a callback or a writer already");
+    if (!has_callback(by))
+      throw std::logic_error("written_by(): '" + key_of(by) + "' has no callback to write with");
+    m_written_by.emplace_back(out.property, by.property);
+  }
+
+  const std::string& output_name(void const* output) const {
+    return output_entry_of("add_callback", output).property->traits().id.name;
+  }
+  /// Whether something fills the output already: its own callback or a declared writer.
+  bool is_bound(void const* output) const {
+    auto const& entry{output_entry_of("add_callback", output)};
+    return has_callback(entry) || has_writer(entry);
+  }
+
+  void declare_order(void const* later, void const* earlier) {
+    auto const& first{output_entry_of("runs_after", earlier)};
+    auto const& second{output_entry_of("runs_after", later)};
+    for (auto const* entry : {&first, &second})
+      if (!has_callback(*entry))
+        throw std::logic_error("runs_after(): '" + key_of(*entry) + "' has no callback of its own to order");
+    m_callback_order.emplace_back(first.property, second.property);
+  }
+
   /// Add a lazy reference to another material, resolved at finalize().
   template <typename T>
   material_ref<T, Traits>& add_material_ref(std::string name) {
@@ -211,6 +372,42 @@ protected:
 private:
   std::vector<std::unique_ptr<input_wire_base>> m_typed_inputs;
   std::vector<std::unique_ptr<material_ref_base<Traits>>> m_material_refs;
+  struct output_entry {
+    property_base_type const* property;
+    snapshot take;
+  };
+  std::unordered_map<void const*, output_entry> m_outputs; ///< value address -> property
+  std::vector<constant_declaration> m_constant_outputs;
+  std::vector<property_base_type const*> m_read_declared; ///< callbacks with declared reads
+  std::vector<std::pair<property_base_type const*, property_base_type const*>> m_written_by, m_callback_order;
+
+  /// The entry of an output of this material; declarations end at finalize(), when the engine reads them.
+  output_entry const& output_entry_of(char const* what, void const* output) const {
+    if (m_revision)
+      throw std::logic_error(std::string{what} + "(): material '" + m_name + "' declares after finalize()");
+    auto const it{m_outputs.find(output)};
+    if (it == m_outputs.end())
+      throw std::logic_error(std::string{what} + "(): material '" + m_name + "' named a value that is not one of its outputs");
+    return it->second;
+  }
+  void check_inputs(char const* what, output_entry const& entry, std::vector<input_wire_base const*>& reads) const {
+    std::erase(reads, nullptr); // an absent optional input
+    auto const is_input{[this](input_wire_base const* read) {
+      return std::ranges::contains(m_typed_inputs, read, [](auto const& input) { return input.get(); });
+    }};
+    if (!std::ranges::all_of(reads, is_input))
+      throw std::logic_error(std::string{what} + "(): '" + key_of(entry) + "' declares a read that is not an input of the material");
+  }
+  void check_undeclared(char const* what, output_entry const& entry) const {
+    if (std::ranges::contains(m_constant_outputs, entry.property, &constant_declaration::output))
+      throw std::logic_error(std::string{what} + "(): '" + key_of(entry) + "' is declared twice");
+  }
+  std::string key_of(output_entry const& entry) const { return m_name + "::" + entry.property->traits().id.name; }
+  static bool has_callback(output_entry const& entry) { return static_cast<bool>(entry.property->traits().update); }
+  bool has_writer(output_entry const& entry) const {
+    return std::ranges::contains(m_written_by, entry.property, &decltype(m_written_by)::value_type::first);
+  }
+  std::size_t* m_revision{nullptr};
 };
 
 } // namespace numsim::materials

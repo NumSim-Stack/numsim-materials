@@ -28,12 +28,14 @@ public:
   template <typename... Args>
   explicit isotropic_moduli(Args &&...args)
       : base(std::forward<Args>(args)...),
-        m_K(base::template add_output<value_type>("K", &isotropic_moduli::compute)),
+        m_K(base::template add_output<value_type>("K")),
         m_G(base::template add_output<value_type>("G")),
         m_nu(base::template add_output<value_type>("poisson_ratio")),
         m_tolerance(base::template get_parameter<value_type>("tolerance")),
         m_C(base::template add_input<tensor4>(base::template get_parameter<std::string>("tangent_source"),
-                                              base::template get_parameter<std::string>("tangent_property"), EdgeKind::Global)) {}
+                                              base::template get_parameter<std::string>("tangent_property"), EdgeKind::Global)) {
+    base::add_callback(&isotropic_moduli::compute, m_K, m_G, m_nu).constant();
+  }
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};

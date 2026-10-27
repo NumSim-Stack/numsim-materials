@@ -48,8 +48,9 @@ public:
             connection_source{m_timer_name, "state"}, EdgeKind::Global)),
         m_theta(base::template add_input_history<value_type>(
             connection_source{m_temp_name, "state"}, EdgeKind::Global)),
+        // global: update() adds this pass's increment, so the solver must run first (it reads us over local edges)
         m_dz(base::template add_input<value_type>(
-            m_solver_name, "delta", EdgeKind::Local)),
+            m_solver_name, "delta", EdgeKind::Global)),
         // parameters
         m_A(base::template get_parameter<value_type>("A")),
         m_E(base::template get_parameter<value_type>("E")),

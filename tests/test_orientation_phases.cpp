@@ -84,8 +84,16 @@ json short_fibres(json const &orientation, json const &per_direction, bool damag
   return e;
 }
 
+/// Damaging fibres localised with their current tangents: the phase nodes read the damaged tangent over a
+/// local edge, starting from the elastic one.
+json nonlinear(json e) {
+  e["localisation"] = "nonlinear";
+  e["phase"] = {{"tangent_source", "fibre_{q}"}, {"tangent_property", "damaged_tangent"}, {"tangent_edge", "local"}, {"initial_tangent_source", "C_f"}};
+  return e;
+}
+
 /// The matrix, the fibre tangent and, next to the local composite, the global short_fibre_composite.
-json deck(json const &orientation, json const &per_direction, bool damaging = false) {
+json deck(json const &orientation, json const &per_direction, bool damaging = false, bool nonlinear_ = false) {
   json m = json::array();
   m.push_back({{"type", "external_strain_source"}, {"name", "strain"}});
   for (auto const &[n, v] : std::array<std::pair<char const *, T>, 6>{{{"Km", 3333.33}, {"Gm", 1153.85}, {"Kf", 166666.67},
@@ -97,7 +105,7 @@ json deck(json const &orientation, json const &per_direction, bool damaging = fa
   m.push_back({{"type", "phase"}, {"name", "matrix"}, {"tangent_source", "C_m"}, {"fraction_source", "cm_"}});
   m.push_back({{"type", "linear_elasticity"}, {"name", "elastic_m"}, {"strain_producer_name", "sf_strain"},
                {"strain_property", "strain_matrix"}, {"K", 3333.33}, {"G", 1153.85}});
-  m.push_back(short_fibres(orientation, per_direction, damaging));
+  m.push_back(nonlinear_ ? nonlinear(short_fibres(orientation, per_direction, damaging)) : short_fibres(orientation, per_direction, damaging));
   // the global composite over the same matrix and fibre, aligned along x1
   m.push_back({{"type", "eshelby_spheroid"}, {"name", "shape"}, {"aspect_ratio", 15.0}, {"nu_source", "moduli"}, {"nu_property", "poisson_ratio"}});
   m.push_back({{"type", "phase"}, {"name", "fibre"}, {"tangent_source", "C_f"}, {"fraction_source", "c_"}, {"eshelby_source", "shape"}});
@@ -302,6 +310,88 @@ TEST(DamagingFibres, TangentMatchesFiniteDifferences) {
   auto const res{d.step(uniaxial(10 * 6e-4 + 1e-6), tensor2{}, nm::load_control<T>::strain(), 10, 1)};
   ASSERT_TRUE(res.converged);
   EXPECT_LT(d.tangent_error(res), 1e-4);
+}
+
+TEST(NonlinearFibres, ExpandIntoTheNonlinearComposite) {
+  json e = nonlinear(short_fibres(injection, damaging_fibres(), true));
+  json const composite = named(expand(e), "sf");
+  EXPECT_EQ(composite.at("type"), "mean_field_composite_local_nonlinear");
+  EXPECT_FALSE(composite.at("phases")[0].contains("used_tangent")); // an elastic matrix
+  EXPECT_EQ(composite.at("phases")[4].at("used_tangent"), "sf_3::tangent");
+  EXPECT_EQ(named(expand(e), "sf_3").at("tangent_source"), "fibre_3");
+  e["matrix_used_tangent"] = "matrix::tangent";
+  EXPECT_EQ(named(expand(e), "sf").at("phases")[0].at("used_tangent"), "matrix::tangent");
+}
+
+TEST(NonlinearFibres, NeedALocalTangentEdge) {
+  json e = nonlinear(short_fibres(injection, damaging_fibres(), true));
+  e["phase"].erase("tangent_edge");
+  try {
+    (void)expand(e);
+    FAIL() << "a nonlinear localisation over a global tangent edge is a cycle";
+  } catch (std::invalid_argument const &x) {
+    EXPECT_NE(std::string{x.what()}.find("tangent_edge"), std::string::npos) << x.what();
+  }
+  e = short_fibres(injection, elastic_fibres(), false);
+  e["localisation"] = "plastic";
+  EXPECT_THROW((void)expand(e), std::invalid_argument);
+  e["localisation"] = "linear";
+  e["matrix_used_tangent"] = "matrix::tangent"; // only a nonlinear composite reads it
+  EXPECT_THROW((void)expand(e), std::invalid_argument);
+}
+
+/// The driver on "strain" -> "sf", closing the local fixed point on "sf::residual".
+nm::material_point_driver<policy> nonlinear_driver(ctx_type &ctx) {
+  policy::ParameterHandler p;
+  p.insert<std::string>("strain_source", "strain");
+  p.insert<std::string>("stress_source", "sf");
+  p.insert<std::string>("residual_source", "sf::residual");
+  p.insert<int>("max_passes", 200);
+  return {ctx, p};
+}
+
+// before any damage the current tangents are the initial ones: the first pass is converged and linear
+TEST(NonlinearFibres, BelowTheThresholdAreTheLinearLocalisation) {
+  auto lin{build(deck(injection, damaging_fibres(), true))};
+  auto nl{build(deck(injection, damaging_fibres(), true, true))};
+  step(*lin, tensor2{}, uniaxial(0.0006));
+  step(*nl, tensor2{}, uniaxial(0.0006));
+  EXPECT_EQ(along_and_across(*nl).first, 0);
+  EXPECT_LT(nl->get<T>("sf", "residual"), 1e-12);
+  tensor2 const &sigma{lin->get<tensor2>("sf", "stress")};
+  EXPECT_LT(tmech::norm(tensor2{nl->get<tensor2>("sf", "stress") - sigma}) / tmech::norm(sigma), 1e-12);
+}
+
+// a softening fibre attracts strain once it localises with its damaged tangent: more damage than linear
+TEST(NonlinearFibres, ConvergedPassesSendTheStrainToTheDamagedFibres) {
+  auto lin{build(deck(injection, damaging_fibres(), true))};
+  auto nl{build(deck(injection, damaging_fibres(), true, true))};
+  auto d{nonlinear_driver(*nl)};
+  for (int n{1}; n <= 10; ++n) {
+    step(*lin, uniaxial(0.0006 * (n - 1)), uniaxial(0.0006 * n));
+    ASSERT_TRUE(d.step(uniaxial(n * 6e-4), tensor2{}, nm::load_control<T>::strain(), n - 1, 1).converged) << n;
+    EXPECT_LE(nl->get<T>("sf", "residual"), 1e-10) << n;
+    d.accept();
+  }
+  auto const [along, across]{along_and_across(*nl)};
+  EXPECT_GT(along, 0);
+  EXPECT_LT(across, along);
+  EXPECT_GT(along, along_and_across(*lin).first);
+  EXPECT_LT(nl->get<tensor2>("sf", "stress")(0, 0), lin->get<tensor2>("sf", "stress")(0, 0));
+}
+
+// the published tangent sum c_r C_r : A_r holds the concentrations fixed: first order in the step
+TEST(NonlinearFibres, TangentMatchesFiniteDifferencesOnASmallStep) {
+  auto ctx{build(deck(injection, damaging_fibres(), true, true))};
+  auto d{nonlinear_driver(*ctx)};
+  for (int n{1}; n <= 10; ++n) {
+    ASSERT_TRUE(d.step(uniaxial(n * 6e-4), tensor2{}, nm::load_control<T>::strain(), n - 1, 1).converged) << n;
+    d.accept();
+  }
+  ASSERT_GT(along_and_across(*ctx).first, 0);
+  auto const res{d.step(uniaxial(10 * 6e-4 + 1e-6), tensor2{}, nm::load_control<T>::strain(), 10, 1)};
+  ASSERT_TRUE(res.converged);
+  EXPECT_LT(d.tangent_error(res), 1e-2);
 }
 
 TEST(OrientationPhases, RejectsAMalformedEntry) {

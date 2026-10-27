@@ -21,14 +21,16 @@ namespace numsim::materials {
 /// Emits "<name>_fractions" (scalar_split of the fibre fraction by the node weights); per direction
 /// "<name>_S_<q>" (the kernel's "eshelby" template along n_q, dilute and mori_tanaka), "<name>_<q>" (phase
 /// from the "phase" template) and the sub-deck; then "<name>_strain" (mean_field_strain, the matrix first)
-/// and "<name>" (mean_field_composite_local_linear). A phase material reads "strain_<name>_<q>" of
-/// "<name>_strain".
+/// and "<name>" (mean_field_composite_local_linear, or _nonlinear with "localisation": "nonlinear"). A phase
+/// material reads "strain_<name>_<q>" of "<name>_strain".
 ///
 /// Keys: "name", "kernel" {"type", "eshelby" (dilute, mori_tanaka) or "shape" and optional "matrix_shape"
 /// (self_consistent), the kernel's own data}, "strain_source", "matrix" (its phase node), "matrix_stress",
 /// "fraction_source", "orientation" [a11, a22, a33, a12, a13, a23], "per_direction", "stress" ("{q}"
 /// template); optional "precision" (11), "phase", "fraction_property", "matrix_tangent" and "tangent"
-/// (default the phase nodes' tangents). Sources are "material::property".
+/// (default the phase nodes' tangents), "localisation" (linear | nonlinear: the fibres localise with their
+/// current tangents, read by the "phase" template over a local edge) and "matrix_used_tangent" (nonlinear).
+/// Sources are "material::property".
 template <typename JsonType>
 std::vector<JsonType> expand_orientation_phases(JsonType const &e) {
   auto const require = [&](char const *key) -> JsonType const & {
@@ -54,6 +56,16 @@ std::vector<JsonType> expand_orientation_phases(JsonType const &e) {
   if (precision < 0)
     throw std::invalid_argument("orientation_phases: precision must be a Lebedev degree");
   (void)lebedev::rule(static_cast<std::size_t>(precision)); // an aligned distribution never asks for it
+  auto const localisation{e.contains("localisation") ? e.at("localisation").template get<std::string>() : std::string{"linear"}};
+  if (localisation != "linear" && localisation != "nonlinear")
+    throw std::invalid_argument("orientation_phases: unknown localisation '" + localisation + "' (linear, nonlinear)");
+  bool const nonlinear{localisation == "nonlinear"};
+  JsonType const phase_template = e.contains("phase") ? e.at("phase") : JsonType::object();
+  if (nonlinear && phase_template.value("tangent_edge", std::string{}) != "local")
+    throw std::invalid_argument("orientation_phases: a nonlinear localisation reads the fibre tangents over a local edge: the \"phase\" "
+                                "template needs \"tangent_edge\": \"local\" and an \"initial_tangent_source\"");
+  if (!nonlinear && e.contains("matrix_used_tangent"))
+    throw std::invalid_argument("orientation_phases: matrix_used_tangent goes with \"localisation\": \"nonlinear\"");
   JsonType const &deck{require("per_direction")};
   if (!deck.is_array() || deck.empty())
     throw std::invalid_argument("orientation_phases: per_direction lists the entries of one direction");
@@ -75,12 +87,14 @@ std::vector<JsonType> expand_orientation_phases(JsonType const &e) {
   JsonType phases = JsonType::array({matrix}), weights = JsonType::array();
   JsonType locals = JsonType::array({local(matrix, require("matrix_stress").template get<std::string>(),
                                            e.contains("matrix_tangent") ? e.at("matrix_tangent").template get<std::string>() : matrix + "::tangent")});
+  if (e.contains("matrix_used_tangent"))
+    locals[0]["used_tangent"] = e.at("matrix_used_tangent");
   std::vector<JsonType> out(1); // the fractions, once the weights are known
   for (std::size_t q{0}; q < nodes.size(); ++q) {
     auto const s{std::to_string(q)}, phase_name{name + "_" + s};
     auto const &[n, w]{nodes[q]};
     JsonType const direction = JsonType::array({n(0), n(1), n(2)});
-    JsonType ph = substitute(e.contains("phase") ? e.at("phase") : JsonType::object(), "{q}", s);
+    JsonType ph = substitute(phase_template, "{q}", s);
     ph["type"] = "phase";
     ph["name"] = phase_name;
     ph["fraction_source"] = name + "_fractions";
@@ -103,12 +117,14 @@ std::vector<JsonType> expand_orientation_phases(JsonType const &e) {
     phases.push_back(phase_name);
     locals.push_back(local(phase_name, substitute(require("stress"), "{q}", s).template get<std::string>(),
                            e.contains("tangent") ? substitute(e.at("tangent"), "{q}", s).template get<std::string>() : phase_name + "::tangent"));
+    if (nonlinear)
+      locals.back()["used_tangent"] = phase_name + "::tangent";
   }
   out.front() = {{"type", "scalar_split"}, {"name", name + "_fractions"}, {"source", require("fraction_source")}, {"weights", weights}};
   if (e.contains("fraction_property"))
     out.front()["property"] = e.at("fraction_property");
   out.push_back({{"type", "mean_field_strain"}, {"name", strain_name}, {"strain_source", require("strain_source")}, {"phases", phases}, {"kernel", kernel}});
-  out.push_back({{"type", "mean_field_composite_local_linear"}, {"name", name}, {"phases", locals}});
+  out.push_back({{"type", nonlinear ? "mean_field_composite_local_nonlinear" : "mean_field_composite_local_linear"}, {"name", name}, {"phases", locals}});
   return out;
 }
 
