@@ -1,71 +1,46 @@
 #ifndef LINEAR_DAMAGE_LAW_H
 #define LINEAR_DAMAGE_LAW_H
 
-#include <algorithm>
-#include "numsim-materials/core/material_base.h"
+#include <utility>
+
+#include "numsim-materials/core/parameter_helpers.h"
+#include "numsim-materials/materials/detail/scalar_damage_law.h"
 
 namespace numsim::materials {
 
-/// Linear damage evolution law.
-///
-/// D(kappa) = min((kappa - kappa_0) / (kappa_f - kappa_0), 1)
-/// dD/dkappa = 1 / (kappa_f - kappa_0)    when kappa_0 < kappa < kappa_f
-///
-/// Parameters:
-///   kappa_0: damage onset threshold
-///   kappa_f: full damage strain (D=1)
+/// Linear law d = (kappa - kappa_0) / (kappa_f - kappa_0) between the threshold and kappa_f, capped at d_max.
+/// Parameters "kappa_0", "kappa_f" >= kappa_0, "d_max", "yield_source"; outputs "damage", "d_damage".
 template <typename Traits>
-class linear_damage_law final
-    : public material_base<linear_damage_law<Traits>, Traits> {
+class linear_damage_law final : public detail::scalar_damage_law<linear_damage_law<Traits>, Traits> {
 public:
-  using base = material_base<linear_damage_law<Traits>, Traits>;
+  using base = detail::scalar_damage_law<linear_damage_law<Traits>, Traits>;
   using value_type = typename base::value_type;
   using input_parameter_controller = typename base::input_parameter_controller;
 
   template <typename... Args>
-  explicit linear_damage_law(Args&&... args)
-      : base(std::forward<Args>(args)...),
-        m_damage(base::template add_output<value_type>(
-            "damage", &linear_damage_law::compute)),
-        m_d_damage(base::template add_output<value_type>("d_damage")),
-        m_kappa_0(base::template get_parameter<value_type>("kappa_0")),
-        m_kappa_f(base::template get_parameter<value_type>("kappa_f")),
-        m_yield_source(base::template get_parameter<std::string>("yield_source")),
-        m_kappa(base::template add_input<value_type>(
-            m_yield_source, "kappa", EdgeKind::Global))
-  {}
+  explicit linear_damage_law(Args &&...args)
+      : base(std::forward<Args>(args)...), m_kappa_f(base::template get_parameter<value_type>("kappa_f")) {
+    base::require(m_kappa_f >= base::kappa_0(), "kappa_f must not be below kappa_0"); // equal: full damage right past the threshold
+    base::register_output();
+  }
+
+  static constexpr char const *type_name() noexcept { return "linear_damage_law"; }
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
-    para.template insert<std::string>("yield_source").template add<is_required>();
-    para.template insert<value_type>("kappa_0").template add<is_required>();
-    para.template insert<value_type>("kappa_f").template add<is_required>();
+    required<value_type>(para, "kappa_0");
+    required<value_type>(para, "kappa_f");
     return para;
   }
 
-  void compute() {
-    const auto kappa = m_kappa.get();
-    const auto range = m_kappa_f - m_kappa_0;
-
-    if (kappa <= m_kappa_0 || range < value_type{1e-30}) {
-      m_damage = value_type{0};
-      m_d_damage = value_type{0};
-    } else if (kappa >= m_kappa_f) {
-      m_damage = value_type{0.999};
-      m_d_damage = value_type{0};
-    } else {
-      m_damage = (kappa - m_kappa_0) / range;
-      m_d_damage = value_type{1} / range;
-    }
+  /// Full damage from kappa_f on: the base caps it at d_max with a zero slope.
+  [[nodiscard]] std::pair<value_type, value_type> evaluate(value_type kappa) const noexcept {
+    auto const range{m_kappa_f - base::kappa_0()};
+    return kappa >= m_kappa_f ? std::pair{value_type{1}, value_type{0}} : std::pair{(kappa - base::kappa_0()) / range, 1 / range};
   }
 
 private:
-  value_type& m_damage;
-  value_type& m_d_damage;
-  const value_type& m_kappa_0;
-  const value_type& m_kappa_f;
-  const std::string& m_yield_source;
-  const input_property<value_type, property_traits>& m_kappa;
+  value_type const &m_kappa_f;
 };
 
 } // namespace numsim::materials

@@ -281,6 +281,20 @@ TEST(MaterialPointDriver, ParametersAreChecked) {
   EXPECT_THROW(static_cast<void>(driver{ctx, wrong}), u::fatal_error) << "not a strain source";
 }
 
+TEST(MaterialPointDriver, StressAndTangentPropertiesAreParameters) {
+  ctx_type ctx;
+  build_j2(ctx);
+  auto p{parameters_for("j2")};
+  p.insert<std::string>("stress_property", "plastic_strain");
+  driver d{ctx, p};
+  auto const res{d.step(axial(1e-2), tensor2{}, control::strain(), 0, 1)};
+  EXPECT_EQ(res.stress, d.point().output<tensor2>("j2", "plastic_strain")) << "the step reads the named property";
+  EXPECT_GT(tmech::norm(res.stress), 0) << "past yield";
+  auto missing{parameters_for("j2")};
+  missing.insert<std::string>("tangent_property", "no_such_tangent");
+  EXPECT_ANY_THROW(static_cast<void>(driver{ctx, missing}));
+}
+
 TEST(MaterialPointDriver, PassesTheResidualSettingsToThePoint) {
   ctx_type ctx;
   build_elastic(ctx, true);

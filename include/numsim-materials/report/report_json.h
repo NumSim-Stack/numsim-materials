@@ -182,15 +182,16 @@ inline std::vector<std::string> output_stems(nlohmann::json const &doc) {
 }
 
 /// "point": the parameters of the material-point driver (strain_source or deformation_gradient_source,
-/// stress_source, optional tangent_source and time_source, and optionally tolerance, max_iter, fd_step, and the
-/// fixed point residual_source, residual_tolerance, max_passes).
+/// stress_source, optional tangent_source, stress_property, tangent_property ("damaged_stress") and time_source,
+/// and optionally tolerance, max_iter, fd_step, and the fixed point residual_source, residual_tolerance, max_passes).
 template <typename Traits>
 typename Traits::ParameterHandler parse_point(nlohmann::json const &doc) {
   using T = typename Traits::value_type;
   typename Traits::ParameterHandler out;
   for (auto const &[key, value] : doc.at("point").items()) {
     if (key == "strain_source" || key == "deformation_gradient_source" || key == "stress_source" ||
-        key == "tangent_source" || key == "time_source" || key == "residual_source")
+        key == "tangent_source" || key == "stress_property" || key == "tangent_property" || key == "time_source" ||
+        key == "residual_source")
       out.template insert<std::string>(key, value.template get<std::string>());
     else if (key == "tolerance" || key == "fd_step" || key == "residual_tolerance")
       out.template insert<T>(key, value.template get<T>());
@@ -215,7 +216,7 @@ struct column_spec {
 /// "record" (nlohmann::json orders those by column name; a value may be {"source", "full"}).
 inline std::vector<column_spec> parse_columns(nlohmann::json const &doc) {
   auto const &p{doc.at("point")};
-  auto const stress{p.at("stress_source").get<std::string>() + "::stress"};
+  auto const stress{p.at("stress_source").get<std::string>() + "::" + p.value("stress_property", std::string{"stress"})};
   std::vector<column_spec> out;
   if (is_finite_strain(doc))
     out = {{"F", p.at("deformation_gradient_source").get<std::string>() + "::deformation_gradient", true}, {"P", stress, true}};

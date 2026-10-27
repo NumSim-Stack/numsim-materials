@@ -97,12 +97,14 @@ TEST(LoadPath, RejectsStepsOutsideThePath) {
 }
 
 TEST(ReportJson, ParsesThePointAndTheColumns) {
-  auto const doc = json::parse(R"({"point": {"strain_source": "s", "stress_source": "m", "tangent_source": "t"},
-    "record": {"kappa": "m::kappa"}})");
+  auto const doc = json::parse(R"({"point": {"strain_source": "s", "stress_source": "m", "tangent_source": "t",
+    "stress_property": "damaged_stress", "tangent_property": "damaged_tangent"}, "record": {"kappa": "m::kappa"}})");
   auto const p{r::parse_point<policy>(doc)};
   EXPECT_EQ(p.get<std::string>("strain_source"), "s");
   EXPECT_EQ(p.get<std::string>("stress_source"), "m");
   EXPECT_EQ(p.get<std::string>("tangent_source"), "t");
+  EXPECT_EQ(p.get<std::string>("stress_property"), "damaged_stress");
+  EXPECT_EQ(p.get<std::string>("tangent_property"), "damaged_tangent");
   EXPECT_THROW(r::parse_point<policy>(json::parse(R"({"point": {"strain": "s"}})")), std::invalid_argument)
       << "not a driver parameter";
   auto const fixed_point{r::parse_point<policy>(json::parse(R"({"point": {"strain_source": "s", "stress_source": "m",
@@ -115,7 +117,7 @@ TEST(ReportJson, ParsesThePointAndTheColumns) {
   EXPECT_EQ(cols[0].name, "strain");
   EXPECT_EQ(cols[0].source, "s::strain");
   EXPECT_FALSE(cols[0].full);
-  EXPECT_EQ(cols[1].source, "m::stress");
+  EXPECT_EQ(cols[1].source, "m::damaged_stress");
   EXPECT_EQ(cols[2].name, "kappa");
   EXPECT_EQ(cols[2].source, "m::kappa");
 }
