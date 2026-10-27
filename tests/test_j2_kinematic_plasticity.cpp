@@ -14,7 +14,7 @@
 #include "numsim-materials/materials/j2_kinematic_plasticity.h"
 #include "numsim-materials/materials/linear_isotropic_hardening.h"
 #include "numsim-materials/solvers/vector_newton.h"
-#include "numsim-materials/umat/external_state_source.h"
+#include "numsim-materials/driver/external_state_source.h"
 
 namespace {
 

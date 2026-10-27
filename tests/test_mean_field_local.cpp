@@ -18,7 +18,7 @@
 #include "numsim-materials/materials/mean_field_composite_global.h"
 #include "numsim-materials/materials/phase.h"
 #include "numsim-materials/materials/scalar_stepper.h"
-#include "numsim-materials/umat/external_state_source.h"
+#include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/umat/json_model.h"
 #include "numsim-materials/mean_field/kernel_registry.h"
 

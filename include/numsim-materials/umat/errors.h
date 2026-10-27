@@ -4,40 +4,16 @@
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
-#include <stdexcept>
 #include <string>
 
-/// Failure classification for the UMAT layer.
-///
-/// A UMAT has exactly two useful responses to a failure, and they are opposites:
-///
-///   * ask the host for a smaller increment and retry  (cutback_error)
-///   * stop the analysis, because retrying cannot help (fatal_error)
-///
-/// Choosing wrongly is worse than not choosing at all. A fatal fault treated as
-/// recoverable makes Abaqus halve the increment until it dies on the minimum
-/// time step, burying the real cause. A recoverable failure treated as fatal
-/// throws away an analysis that would have converged.
-///
-/// The default for an UNCLASSIFIED exception is cutback, because exceptions
-/// escaping the constitutive models themselves (a return-mapping Newton that
-/// did not converge, say) are genuinely retry-worthy. Everything that a smaller
-/// increment cannot fix — a missing material, an undersized STATEV, a property
-/// that does not exist — must therefore say so explicitly by throwing
-/// fatal_error.
+#include "numsim-materials/core/errors.h"
+
+/// The UMAT side of the failure classification in core/errors.h: the names under
+/// umat::, and the fatal path that ends an Abaqus analysis.
 namespace numsim::materials::umat {
 
-/// A setup fault. No timestep cutback can fix it.
-class fatal_error : public std::runtime_error {
-public:
-  using std::runtime_error::runtime_error;
-};
-
-/// A numerical failure at this increment size. Retry smaller.
-class cutback_error : public std::runtime_error {
-public:
-  using std::runtime_error::runtime_error;
-};
+using materials::cutback_error;
+using materials::fatal_error;
 
 }  // namespace numsim::materials::umat
 

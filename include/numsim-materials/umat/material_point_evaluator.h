@@ -16,7 +16,7 @@
 #include "numsim-materials/core/property_value.h"
 #include "numsim-materials/materials/props_scalar.h"
 #include "numsim-materials/umat/errors.h"
-#include "numsim-materials/umat/external_state_source.h"
+#include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/umat/statev_map.h"
 #include "numsim-materials/umat/tensor_conversion.h"
 
@@ -220,7 +220,7 @@ public:
       throw fatal_error(
           "material_point_evaluator: a deformation-gradient model has no "
           "small-strain call; use evaluate_deformation_gradient()");
-    m_strain_src->bind(old6, new6);
+    m_strain_src->bind(strain_from_buffer<value_type>(old6), strain_from_buffer<value_type>(new6));
     if (m_time_src) m_time_src->bind(time, time + dtime);
 
     run();

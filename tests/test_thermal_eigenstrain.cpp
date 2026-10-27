@@ -5,7 +5,7 @@
 #include "numsim-materials/materials/constant_scalar.h"
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/materials/thermal_eigenstrain.h"
-#include "numsim-materials/umat/external_state_source.h"
+#include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/umat/json_model.h"
 
 namespace {
