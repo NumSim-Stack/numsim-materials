@@ -37,11 +37,13 @@ public:
 
   template <typename... Args>
   explicit memory(Args &&...args)
-      : base(std::forward<Args>(args)...), m_stress(base::template add_output<tensor2>("stress", &memory::compute)),
+      : base(std::forward<Args>(args)...), m_stress(base::template add_output<tensor2>("stress")),
         m_count(base::template add_history_output<value_type>("count")),
         m_last(base::template add_history_output<tensor2>("last")),
         m_limit(base::template get_parameter<value_type>("limit")),
-        m_strain(base::template add_input<tensor2>("strain", "strain", nm::EdgeKind::Global)) {}
+        m_strain(base::template add_input<tensor2>("strain", "strain", nm::EdgeKind::Global)) {
+    base::add_callback(&memory::compute, m_stress, m_count, m_last).reads(m_strain);
+  }
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
@@ -75,8 +77,10 @@ public:
 
   template <typename... Args>
   explicit relaxer(Args &&...args)
-      : base(std::forward<Args>(args)...), m_x(base::template add_output<value_type>("x", &relaxer::compute)),
-        m_residual(base::template add_output<value_type>("residual")) {}
+      : base(std::forward<Args>(args)...), m_x(base::template add_output<value_type>("x")),
+        m_residual(base::template add_output<value_type>("residual")) {
+    base::add_callback(&relaxer::compute, m_x, m_residual).reads().stateful(); // moves from its last value
+  }
 
   static input_parameter_controller parameters() { return input_parameter_controller{base::parameters()}; }
 

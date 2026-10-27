@@ -49,7 +49,7 @@ public:
       m_A.push_back(&base::template add_output<tensor4>("concentration_" + names[r]));
     }
     // constant phases: the kernel runs once
-    base::add_callback(&mean_field_composite_global::compute, m_tangent, m_A).constant();
+    base::add_callback(&mean_field_composite_global::compute, m_tangent, m_A).reads_all_inputs();
   }
 
   static input_parameter_controller parameters() {

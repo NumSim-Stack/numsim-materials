@@ -116,7 +116,7 @@ public:
   template <typename... Args>
   explicit misdeclared(Args &&...args) : base(std::forward<Args>(args)...), m_out(base::template add_output<value_type>("out")) {
     if (base::template get_parameter<std::string>("mistake") == "late_input") {
-      base::add_callback(&misdeclared::compute, m_out).constant();
+      base::add_callback(&misdeclared::compute, m_out).reads_all_inputs();
       m_late = &base::template add_input<value_type>("a", "state");
     } else {
       base::add_callback(static_cast<void (misdeclared::*)()>(nullptr), m_out);

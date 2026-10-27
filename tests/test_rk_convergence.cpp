@@ -33,14 +33,15 @@ public:
   template <typename... Args>
   explicit decay_with_scaled_derivative(Args&&... args)
       : base(std::forward<Args>(args)...),
-        m_rate(base::template add_output<value_type>(
-            "rate", &decay_with_scaled_derivative::compute)),
+        m_rate(base::template add_output<value_type>("rate")),
         m_drate(base::template add_output<value_type>("rate_derivative")),
         m_lambda(base::template get_parameter<value_type>("lambda")),
         m_dscale(base::template get_parameter<value_type>("derivative_scale")),
         m_source(base::template get_parameter<std::string>("source")),
         m_y(base::template add_input<value_type>(m_source, "state",
-                                                 nm::EdgeKind::Local)) {}
+                                                 nm::EdgeKind::Local)) {
+    base::add_callback(&decay_with_scaled_derivative::compute, m_rate, m_drate).reads(m_y);
+  }
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};

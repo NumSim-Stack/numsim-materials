@@ -44,10 +44,11 @@ public:
   template <typename... Args>
   explicit multiaxial_stepper(Args&&... args)
       : base(std::forward<Args>(args)...),
-        m_strain(base::template add_output<tensor>(
-            "strain", &multiaxial_stepper::update)),
+        m_strain(base::template add_output<tensor>("strain")),
         m_inc(base::template get_parameter<value_type>("increment")),
-        m_dir(base::template get_parameter<std::vector<double>>("direction")) {}
+        m_dir(base::template get_parameter<std::vector<double>>("direction")) {
+    base::add_callback(&multiaxial_stepper::update, m_strain).reads().stateful(); // adds to its last value
+  }
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};

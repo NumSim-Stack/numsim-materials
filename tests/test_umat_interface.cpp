@@ -88,11 +88,12 @@ public:
   template <typename... Args>
   explicit time_probe_material(Args&&... args)
       : base(std::forward<Args>(args)...),
-        m_stress(base::template add_output<tensor2>(
-            "stress", &time_probe_material::compute)),
+        m_stress(base::template add_output<tensor2>("stress")),
         m_tangent(base::template add_output<tensor4>("tangent")),
         m_time(base::template add_input_history<value_type>(
-            nm::connection_source{"clock", "state"}, nm::EdgeKind::Global)) {}
+            nm::connection_source{"clock", "state"}, nm::EdgeKind::Global)) {
+    base::add_callback(&time_probe_material::compute, m_stress, m_tangent).reads(m_time);
+  }
 
   static input_parameter_controller parameters() { return base::parameters(); }
 
