@@ -1,6 +1,7 @@
 #ifndef NUMSIM_MATERIALS_DETAIL_MEAN_FIELD_COMPOSITE_LOCAL_BASE_H
 #define NUMSIM_MATERIALS_DETAIL_MEAN_FIELD_COMPOSITE_LOCAL_BASE_H
 
+#include <ranges>
 #include <algorithm>
 #include <map>
 #include <stdexcept>
@@ -70,11 +71,11 @@ protected:
     *m_stress = tensor2{};
     *m_tangent = tensor4{};
     tensor4 partition;
-    for (std::size_t r{0}; r < m_c.size(); ++r) {
-      auto const c{m_c[r]->get()};
-      *m_stress += c * m_sigma[r]->get();
-      *m_tangent += c * tmech::dcontract(m_C[r]->get(), m_A[r]->get());
-      partition += c * m_A[r]->get();
+    for (auto const& [fraction, sigma, C, A] : std::views::zip(m_c, m_sigma, m_C, m_A)) {
+      auto const c{fraction->get()};
+      *m_stress += c * sigma->get();
+      *m_tangent += c * tmech::dcontract(C->get(), A->get());
+      partition += c * A->get();
     }
     auto const &Is{sym_identity<value_type, Dim>()};
     if (tmech::norm(tensor4{partition - Is}) > value_type{1e-8} * tmech::norm(Is))

@@ -1,6 +1,7 @@
 #ifndef NUMSIM_MATERIALS_MEAN_FIELD_STRAIN_H
 #define NUMSIM_MATERIALS_MEAN_FIELD_STRAIN_H
 
+#include <ranges>
 #include <cmath>
 #include <memory>
 #include <stdexcept>
@@ -73,23 +74,23 @@ public:
   void compute_concentrations() {
     std::vector<mean_field::phase_view<value_type>> phases;
     value_type total{0};
-    for (std::size_t r{0}; r < m_c.size(); ++r) {
-      phases.push_back({m_c[r]->get(), m_C[r] ? &m_C[r]->get() : nullptr, m_S[r] ? &m_S[r]->get() : nullptr});
+    for (auto const& [c, C, S] : std::views::zip(m_c, m_C, m_S)) {
+      phases.push_back({c->get(), C ? &C->get() : nullptr, S ? &S->get() : nullptr});
       total += phases.back().fraction;
     }
     if (std::abs(total - 1) > value_type{1e-10})
       throw std::invalid_argument("mean_field_strain '" + base::name() + "': the volume fractions must sum to one");
     std::vector<tensor4> A(phases.size());
     m_kernel->concentrations(phases, A);
-    for (std::size_t r{0}; r < phases.size(); ++r)
-      *m_A[r] = A[r];
+    for (auto const& [output, a] : std::views::zip(m_A, A))
+      *output = a;
   }
 
   /// strain_r = strain_r,n + A_r : d_strain, after the concentrations.
   void compute_strains() {
     tensor2 const d_eps{m_strain.new_value() - m_strain.old_value()};
-    for (std::size_t r{0}; r < m_A.size(); ++r)
-      m_eps[r]->new_value() = m_eps[r]->old_value() + tmech::dcontract(*m_A[r], d_eps);
+    for (auto const& [eps, A] : std::views::zip(m_eps, m_A))
+      eps->new_value() = eps->old_value() + tmech::dcontract(*A, d_eps);
   }
 
 private:

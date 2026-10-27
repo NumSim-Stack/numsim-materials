@@ -1,6 +1,7 @@
 #ifndef NUMSIM_MATERIALS_MEAN_FIELD_KERNELS_H
 #define NUMSIM_MATERIALS_MEAN_FIELD_KERNELS_H
 
+#include <ranges>
 #include <map>
 #include <memory>
 #include <format>
@@ -56,13 +57,13 @@ protected:
   static void compute(value_type w, std::span<phase_view<value_type> const> phases, std::span<tensor4> A) {
     std::vector<tensor4> C_inv(phases.size());
     tensor4 compliance;
-    for (std::size_t r{0}; r < phases.size(); ++r) {
-      C_inv[r] = tmech::inv(*phases[r].tangent);
-      compliance += phases[r].fraction * C_inv[r];
+    for (auto const& [phase, inverse] : std::views::zip(phases, C_inv)) {
+      inverse = tmech::inv(*phase.tangent);
+      compliance += phase.fraction * inverse;
     }
     tensor4 const C_R{tmech::inv(compliance)};
-    for (std::size_t r{0}; r < phases.size(); ++r)
-      A[r] = (1 - w) * sym_identity<value_type, 3>() + w * tmech::dcontract(C_inv[r], C_R);
+    for (auto const& [a, inverse] : std::views::zip(A, C_inv))
+      a = (1 - w) * sym_identity<value_type, 3>() + w * tmech::dcontract(inverse, C_R);
   }
 };
 
@@ -199,15 +200,15 @@ public:
       auto const [K, G]{isotropize(C)};
       value_type const nu{(3 * K - 2 * G) / (2 * (3 * K + G))};
       tensor4 T_sum;
-      for (std::size_t r{0}; r < phases.size(); ++r) {
-        T[r] = detail::dilute(m_shapes[r]->eshelby(nu), C_inv, C, *phases[r].tangent);
-        T_sum += phases[r].fraction * T[r];
+      for (auto const& [t, shape, phase] : std::views::zip(T, m_shapes, phases)) {
+        t = detail::dilute(shape->eshelby(nu), C_inv, C, *phase.tangent);
+        T_sum += phase.fraction * t;
       }
       tensor4 const T_inv{tmech::inv(T_sum)};
       tensor4 C_new;
-      for (std::size_t r{0}; r < phases.size(); ++r) {
-        A[r] = tmech::dcontract(T[r], T_inv);
-        C_new += phases[r].fraction * tmech::dcontract(*phases[r].tangent, A[r]);
+      for (auto const& [a, t, phase] : std::views::zip(A, T, phases)) {
+        a = tmech::dcontract(t, T_inv);
+        C_new += phase.fraction * tmech::dcontract(*phase.tangent, a);
       }
       residual = tmech::norm(tensor4{C_new - C}) / tmech::norm(C_new);
       if (residual <= m_tolerance) {
