@@ -2,8 +2,11 @@
 #define NUMSIM_MATERIALS_CORE_GRAPH_DESCRIPTION_H
 
 #include <algorithm>
+#include <format>
 #include <string>
 #include <vector>
+
+#include <nlohmann/json.hpp>
 
 #include "numsim-materials/core/material_context.h"
 
@@ -39,6 +42,59 @@ std::vector<material_description> describe_graph(material_context<Traits> const 
     out.push_back(std::move(d));
   }
   return out;
+}
+
+namespace detail {
+
+inline std::string graph_key(property_base const *p) { return p->traits().id.owner + "::" + p->traits().id.name; }
+
+inline std::string dot_style(graph_node const &n) {
+  std::string style;
+  if (n.constant) style += ", style=filled, fillcolor=lightgrey";
+  if (n.history) style += ", peripheries=2";
+  if (n.stateful) style += ", color=orange";
+  if (!n.callback && !n.routed) style += ", fontcolor=gray40";
+  return style;
+}
+
+} // namespace detail
+
+/// Graphviz: one cluster per material; local edges dashed, constants shaded, history doubled.
+template <typename Traits>
+std::string to_dot(material_context<Traits> const &ctx) {
+  auto const g{ctx.graph()};
+  std::string out{"digraph materials {\n  rankdir=LR;\n  node [shape=box];\n"};
+  for (auto const *mat : ctx.materials()) {
+    out += std::format("  subgraph \"cluster_{0}\" {{\n    label=\"{0}\";\n", mat->name());
+    for (auto const &n : g.nodes)
+      if (n.property->traits().id.owner == mat->name())
+        out += std::format("    \"{}\" [label=\"{}\"{}];\n", detail::graph_key(n.property), n.property->traits().id.name,
+                           detail::dot_style(n));
+    out += "  }\n";
+  }
+  for (auto const &e : g.edges)
+    out += std::format("  \"{}\" -> \"{}\" [{}label=\"{}\"];\n", detail::graph_key(e.from), detail::graph_key(e.to),
+                       e.kind == edge_kind::local ? "style=dashed, " : "", to_string(e.kind));
+  return out + "}\n";
+}
+
+/// {"nodes": [{"key", "history", "constant", "stateful", "routed", "callback"}], "edges": [{"from", "to", "kind"}]}
+template <typename Traits>
+std::string to_json(material_context<Traits> const &ctx) {
+  auto const g{ctx.graph()};
+  nlohmann::json nodes = nlohmann::json::array();
+  for (auto const &n : g.nodes)
+    nodes.push_back({{"key", detail::graph_key(n.property)},
+                     {"history", n.history},
+                     {"constant", n.constant},
+                     {"stateful", n.stateful},
+                     {"routed", n.routed},
+                     {"callback", n.callback}});
+  nlohmann::json edges = nlohmann::json::array();
+  for (auto const &e : g.edges)
+    edges.push_back({{"from", detail::graph_key(e.from)}, {"to", detail::graph_key(e.to)}, {"kind", std::string{to_string(e.kind)}}});
+  nlohmann::json const doc = {{"nodes", nodes}, {"edges", edges}};
+  return doc.dump(2);
 }
 
 } // namespace numsim::materials
