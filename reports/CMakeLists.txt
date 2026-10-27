@@ -30,7 +30,9 @@ if(NUMSIM_MATERIALS_BUILD_TESTS AND NOT NUMSIM_MATERIALS_REPORT_TESTS STREQUAL "
     endif()
     add_test(NAME report_script COMMAND ${Python3_EXECUTABLE} -m unittest discover -q -s tests -t .
              WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
-    set(_report_tests report_script)
+    add_test(NAME convert_uvwmaterial_card COMMAND ${Python3_EXECUTABLE} -m unittest discover -q -s tests -t .
+             WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/tools)
+    set(_report_tests report_script convert_uvwmaterial_card)
     file(GLOB _reports CONFIGURE_DEPENDS ${PROJECT_SOURCE_DIR}/docs/materials/*/report.json)
     foreach(_report IN LISTS _reports)
       get_filename_component(_dir ${_report} DIRECTORY)
