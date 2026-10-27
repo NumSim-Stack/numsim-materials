@@ -9,6 +9,7 @@
 #include "numsim-materials/solvers/vector_newton.h"
 #include "numsim-materials/materials/scalar_stepper.h"
 #include "numsim-materials/materials/constant_scalar.h"
+#include "numsim-materials/materials/scalar_split.h"
 #include "numsim-materials/materials/props_scalar.h"
 #include "numsim-materials/materials/j2_plasticity.h"
 #include "numsim-materials/materials/j2_rk_plasticity.h"
@@ -137,6 +138,7 @@ void register_default_materials() {
   factory.template register_type<saint_venant_kirchhoff<Traits>>("saint_venant_kirchhoff");
   factory.template register_type<neo_hooke<Traits>>("neo_hooke");
   factory.template register_type<constant_scalar<Traits>>("constant_scalar");
+  factory.template register_type<scalar_split<Traits>>("scalar_split");
   factory.template register_type<props_scalar<Traits>>("props_scalar");
 
   // Plasticity. Each model is its own class -- j2_plasticity,
