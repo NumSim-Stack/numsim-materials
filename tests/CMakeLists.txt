@@ -58,6 +58,7 @@ add_numsim_test(test_rule_of_mixture test_rule_of_mixture.cpp)
 add_numsim_test(test_mean_field_tangent test_mean_field_tangent.cpp)
 add_numsim_test(test_orientation test_orientation.cpp)
 add_numsim_test(test_short_fibre_composite test_short_fibre_composite.cpp)
+add_numsim_test(test_incremental_elasticity test_incremental_elasticity.cpp)
 add_numsim_test(test_material_point test_material_point.cpp)
 
 # Data dumper for plotting (not a test — standalone executable)
