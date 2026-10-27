@@ -119,19 +119,22 @@
         "strain_property": "strain_spheres"
       },
       {
-        "type": "mean_field_stress",
+        "type": "mean_field_composite_local_nonlinear",
         "name": "mt",
-        "concentration_source": "mt_strain",
-        "matrix": "matrix",
         "phases": [
-          "spheres"
-        ],
-        "matrix_stress_source": "plastic",
-        "stress_sources": [
-          "stiff"
-        ],
-        "tangent_sources": [
-          "C_i"
+          {
+            "concentration": "mt_strain::concentration_matrix",
+            "stress": "plastic::stress",
+            "tangent": "plastic::tangent",
+            "fraction": "matrix::volume_fraction",
+            "used_tangent": "matrix::tangent"
+          },
+          {
+            "concentration": "mt_strain::concentration_spheres",
+            "stress": "stiff::stress",
+            "tangent": "C_i::tangent",
+            "fraction": "spheres::volume_fraction"
+          }
         ]
       }
     ]

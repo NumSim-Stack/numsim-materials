@@ -12,7 +12,8 @@
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/materials/linear_stress.h"
 #include "numsim-materials/materials/mean_field_strain.h"
-#include "numsim-materials/materials/mean_field_stress.h"
+#include "numsim-materials/materials/mean_field_composite_local_linear.h"
+#include "numsim-materials/materials/mean_field_composite_local_nonlinear.h"
 #include "numsim-materials/materials/mean_field_composite_global.h"
 #include "numsim-materials/materials/phase.h"
 #include "numsim-materials/umat/external_state_source.h"
@@ -107,14 +108,11 @@ std::unique_ptr<ctx_type> build(std::string const &kernel = "mori_tanaka") {
   ctx.create<nm::linear_stress<policy>>(p);
   p.clear();
   p.insert<std::string>("name", "mt");
-  p.insert<std::string>("concentration_source", "mt_strain");
-  p.insert<std::string>("matrix", "matrix");
-  p.insert<std::vector<std::string>>("phases", {"spheres"});
-  p.insert<std::string>("matrix_stress_source", "elastic");
-  p.insert<std::string>("matrix_tangent_source", "C_m");
-  p.insert<std::vector<std::string>>("stress_sources", {"stiff"});
-  p.insert<std::vector<std::string>>("tangent_sources", {"C_i"});
-  ctx.create<nm::mean_field_stress<policy>>(p);
+  p.insert<nm::phase_sources>("phases", {{{"concentration", "mt_strain::concentration_matrix"}, {"stress", "elastic::stress"},
+                                          {"tangent", "C_m::tangent"}, {"fraction", "matrix::volume_fraction"}},
+                                         {{"concentration", "mt_strain::concentration_spheres"}, {"stress", "stiff::stress"},
+                                          {"tangent", "C_i::tangent"}, {"fraction", "spheres::volume_fraction"}}});
+  ctx.create<nm::mean_field_composite_local_linear<policy>>(p);
   ctx.finalize();
   return owner;
 }
@@ -125,23 +123,12 @@ tensor2 uniaxial(T e) {
   return eps;
 }
 
-/// One step: passes until the phase tangents the strains were formed with agree with the materials'.
-int converge(ctx_type &ctx, T tol = 1e-10) {
-  int passes{1};
-  ctx.update();
-  while (ctx.get<T>("mt", "residual") > tol && passes < 200) {
-    ctx.update();
-    ++passes;
-  }
-  return passes;
-}
-
 /// Loads the composite in equal steps to the strain `eps`, committing every step.
 void load(ctx_type &ctx, tensor2 const &eps, int steps) {
   auto &strain{*dynamic_cast<nm::external_strain_source<policy> *>(ctx.find("strain"))};
   for (int n{1}; n <= steps; ++n) {
     strain.bind(tensor2{eps * T(n - 1) / T(steps)}, tensor2{eps * T(n) / T(steps)});
-    converge(ctx);
+    ctx.update(); // linear localisation: one pass
     ctx.commit();
   }
 }
@@ -186,9 +173,8 @@ TEST(MeanFieldLocal, LinearPhasesReproduceTheTangentHomogenisationInOnePass) {
   ref.finalize();
   ref.update();
   tensor2 const eps{uniaxial(1e-3)};
-  EXPECT_EQ(converge(*ctx), 1); // linear: the first pass is the fixed point
+  ctx->update();
   load(*ctx, eps, 3);
-  EXPECT_EQ(ctx->get<T>("mt", "residual"), 0);
   auto const &C_A{ref.get<tensor4>("mf", "tangent")};
   EXPECT_NEAR(tmech::norm(tensor4{ctx->get<tensor4>("mt", "tangent") - C_A}) / tmech::norm(C_A), 0, 1e-12);
   EXPECT_NEAR(tmech::norm(tensor2{ctx->get<tensor2>("mt", "stress") - tmech::dcontract(C_A, eps)}) / tmech::norm(tmech::dcontract(C_A, eps)), 0, 1e-12);
@@ -201,7 +187,7 @@ TEST(MeanFieldLocal, EveryKernelLocalisesLikeTheGlobalComposite) {
   for (auto const *kernel : {"voigt", "reuss", "hill", "dilute", "mori_tanaka", "self_consistent"}) {
     auto ctx{build(kernel)};
     tensor2 const eps{uniaxial(1e-3)};
-    EXPECT_EQ(converge(*ctx), 1) << kernel;
+    ctx->update();
     load(*ctx, eps, 2);
     ctx_type ref;
     for (auto const &[name, K, G] : {std::tuple{"m", Km, Gm}, std::tuple{"i", Ki, Gi}}) {
@@ -252,18 +238,48 @@ TEST(MeanFieldLocal, EveryKernelLocalisesLikeTheGlobalComposite) {
   }
 }
 
-TEST(MeanFieldLocal, RejectsNonParallelSourceLists) {
-  {
-    ctx_type ctx; // stress sources not parallel to the phases
+TEST(MeanFieldLocal, RejectsAnIncompletePhase) {
+  auto const rejects = [](nm::phase_sources phases, std::string const &what) {
+    ctx_type ctx;
     param_type p;
     p.insert<std::string>("name", "mt");
-    p.insert<std::string>("concentration_source", "s");
-    p.insert<std::string>("matrix", "m");
-    p.insert<std::vector<std::string>>("phases", {"a", "b"});
-    p.insert<std::string>("matrix_stress_source", "m");
-    p.insert<std::vector<std::string>>("stress_sources", {"a"});
-    EXPECT_THROW(ctx.create<nm::mean_field_stress<policy>>(p), std::invalid_argument);
-  }
+    p.insert<nm::phase_sources>("phases", std::move(phases));
+    try {
+      ctx.create<nm::mean_field_composite_local_linear<policy>>(p);
+      ADD_FAILURE() << "accepted: " << what;
+    } catch (std::invalid_argument const &e) {
+      EXPECT_NE(std::string{e.what()}.find(what), std::string::npos) << e.what();
+    }
+  };
+  rejects({}, "phase");
+  rejects({{{"concentration", "s::concentration_m"}, {"tangent", "m::tangent"}, {"fraction", "m::volume_fraction"}}}, "stress");
+  rejects({{{"concentration", "s::concentration_m"}, {"stress", "m"}, {"tangent", "m::tangent"}, {"fraction", "m::volume_fraction"}}},
+          "material::property");
+  rejects({{{"concentration", "s::concentration_m"}, {"stress", "m::stress"}, {"tangent", "m::tangent"}, {"fraction", "m::volume_fraction"},
+            {"tangnet", "m::tangent"}}},
+          "tangnet");
+}
+
+// the phase strains average to the composite strain: a fraction wired to the wrong phase shows at the first update
+TEST(MeanFieldLocal, AWrongFractionBreaksThePartition) {
+  ctx_type wrong;
+  nm::umat::make_json_builder<policy>(R"({"materials": [
+    {"type": "external_strain_source", "name": "strain"},
+    {"type": "constant_scalar", "name": "Km", "value": 3.0}, {"type": "constant_scalar", "name": "Gm", "value": 1.0},
+    {"type": "constant_scalar", "name": "Ki", "value": 60.0}, {"type": "constant_scalar", "name": "Gi", "value": 30.0},
+    {"type": "isotropic_tangent", "name": "C_m", "K_source": "Km", "G_source": "Gm"},
+    {"type": "isotropic_tangent", "name": "C_i", "K_source": "Ki", "G_source": "Gi"},
+    {"type": "constant_scalar", "name": "c", "value": 0.3},
+    {"type": "constant_scalar", "name": "cm", "value": 0.7},
+    {"type": "phase", "name": "matrix", "tangent_source": "C_m", "fraction_source": "cm"},
+    {"type": "phase", "name": "spheres", "tangent_source": "C_i", "fraction_source": "c"},
+    {"type": "mean_field_strain", "name": "mt_strain", "strain_source": "strain", "phases": ["matrix", "spheres"], "kernel": {"type": "reuss"}},
+    {"type": "linear_stress", "name": "m", "tangent_source": "C_m", "strain_source": "mt_strain", "strain_property": "strain_matrix"},
+    {"type": "linear_stress", "name": "s", "tangent_source": "C_i", "strain_source": "mt_strain", "strain_property": "strain_spheres"},
+    {"type": "mean_field_composite_local_linear", "name": "mt", "phases": [
+      {"concentration": "mt_strain::concentration_matrix", "stress": "m::stress", "tangent": "C_m::tangent", "fraction": "spheres::volume_fraction"},
+      {"concentration": "mt_strain::concentration_spheres", "stress": "s::stress", "tangent": "C_i::tangent", "fraction": "matrix::volume_fraction"}]}]})")(wrong, {});
+  EXPECT_THROW(wrong.update(), std::invalid_argument);
 }
 
 TEST(MeanFieldLocal, FromJson) {
@@ -283,10 +299,10 @@ TEST(MeanFieldLocal, FromJson) {
     {"type": "mean_field_strain", "name": "mt_strain", "strain_source": "strain", "phases": ["matrix", "spheres"], "kernel": {"type": "mori_tanaka"}},
     {"type": "linear_stress", "name": "m", "tangent_source": "C_m", "strain_source": "mt_strain", "strain_property": "strain_matrix"},
     {"type": "linear_stress", "name": "s", "tangent_source": "C_i", "strain_source": "mt_strain", "strain_property": "strain_spheres"},
-    {"type": "mean_field_stress", "name": "mt", "concentration_source": "mt_strain", "matrix": "matrix", "phases": ["spheres"],
-     "matrix_stress_source": "m", "matrix_tangent_source": "C_m", "stress_sources": ["s"], "tangent_sources": ["C_i"]}]})")(ctx, {});
+    {"type": "mean_field_composite_local_linear", "name": "mt", "phases": [
+      {"concentration": "mt_strain::concentration_matrix", "stress": "m::stress", "tangent": "C_m::tangent", "fraction": "matrix::volume_fraction"},
+      {"concentration": "mt_strain::concentration_spheres", "stress": "s::stress", "tangent": "C_i::tangent", "fraction": "spheres::volume_fraction"}]}]})")(ctx, {});
   load(ctx, uniaxial(0.01), 2);
-  EXPECT_EQ(ctx.get<T>("mt", "residual"), 0);
   EXPECT_NEAR(tmech::norm(tensor2{0.7 * ctx.get<tensor2>("mt_strain", "strain_matrix") + 0.3 * ctx.get<tensor2>("mt_strain", "strain_spheres") - uniaxial(0.01)}), 0, 1e-12);
 }
 

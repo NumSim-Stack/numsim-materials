@@ -89,23 +89,31 @@ class ConvertTest(unittest.TestCase):
         for kernal, kernel in (("voigt", "voigt"), ("vrh", "hill")):
             doc = convert({**DAMAGE_ROM, "kernal": kernal}, "rom")
             top = by_name(doc, "rom")
-            self.assertEqual((top["type"], top["concentration_source"]), ("mean_field_stress", "rom_strain"))
             strain = by_name(doc, "rom_strain")
             self.assertEqual((strain["type"], strain["kernel"], strain["phases"]), ("mean_field_strain", {"type": kernel}, ["rom_material1", "rom_material2"]))
-            damaged = by_name(doc, top["matrix_stress_source"])  # the damage material is the first phase
-            self.assertEqual((damaged["type"], top["matrix_stress_property"], top["matrix_tangent_property"]), ("isotropic_damage", "damaged_stress", "damaged_tangent"))
+            damage_src, elastic_src = top["phases"]  # per phase the sources by role, the damage material first
+            self.assertEqual(damage_src["concentration"], "rom_strain::concentration_rom_material1")
+            damaged_name, stress_property = damage_src["stress"].split("::")
+            damaged = by_name(doc, damaged_name)
+            self.assertEqual((damaged["type"], stress_property, damage_src["tangent"]), ("isotropic_damage", "damaged_stress", f"{damaged_name}::damaged_tangent"))
             state = by_name(doc, damaged["state_source"])  # the chain reads the phase strain
             self.assertEqual((state["strain_source"], state["strain_property"]), ("rom_strain", "strain_rom_material1"))
             self.assertEqual(by_name(doc, damaged["elastic_source"])["strain_property"], "strain_rom_material1")
             elastic_phase = by_name(doc, "rom_material2")
-            self.assertEqual(by_name(doc, top["stress_sources"][0]), {"type": "linear_stress", "name": "rom_material2_stress", "tangent_source": elastic_phase["tangent_source"],
-                                                                      "strain_source": "rom_strain", "strain_property": "strain_rom_material2"})
+            self.assertEqual(elastic_src["stress"], "rom_material2_stress::stress")
+            self.assertEqual(by_name(doc, "rom_material2_stress"), {"type": "linear_stress", "name": "rom_material2_stress", "tangent_source": elastic_phase["tangent_source"],
+                                                                    "strain_source": "rom_strain", "strain_property": "strain_rom_material2"})
             damage_phase = by_name(doc, "rom_material1")
-            if kernel == "voigt":
-                self.assertNotIn("tangent_edge", damage_phase)
+            # the phase node reads its material's tangent over a local edge either way: a global one is a cycle
+            self.assertEqual((damage_phase["tangent_edge"], damage_phase["initial_tangent_source"]), ("local", "rom_material1_initial_C"))
+            self.assertEqual(by_name(doc, "rom_material1_initial_C")["type"], "isotropic_tangent")  # no strain: no cycle
+            if kernel == "voigt":  # equal strain: the concentrations do not depend on the tangents
+                self.assertEqual(top["type"], "mean_field_composite_local_linear")
                 self.assertNotIn("residual", doc["point"])
             else:
-                self.assertEqual((damage_phase["tangent_edge"], damage_phase["initial_tangent_source"]), ("local", "rom_material1_material_elastic"))
+                self.assertEqual(top["type"], "mean_field_composite_local_nonlinear")
+                self.assertEqual(damage_src["used_tangent"], "rom_material1::tangent")
+                self.assertNotIn("used_tangent", elastic_src)
                 self.assertEqual(doc["point"]["residual"], "rom::residual")
             law = by_name(doc, damaged["damage_source"])
             self.assertAlmostEqual(law["beta"], 100.0)

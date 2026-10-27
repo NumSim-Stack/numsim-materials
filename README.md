@@ -122,7 +122,7 @@ The types registered by `register_default_materials<policy>()`.
 `isotropic_tangent`, `weighted_sum`
 
 **Composites** (see [docs/mean_field.md](docs/mean_field.md)) — `phase`, `mean_field_composite_global`
-(kernels voigt, reuss, hill, dilute, mori_tanaka, self_consistent), `mean_field_strain`, `mean_field_stress`, `short_fibre_composite`;
+(kernels voigt, reuss, hill, dilute, mori_tanaka, self_consistent), `mean_field_strain`, `mean_field_composite_local_linear`, `mean_field_composite_local_nonlinear`, `short_fibre_composite`;
 `eshelby_sphere` / `_cylinder` / `_spheroid` / `_ellipsoid`, `depolarisation_sphere` / `_cylinder` /
 `_spheroid` / `_ellipsoid`, `poisson_ratio_from_moduli`, `isotropic_moduli`
 

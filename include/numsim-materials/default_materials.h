@@ -33,7 +33,8 @@
 #include "numsim-materials/materials/poisson_ratio_from_moduli.h"
 #include "numsim-materials/materials/phase.h"
 #include "numsim-materials/materials/mean_field_strain.h"
-#include "numsim-materials/materials/mean_field_stress.h"
+#include "numsim-materials/materials/mean_field_composite_local_linear.h"
+#include "numsim-materials/materials/mean_field_composite_local_nonlinear.h"
 #include "numsim-materials/materials/mean_field_composite_global.h"
 #include "numsim-materials/materials/short_fibre_composite.h"
 #include "numsim-materials/materials/incremental_linear_elasticity.h"
@@ -124,7 +125,8 @@ void register_default_materials() {
     factory.template register_type<short_fibre_composite<Traits>>("short_fibre_composite");
   }
   factory.template register_type<phase<Traits>>("phase");
-  factory.template register_type<mean_field_stress<Traits>>("mean_field_stress");
+  factory.template register_type<mean_field_composite_local_linear<Traits>>("mean_field_composite_local_linear");
+  factory.template register_type<mean_field_composite_local_nonlinear<Traits>>("mean_field_composite_local_nonlinear");
   factory.template register_type<incremental_linear_elasticity<Traits>>("incremental_linear_elasticity");
   factory.template register_type<thermal_eigenstrain<Traits>>("thermal_eigenstrain");
   factory.template register_type<kamal_sourour_rate<Traits>>("kamal_sourour_rate");

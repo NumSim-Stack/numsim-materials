@@ -2,7 +2,7 @@
 
 How the composite materials are put together in the property graph: `phase` nodes of produced properties,
 tangent producers for the linear schemes (`mean_field_composite_global`, `short_fibre_composite`),
-and the strain/stress pair `mean_field_strain` / `mean_field_stress` for phases that are materials in their own
+and the localisation `mean_field_strain` with the averages `mean_field_composite_local_linear` / `_nonlinear` for phases that are materials in their own
 right. The Eshelby and depolarisation tensors are nodes of the same graph.
 
 The rule behind all of it: **a node consumes properties, never materials.** A composite reaches into no other
@@ -23,7 +23,8 @@ an evolving fraction) the consumers follow. A mean-field scheme is a **kernel ob
 | `mean_field_composite_global` | `phases` (matrix first), `kernel` {object} | `tangent`, `concentration_<phase>` |
 | `short_fibre_composite` | `matrix`, `fibre`, `orientation`, `precision`, `averaging` | `tangent`, `concentration_matrix`, `concentration_fibre` |
 | `mean_field_strain` | `strain_source` (history), `phases` (matrix first), `kernel` {object} | `strain_<phase>` (history), `concentration_<phase>` |
-| `mean_field_stress` | `concentration_source`, `matrix`, `phases`, `matrix_stress_source`, `stress_sources`, `tangent_sources` | `stress`, `tangent`, `residual` |
+| `mean_field_composite_local_linear` | `phases` [{`concentration`, `stress`, `tangent`, `fraction`}] | `stress`, `tangent` |
+| `mean_field_composite_local_nonlinear` | `phases` [{… , `used_tangent`}] | `stress`, `tangent`, `residual` |
 
 Every `<x>_source` names a material, every `<x>_property` the property on it (defaults: `tangent`, `value`,
 `tensor`, `strain`, `stress`). A fixed value is a `constant_scalar`; a value that evolves is whatever node
@@ -119,7 +120,7 @@ When a phase is a material — damage, plasticity, anything with a state — it 
 strain. The composite is split into two nodes around the phase materials:
 
 ```
-strain ──► mean_field_strain ──strain_matrix──► matrix material ──stress, tangent──► mean_field_stress
+strain ──► mean_field_strain ──strain_matrix──► matrix material ──stress, tangent──► mean_field_composite_local_*
                 │             └─strain_spheres─► sphere material ──stress, tangent──┘        ▲
                 └──────────────── concentration_matrix, concentration_spheres ───────────────┘
 ```
@@ -131,10 +132,11 @@ strain ──► mean_field_strain ──strain_matrix──► matrix material 
   the global composite exactly; the self-consistent kernel converges its own fixed point inside every pass.
 - The phase materials consume those strains like any other strain: `"strain_source": "mt_strain",
   "strain_property": "strain_matrix"`. Every strain consumer takes `strain_property` (default `strain`).
-- `mean_field_stress` produces `stress` = Σ cᵣ σᵣ and `tangent` = Σ cᵣ ℂᵣ : Aᵣ from the materials' current
-  stresses and tangents (`matrix_stress_source`, `stress_sources`, optional `tangent_sources`;
-  `matrix_stress_property` / `matrix_tangent_property` when the matrix material names them differently) and
-  the concentrations of the strain node.
+- `mean_field_composite_local_linear` / `_nonlinear` produce `stress` = Σ cᵣ σᵣ and `tangent` = Σ cᵣ ℂᵣ : Aᵣ.
+  Per phase they consume four produced properties by role — `concentration`, `stress`, `tangent`, `fraction`,
+  each a `"material::property"` — and do not care which scheme produced the concentrations; they check
+  Σ cᵣ Aᵣ = I every update, so a fraction wired to the wrong phase shows at once. The nonlinear one also takes
+  `used_tangent` for the phases whose tangent changes and reports the `residual` of §5.
 
 **Linear phases.** The tangents are producers, every edge is global, one pass is exact and the result equals
 §3 to round-off — with the phase strains and stresses available as properties:
@@ -143,8 +145,9 @@ strain ──► mean_field_strain ──strain_matrix──► matrix material 
 {"type": "mean_field_strain", "name": "mt_strain", "strain_source": "strain", "phases": ["matrix", "spheres"], "kernel": {"type": "mori_tanaka"}},
 {"type": "linear_stress", "name": "m", "tangent_source": "Cm", "strain_source": "mt_strain", "strain_property": "strain_matrix"},
 {"type": "linear_stress", "name": "s", "tangent_source": "Cf", "strain_source": "mt_strain", "strain_property": "strain_spheres"},
-{"type": "mean_field_stress", "name": "mt", "concentration_source": "mt_strain", "matrix": "matrix", "phases": ["spheres"],
- "matrix_stress_source": "m", "stress_sources": ["s"], "matrix_tangent_source": "Cm", "tangent_sources": ["Cf"]}
+{"type": "mean_field_composite_local_linear", "name": "mt", "phases": [
+  {"concentration": "mt_strain::concentration_matrix", "stress": "m::stress", "tangent": "Cm::tangent", "fraction": "matrix::volume_fraction"},
+  {"concentration": "mt_strain::concentration_spheres", "stress": "s::stress", "tangent": "Cf::tangent", "fraction": "spheres::volume_fraction"}]}
 ```
 
 **Nonlinear phases.** A phase whose tangent depends on its own strain closes a cycle: the concentrations
@@ -161,13 +164,15 @@ local edge, starting from the elastic one:
 {"type": "exponential_damage_law", "name": "law", "yield_source": "yield", "kappa_0": 0.002, "beta": 30},
 {"type": "isotropic_damage", "name": "damage", "elastic_source": "elastic", "damage_source": "law", "state_source": "state", "yield_source": "yield"},
 {"type": "linear_stress", "name": "s", "tangent_source": "Cf", "strain_source": "mt_strain", "strain_property": "strain_spheres"},
-{"type": "mean_field_stress", "name": "mt", "concentration_source": "mt_strain", "matrix": "matrix", "phases": ["spheres"],
- "matrix_stress_source": "damage", "matrix_stress_property": "damaged_stress", "matrix_tangent_property": "damaged_tangent",
- "stress_sources": ["s"], "tangent_sources": ["Cf"]}
+{"type": "mean_field_composite_local_nonlinear", "name": "mt", "phases": [
+  {"concentration": "mt_strain::concentration_matrix", "stress": "damage::damaged_stress", "tangent": "damage::damaged_tangent",
+   "fraction": "matrix::volume_fraction", "used_tangent": "matrix::tangent"},
+  {"concentration": "mt_strain::concentration_spheres", "stress": "s::stress", "tangent": "Cf::tangent", "fraction": "spheres::volume_fraction"}]}
 ```
 
-One `update()` is one pass with the tangent of the previous pass; `mean_field_stress::residual` is the largest
-relative difference between the tangent a phase node carried and its material's current one. The whole
+One `update()` is one pass with the tangent of the previous pass; `residual` is the largest relative
+difference between the `used_tangent` a phase node carried into the localisation and its material's current
+`tangent`. The whole
 damage chain is evaluated at the matrix strain, with its own history. Isotropic damage keeps Poisson's ratio,
 so the Eshelby node reads ν of the undamaged tangent.
 
