@@ -17,11 +17,13 @@ public:
   template <typename... Args>
   explicit scalar_identity_weight(Args&&... args)
       : base(std::forward<Args>(args)...),
-        m_value(base::template add_output<value_type>("value", &scalar_identity_weight::update)),
+        m_value(base::template add_output<value_type>("value")),
         m_input(base::template add_input_history<value_type>(
             connection_source::parse(base::template get_parameter<std::string>("source")),
             EdgeKind::Global))
-  {}
+  {
+    base::add_callback(&scalar_identity_weight::update, m_value).reads(m_input);
+  }
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};

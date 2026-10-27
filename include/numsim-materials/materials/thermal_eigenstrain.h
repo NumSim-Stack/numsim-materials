@@ -24,12 +24,14 @@ public:
   template <typename... Args>
   explicit thermal_eigenstrain(Args &&...args)
       : base(std::forward<Args>(args)...),
-        m_eigenstrain(base::template add_output<tensor2>("eigenstrain", &thermal_eigenstrain::compute)),
+        m_eigenstrain(base::template add_output<tensor2>("eigenstrain")),
         m_alpha_name(connection_source::parse(base::template get_parameter<std::string>("alpha_source"))),
         m_alpha(base::template add_input<value_type>(m_alpha_name.material, m_alpha_name.property, EdgeKind::Global)),
         m_T_ref(base::template get_parameter<value_type>("reference_temperature")),
         m_T(base::template add_input_history<value_type>(
-            connection_source{base::template get_parameter<std::string>("temperature_source"), "state"}, EdgeKind::Global)) {}
+            connection_source{base::template get_parameter<std::string>("temperature_source"), "state"}, EdgeKind::Global)) {
+    base::add_callback(&thermal_eigenstrain::compute, m_eigenstrain).reads(m_alpha, m_T);
+  }
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
