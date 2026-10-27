@@ -64,6 +64,7 @@ add_numsim_test(test_kamal_sourour_rate test_kamal_sourour_rate.cpp)
 add_numsim_test(test_curing_eigenstrain test_curing_eigenstrain.cpp)
 add_numsim_test(test_damage_laws test_damage_laws.cpp)
 add_numsim_test(test_uvwmaterial_cards test_uvwmaterial_cards.cpp)
+add_numsim_test(test_voigt_composite test_voigt_composite.cpp)
 add_numsim_test(test_material_point test_material_point.cpp)
 
 # Data dumper for plotting (not a test — standalone executable)
