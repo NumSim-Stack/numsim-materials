@@ -164,6 +164,12 @@ public:
   /// Rerun the constant callbacks on every update and throw when an output changes; on in debug builds.
   void verify_constants(bool on) noexcept { m_engine.verify_constants(on); }
 
+  /// Whether the engine computes material::property once (after finalize(); false for an unknown property).
+  bool is_constant(const std::string& material, const std::string& property) {
+    auto const* prop{find_property(material, property)};
+    return prop && m_engine.is_constant(prop);
+  }
+
   std::vector<material_property_info> build_property_infos() const {
     std::vector<material_property_info> infos;
     for (auto* mat : m_store.interfaces()) {

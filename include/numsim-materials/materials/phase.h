@@ -44,8 +44,13 @@ public:
       throw std::invalid_argument("phase '" + base::name() + "': initial_tangent_source goes with tangent_edge = local, and only then");
     if (Dim != 3 && (m_eshelby.output || m_depolarisation.output))
       throw std::invalid_argument("phase '" + base::name() + "': Eshelby and depolarisation tensors are three-dimensional");
-    // constant unless the tangent comes over a local edge (the previous pass's)
-    base::add_callback(&phase::compute, m_tangent.output, m_fraction.output, m_eshelby.output, m_depolarisation.output).constant();
+    // one callback per relay: a varying fraction leaves the tensors constant, a local tangent the fraction
+    base::add_callback(&phase::copy_tangent, *m_tangent.output).reads(m_tangent.source, m_initial_tangent);
+    base::add_callback(&phase::copy_fraction, *m_fraction.output).reads(m_fraction.source);
+    if (m_eshelby.output)
+      base::add_callback(&phase::copy_eshelby, *m_eshelby.output).reads(m_eshelby.source);
+    if (m_depolarisation.output)
+      base::add_callback(&phase::copy_depolarisation, *m_depolarisation.output).reads(m_depolarisation.source);
   }
 
   static input_parameter_controller parameters() {
@@ -64,16 +69,20 @@ public:
     return para;
   }
 
-  /// One callback for every output. Over a local edge the first update has no produced tangent yet.
-  void compute() {
+  /// Over a local edge the first update has no produced tangent yet.
+  void copy_tangent() {
     *m_tangent.output = m_initial_tangent && m_first ? m_initial_tangent->get() : m_tangent.source->get();
     m_first = false;
+  }
+
+  void copy_fraction() {
     m_fraction.copy();
     if (!(*m_fraction.output >= 0))
       throw std::invalid_argument("phase '" + base::name() + "': the volume fraction must be non-negative");
-    m_eshelby.copy();
-    m_depolarisation.copy();
   }
+
+  void copy_eshelby() { m_eshelby.copy(); }
+  void copy_depolarisation() { m_depolarisation.copy(); }
 
 private:
   /// An output republishing an input; both null when the input is not wired.
@@ -81,10 +90,7 @@ private:
   struct relay {
     T *output{nullptr};
     input_property<T, property_traits> const *source{nullptr};
-    void copy() const {
-      if (output)
-        *output = source->get();
-    }
+    void copy() const { *output = source->get(); }
   };
 
   /// The input named by the parameters "<key>_source" and "<key>_property"; null without a source.

@@ -17,6 +17,7 @@
 #include "numsim-materials/materials/mean_field_composite_local_nonlinear.h"
 #include "numsim-materials/materials/mean_field_composite_global.h"
 #include "numsim-materials/materials/phase.h"
+#include "numsim-materials/materials/scalar_stepper.h"
 #include "numsim-materials/umat/external_state_source.h"
 #include "numsim-materials/umat/json_model.h"
 #include "numsim-materials/mean_field/kernel_registry.h"
@@ -406,4 +407,56 @@ TEST(Phase, RelaysItsSourcesAndOnlyTheWiredTensors) {
   EXPECT_EQ(tmech::norm(tensor4{ctx->get<tensor4>("spheres", "eshelby") - ctx->get<tensor4>("sphere", "tensor")}), 0);
   EXPECT_EQ(ctx->find_property("matrix", "eshelby"), nullptr);
   EXPECT_EQ(ctx->find_property("spheres", "depolarisation"), nullptr);
+}
+
+/// A phase of the tangent C_x with the Eshelby tensor C_x and the fraction f::`property`; `fraction` builds "f".
+template <typename Fraction>
+void relay_phase(ctx_type &ctx, Fraction const &fraction, std::string const &property, std::string const &tangent_edge = "global") {
+  constant(ctx, "x", 1.0);
+  param_type p;
+  p.insert<std::string>("name", "C_x");
+  p.insert<std::string>("K_source", "x");
+  p.insert<std::string>("G_source", "x");
+  ctx.create<nm::isotropic_tangent<policy>>(p);
+  fraction(ctx);
+  p.clear();
+  p.insert<std::string>("name", "p");
+  p.insert<std::string>("tangent_source", "C_x");
+  p.insert<std::string>("tangent_edge", tangent_edge);
+  if (tangent_edge == "local")
+    p.insert<std::string>("initial_tangent_source", "C_x");
+  p.insert<std::string>("fraction_source", "f");
+  p.insert<std::string>("fraction_property", property);
+  p.insert<std::string>("eshelby_source", "C_x");
+  p.insert<std::string>("eshelby_property", "tangent");
+  ctx.create<nm::phase<policy>>(p);
+  ctx.finalize();
+}
+
+TEST(Phase, AVaryingFractionKeepsTheTangentAndEshelbyRelaysConstant) {
+  ctx_type ctx;
+  relay_phase(ctx, [](ctx_type &c) {
+    param_type p;
+    p.insert<std::string>("name", "f");
+    p.insert<T>("increment", T{0.1});
+    c.create<nm::scalar_stepper<policy>>(p);
+  }, "state");
+  for (int i{0}; i < 3; ++i)
+    ctx.update();
+  EXPECT_TRUE(ctx.is_constant("p", "tangent"));
+  EXPECT_TRUE(ctx.is_constant("p", "eshelby"));
+  EXPECT_FALSE(ctx.is_constant("p", "volume_fraction"));
+  EXPECT_NEAR(ctx.get<T>("p", "volume_fraction"), 0.3, 1e-15);
+  EXPECT_EQ(tmech::norm(tensor4{ctx.get<tensor4>("p", "tangent") - ctx.get<tensor4>("C_x", "tangent")}), 0);
+}
+
+TEST(Phase, ATangentOverALocalEdgeKeepsTheFractionRelayConstant) {
+  ctx_type ctx;
+  relay_phase(ctx, [](ctx_type &c) { constant(c, "f", 0.3); }, "value", "local");
+  for (int i{0}; i < 3; ++i)
+    ctx.update();
+  EXPECT_FALSE(ctx.is_constant("p", "tangent"));
+  EXPECT_TRUE(ctx.is_constant("p", "volume_fraction"));
+  EXPECT_TRUE(ctx.is_constant("p", "eshelby"));
+  EXPECT_EQ(ctx.get<T>("p", "volume_fraction"), 0.3);
 }
