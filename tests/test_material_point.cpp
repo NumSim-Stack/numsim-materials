@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include <cmath>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -262,6 +263,21 @@ TEST(MaterialPoint, EngineOwnedHistoryNeedsNoHostLayout) {
   point.accept();
   EXPECT_EQ(point.history<int>("tag", "count").new_value(), 2);
   EXPECT_THROW(static_cast<void>(point.history_width()), nm::umat::fatal_error) << "an int has no STATEV layout";
+}
+
+TEST(MaterialPoint, CheckpointsThroughStreams) {
+  setup s, restarted;
+  point_type point{s.ctx, strain_input()};
+  trial(point, 0, 1);
+  point.accept();
+  std::stringstream checkpoint;
+  point.save(checkpoint);
+  auto const expected{trial(point, 1, 2)};
+
+  point_type copy{restarted.ctx, strain_input()};
+  copy.load(checkpoint);
+  EXPECT_EQ(trial(copy, 1, 2), expected);
+  EXPECT_EQ(copy.history<T>("mem", "count").new_value(), 2);
 }
 
 TEST(MaterialPoint, IteratesToTheResidual) {
