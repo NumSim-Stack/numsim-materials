@@ -871,3 +871,71 @@ TEST(DeclaredReads, VerificationCatchesAnUndeclaredRead) {
   s.step(0.1);
   EXPECT_THAT_MESSAGE(s.step(0.2), std::logic_error, "thermal_strain");
 }
+
+namespace {
+
+/// Two independent callbacks with declared reads: "a" = 2 x, "b" = 3 y.
+template <typename Traits>
+class pair final : public nm::material_base<pair<Traits>, Traits> {
+public:
+  using base = nm::material_base<pair<Traits>, Traits>;
+  using value_type = typename base::value_type;
+  using input_parameter_controller = typename base::input_parameter_controller;
+
+  template <typename... Args>
+  explicit pair(Args &&...args)
+      : base(std::forward<Args>(args)...), m_a(base::template add_output<value_type>("a")),
+        m_b(base::template add_output<value_type>("b")),
+        m_x(base::template add_input<value_type>(base::template get_parameter<std::string>("x"), "value")),
+        m_y(base::template add_input<value_type>(base::template get_parameter<std::string>("y"), "value")) {
+    base::add_callback(&pair::compute_a, m_a).reads(m_x);
+    base::add_callback(&pair::compute_b, m_b).reads(m_y);
+  }
+
+  static input_parameter_controller parameters() {
+    input_parameter_controller para{base::parameters()};
+    nm::required<std::string>(para, "x");
+    nm::required<std::string>(para, "y");
+    return para;
+  }
+
+  void compute_a() { m_a = 2 * m_x.get(); }
+  void compute_b() { m_b = 3 * m_y.get(); }
+
+private:
+  value_type &m_a, &m_b;
+  nm::input_property<value_type, nm::property_traits> const &m_x, &m_y;
+};
+
+pair<policy> &make_pair(ctx_type &ctx, std::string const &x, std::string const &y) {
+  param_type p;
+  p.insert<std::string>("name", "pair");
+  p.insert<std::string>("x", x);
+  p.insert<std::string>("y", y);
+  return ctx.create<pair<policy>>(p);
+}
+
+} // namespace
+
+TEST(CallbackEdges, UpdatingOneOutputRunsOnlyWhatItsCallbackReads) {
+  ctx_type ctx;
+  ctx.verify_constants(false); // counts the calls
+  auto &x{make(ctx, "x")};
+  auto &y{make(ctx, "y")};
+  make_pair(ctx, "x", "y");
+  ctx.finalize();
+  ctx.update_property("pair", "a");
+  EXPECT_EQ(x.calls, 1);
+  EXPECT_EQ(y.calls, 0);
+  EXPECT_EQ(ctx.get<T>("pair", "a"), 2.0);
+}
+
+TEST(CallbackEdges, CallbacksOfOneMaterialFormNoFalseCycle) {
+  ctx_type ctx;
+  make(ctx, "y");
+  make_pair(ctx, "n", "y"); // "a" reads n, n reads "b": no cycle, "b" does not read n
+  make(ctx, "n", reading("pair", "b"));
+  ASSERT_NO_THROW(ctx.finalize());
+  ctx.update();
+  EXPECT_EQ(ctx.get<T>("pair", "a"), 2.0 * 3.0);
+}

@@ -221,22 +221,27 @@ private:
     for (auto* mat : interfaces)
       by_name[std::string(mat->name())] = mat;
 
+    // global inputs: to the callback declaring the read, to every other output of the material without a declaration
+    auto const add_input_edge{[&](input_wire_base const* input, const property_base* to) {
+      auto const src_key{input->source_owner() + "::" + input->source_name()};
+      auto const dst_key{prop_key(to->traits().id)};
+      if (input->edge_kind() == EdgeKind::Global && key_to_prop.contains(src_key) && src_key != dst_key)
+        add_edge(src_key, dst_key);
+    }};
     for (auto* mat : interfaces) {
-      for (auto& input : mat->typed_inputs()) {
-        if (input->edge_kind() == EdgeKind::Global) {
-          auto src_key = input->source_owner() + "::" + input->source_name();
-          const auto& reg = mat->get_property_registry();
-          for (auto* prop : reg.produced_properties()) {
-            auto dst_key = prop_key(prop->traits().id);
-            if (key_to_prop.contains(src_key) && src_key != dst_key)
-              add_edge(src_key, dst_key);
-          }
-        }
+      std::unordered_set<const property_base*> declared;
+      for (auto const& d : mat->declared_reads()) {
+        declared.insert(d.outputs.begin(), d.outputs.end());
+        for (auto const* input : d.inputs)
+          add_input_edge(input, d.callback);
       }
+      for (auto* prop : mat->get_property_registry().produced_properties())
+        if (!declared.contains(prop))
+          for (auto const& input : mat->typed_inputs())
+            add_input_edge(input.get(), prop);
     }
 
     // within a material: declared callback order, and an output without a callback after its writers
-    // (cannot close a cycle: the material's global inputs already reach every output)
     for (auto* mat : interfaces) {
       for (auto const& [earlier, later] : mat->callback_order())
         add_edge(prop_key(earlier->traits().id), prop_key(later->traits().id));
