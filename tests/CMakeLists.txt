@@ -6,6 +6,7 @@ macro(add_numsim_test TARGET_NAME)
 endmacro()
 
 add_numsim_test(test_property_graph test_property_graph.cpp)
+add_numsim_test(test_model_validation test_model_validation.cpp)
 add_numsim_test(test_wiring_contract test_wiring_contract.cpp)
 add_numsim_test(test_constant_properties test_constant_properties.cpp)
 add_numsim_test(test_declared_reads test_declared_reads.cpp)
