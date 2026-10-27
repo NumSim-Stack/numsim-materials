@@ -85,6 +85,26 @@ else()
   message(STATUS "${PROJECT_NAME}: Eigen3 (installed)")
 endif()
 
+# Boost.Math (header only) for the Carlson elliptic integrals of the Eshelby tensors: an installed
+# Boost, otherwise the standalone Boost.Math headers (build interface only, like fetched Eigen).
+if(POLICY CMP0167)
+  cmake_policy(SET CMP0167 NEW)
+endif()
+find_package(Boost 1.74 QUIET)
+if(NOT TARGET Boost::headers)
+  FetchContent_Declare(
+    boost_math
+    GIT_REPOSITORY https://github.com/boostorg/math.git
+    GIT_TAG boost-1.83.0
+    GIT_SHALLOW TRUE
+    SOURCE_SUBDIR headers-only-do-not-configure
+  )
+  FetchContent_MakeAvailable(boost_math)
+  message(STATUS "${PROJECT_NAME}: Boost.Math (fetched boost-1.83.0 headers, standalone)")
+else()
+  message(STATUS "${PROJECT_NAME}: Boost.Math (installed Boost ${Boost_VERSION})")
+endif()
+
 add_library(${PROJECT_NAME} INTERFACE)
 add_library(${PROJECT_NAME}::${PROJECT_NAME} ALIAS ${PROJECT_NAME})
 
@@ -98,6 +118,13 @@ target_compile_features(${PROJECT_NAME} INTERFACE cxx_std_23)
 target_link_libraries(${PROJECT_NAME} INTERFACE
   numsim-core::numsim-core tmech::tmech nlohmann_json::nlohmann_json)
 set(NUMSIM_MATERIALS_EXPORTED_DEPS numsim-core tmech nlohmann_json)
+if(TARGET Boost::headers)
+  target_link_libraries(${PROJECT_NAME} INTERFACE Boost::headers)
+  list(APPEND NUMSIM_MATERIALS_EXPORTED_DEPS Boost)
+else()
+  target_include_directories(${PROJECT_NAME} SYSTEM INTERFACE $<BUILD_INTERFACE:${boost_math_SOURCE_DIR}/include>)
+  target_compile_definitions(${PROJECT_NAME} INTERFACE $<BUILD_INTERFACE:BOOST_MATH_STANDALONE=1>)
+endif()
 if(TARGET Eigen3::Eigen)
   target_link_libraries(${PROJECT_NAME} INTERFACE Eigen3::Eigen)
   list(APPEND NUMSIM_MATERIALS_EXPORTED_DEPS Eigen3)
