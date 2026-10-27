@@ -41,8 +41,7 @@ public:
   explicit isotropic_damage(Args&&... args)
       : base(std::forward<Args>(args)...),
         // outputs
-        m_damaged_stress(base::template add_output<tensor2>(
-            "damaged_stress", &isotropic_damage::compute)),
+        m_damaged_stress(base::template add_output<tensor2>("damaged_stress")),
         m_damaged_tangent(base::template add_output<tensor4>("damaged_tangent")),
         // parameters
         m_elastic_source(base::template get_parameter<std::string>("elastic_source")),
@@ -67,7 +66,10 @@ public:
             m_state_source, "d_equivalent_strain", EdgeKind::Global)),
         m_is_yielding(base::template add_input<int>(
             m_yield_source, "is_yielding", EdgeKind::Global))
-  {}
+  {
+    base::add_callback(&isotropic_damage::compute, m_damaged_stress, m_damaged_tangent)
+        .reads(m_stress, m_tangent, m_damage, m_d_damage, m_deps_eq, m_is_yielding);
+  }
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};

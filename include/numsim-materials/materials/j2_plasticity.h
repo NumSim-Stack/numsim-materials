@@ -67,8 +67,7 @@ public:
   template <typename... Args>
   explicit j2_plasticity(Args&&... args)
       : base(std::forward<Args>(args)...),
-        m_stress(base::template add_output<tensor2>(
-            "stress", &j2_plasticity::compute)),
+        m_stress(base::template add_output<tensor2>("stress")),
         m_tangent(base::template add_output<tensor4>("tangent")),
         m_eps_p(base::template add_history_output<tensor2>("plastic_strain")),
         m_kappa(base::template add_history_output<value_type>(
@@ -89,7 +88,9 @@ public:
             "hardening_modulus", EdgeKind::Local)),
         m_C_e(plasticity_detail::make_isotropic_tangent<value_type, Dim>(
             m_K, m_G))
-  {}
+  {
+    base::add_callback(&j2_plasticity::compute, m_stress, m_tangent, m_eps_p, m_kappa).reads(m_strain, m_H, m_dH);
+  }
 
   /// m_C_e above is the elastic stiffness, built here rather than read from
   /// another material.

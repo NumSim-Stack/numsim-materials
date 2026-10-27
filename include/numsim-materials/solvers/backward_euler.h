@@ -45,8 +45,7 @@ public:
         m_jacobian(base::template add_input<value_type>(
             m_func_name, "jacobian", EdgeKind::Local))
   {
-    if (auto p = base::m_property_handler.find(base::m_name, "delta"))
-      (*p)->traits().update = [this]() { this->update(); };
+    base::add_callback(&backward_euler::update, m_delta).reads(m_residual, m_jacobian);
   }
 
   static input_parameter_controller parameters() {

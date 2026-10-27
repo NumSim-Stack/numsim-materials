@@ -30,14 +30,10 @@ public:
   explicit autocatalytic_reaction(Args&&... args)
       : base(std::forward<Args>(args)...),
         // outputs
-        m_his(base::template add_history_output<value_type>(
-            "current_state", &autocatalytic_reaction::update)),
-        m_res(base::template add_output<value_type>(
-            "residual", &autocatalytic_reaction::update_residual)),
-        m_jac(base::template add_output<value_type>(
-            "jacobian", &autocatalytic_reaction::update_jacobian)),
-        m_rate(base::template add_output<value_type>(
-            "rate", &autocatalytic_reaction::update_rate)),
+        m_his(base::template add_history_output<value_type>("current_state")),
+        m_res(base::template add_output<value_type>("residual")),
+        m_jac(base::template add_output<value_type>("jacobian")),
+        m_rate(base::template add_output<value_type>("rate")),
         m_drate(base::template add_output<value_type>("rate_derivative")),
         // parameters
         m_timer_name(base::template get_parameter<std::string>("timer_name")),
@@ -60,6 +56,10 @@ public:
     const auto start = base::template get_parameter<value_type>("start_value");
     m_his.old_value() = start;
     m_his.new_value() = start;
+    base::add_callback(&autocatalytic_reaction::update, m_his).reads(m_theta, m_dz);
+    base::add_callback(&autocatalytic_reaction::update_residual, m_res).reads(m_theta, m_time, m_dz, m_his);
+    base::add_callback(&autocatalytic_reaction::update_jacobian, m_jac).reads(m_theta, m_time, m_dz, m_his);
+    base::add_callback(&autocatalytic_reaction::update_rate, m_rate, m_drate).reads(m_theta, m_his);
   }
 
   static input_parameter_controller parameters() {

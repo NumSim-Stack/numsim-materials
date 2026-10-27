@@ -53,7 +53,10 @@ public:
 
 protected:
   /// Called by the law's own constructor: binding the update needs the most-derived object.
-  void register_output() { m_damage = &base::template add_output<value_type>("damage", &scalar_damage_law::compute); }
+  void register_output() {
+    m_damage = &base::template add_output<value_type>("damage");
+    base::add_callback(&scalar_damage_law::compute, *m_damage, m_d_damage).reads(m_kappa);
+  }
 
   /// The law's own parameter check, with the type name in the message.
   void require(bool condition, char const *what) const {
