@@ -8,6 +8,7 @@
 #include <limits>
 #include <span>
 #include <stdexcept>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -32,6 +33,7 @@ struct load_case {
   load_path<T> path;
   int tangent_every{1};        ///< finite-difference tangent check every n-th step; 0 = never
   bool finite_strain{false};   ///< which of the two controls was parsed
+  std::optional<T> fd_step;    ///< perturbation of the tangent check; unset = the driver's default
 
   /// Prescribed strain at a step: linear between the points of its segment.
   [[nodiscard]] tensor2 strain_at(load_step<T> const &s) const {
@@ -128,7 +130,8 @@ load_case<T> parse_case(nlohmann::json const &c, bool finite_strain = false) {
           c.contains("stress") ? parse_symmetric<T>(c["stress"]) : tensor2{},
           load_path<T>{std::move(factors), detail::count(c, "steps", 50, 1), c.contains("points") ? T{1} : scale,
                        c.value("dt", T{1})},
-          detail::count(c, "tangent_every", 1, 0), finite_strain};
+          detail::count(c, "tangent_every", 1, 0), finite_strain,
+          c.contains("fd_step") ? std::optional<T>{c.at("fd_step").get<T>()} : std::nullopt};
 }
 
 /// A case run again with several step counts (document key "studies").
@@ -182,19 +185,23 @@ inline std::vector<std::string> output_stems(nlohmann::json const &doc) {
 }
 
 /// "point": the parameters of the material-point driver (strain_source or deformation_gradient_source,
-/// stress_source, optional tangent_source and time_source, and optionally tolerance, max_iter, fd_step).
+/// stress_source, optional tangent_source, stress_property, tangent_property ("damaged_stress") and time_source,
+/// and optionally tolerance, max_iter, fd_step, and the fixed point residual_source, residual_tolerance, max_passes).
 template <typename Traits>
 typename Traits::ParameterHandler parse_point(nlohmann::json const &doc) {
   using T = typename Traits::value_type;
   typename Traits::ParameterHandler out;
   for (auto const &[key, value] : doc.at("point").items()) {
     if (key == "strain_source" || key == "deformation_gradient_source" || key == "stress_source" ||
-        key == "tangent_source" || key == "time_source")
+        key == "tangent_source" || key == "stress_property" || key == "tangent_property" || key == "time_source" ||
+        key == "residual_source")
       out.template insert<std::string>(key, value.template get<std::string>());
-    else if (key == "tolerance" || key == "fd_step")
+    else if (key == "tolerance" || key == "fd_step" || key == "residual_tolerance")
       out.template insert<T>(key, value.template get<T>());
     else if (key == "max_iter")
       out.template insert<int>(key, detail::as_count(value, "report: \"point\": max_iter", 0));
+    else if (key == "max_passes")
+      out.template insert<int>(key, detail::as_count(value, "report: \"point\": max_passes", 1));
     else
       throw std::invalid_argument("report: \"point\" has no parameter '" + key + "'");
   }
@@ -212,7 +219,7 @@ struct column_spec {
 /// "record" (nlohmann::json orders those by column name; a value may be {"source", "full"}).
 inline std::vector<column_spec> parse_columns(nlohmann::json const &doc) {
   auto const &p{doc.at("point")};
-  auto const stress{p.at("stress_source").get<std::string>() + "::stress"};
+  auto const stress{p.at("stress_source").get<std::string>() + "::" + p.value("stress_property", std::string{"stress"})};
   std::vector<column_spec> out;
   if (is_finite_strain(doc))
     out = {{"F", p.at("deformation_gradient_source").get<std::string>() + "::deformation_gradient", true}, {"P", stress, true}};

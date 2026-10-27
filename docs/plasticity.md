@@ -54,7 +54,8 @@ more:
 | parameter | meaning |
 |---|---|
 | `hardening_source` | material publishing `hardening_stress` and `hardening_modulus` |
-| `strain_source` | material publishing `strain` |
+| `strain_source` | material publishing the strain |
+| `strain_property` | its property name (default `strain`) |
 | `solver_source` | a `local_newton` |
 | `K`, `G` | bulk and shear moduli — the elastic stiffness is built from these |
 | `sigma_0` | initial yield stress |

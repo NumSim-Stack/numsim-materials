@@ -5,13 +5,14 @@
 #include <any>
 #include <functional>
 #include <iterator>
-#include <numsim-core/print.h>
+#include <print>
 #include <stdexcept>
 #include <string>
 #include <typeindex>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <map>
 #include <variant>
 #include <vector>
 #include <numsim-core/input_parameter_controller.h>
@@ -138,6 +139,22 @@ json_reader_registry<JsonType> make_default_json_registry() {
   // Map type
   reg.template add<std::unordered_map<std::string, std::vector<std::string>>>();
 
+  // a list of objects of strings: the per-phase "material::property" sources of a local composite
+  reg.template add<std::vector<std::map<std::string, std::string>>>([](const JsonType& j, const std::string& key) -> std::any {
+    if (!adapter::is_array(j))
+      throw std::invalid_argument("'" + key + "' is a list of objects {role: \"material::property\"}");
+    std::vector<std::map<std::string, std::string>> result;
+    for (const auto& elem : j) {
+      if (!adapter::is_object(elem))
+        throw std::invalid_argument("'" + key + "' is a list of objects {role: \"material::property\"}");
+      auto& entry = result.emplace_back();
+      adapter::for_each_key(elem, [&](const std::string& role) {
+        entry.emplace(role, adapter::template get<std::string>(adapter::at(elem, role)));
+      });
+    }
+    return result;
+  });
+
   // scalar_or_property: number or {"class": "...", "property": "..."}
   using sop = std::variant<double, std::pair<std::string, std::string>>;
   auto convert_sop = [](const JsonType& j) -> sop {
@@ -261,7 +278,7 @@ void json_to_parameters(
 
   adapter::for_each_key(json, [&](const std::string& key) {
     if (key != "type" && !schema_keys.contains(key))
-      numsim_core::println(stderr, "  warning: unknown parameter '{}' in JSON (not in schema)", key);
+      std::println(stderr, "  warning: unknown parameter '{}' in JSON (not in schema)", key);
   });
 
   // Read + insert + validate in one call

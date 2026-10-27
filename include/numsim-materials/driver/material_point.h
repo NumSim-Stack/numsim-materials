@@ -4,7 +4,9 @@
 #include <algorithm>
 #include <cmath>
 #include <format>
+#include <istream>
 #include <memory>
+#include <ostream>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -182,6 +184,10 @@ public:
   void rotate_history(tensor2 const &R) const { host_map().rotate_history(R); }
 
   [[nodiscard]] bool has_rotatable_history() const { return host_map().has_rotatable_history(); }
+
+  /// Engine-owned checkpoint: the accepted state, restored into a point over an identical context.
+  void save(std::ostream &out) const { m_ctx.save_state(out); }
+  void load(std::istream &in) { m_ctx.load_state(in); }
 
   [[nodiscard]] context_type &context() const noexcept { return m_ctx; }
 

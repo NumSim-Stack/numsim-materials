@@ -118,14 +118,13 @@ public:
       m_dx_de.setZero(m_N, m_W);
     }
 
-    // Graph-driven mode: bind solve() to the first unknown so that a downstream
+    // Graph-driven mode: solve() is bound to the first unknown so that a downstream
     // update_source() on it drives the iteration, as backward_euler does with
     // "delta". A return map that holds the solver by material_ref and solves
     // only when the trial state yields turns this off, or the graph would run a
     // second, cold-start solve at every point including the elastic ones.
     if (m_graph_driven)
-      if (auto p = base::m_property_handler.find(base::m_name, specs.front().name))
-        (*p)->traits().update = [this]() { this->update(); };
+      base::add_callback(&vector_newton::update, m_written).reads(m_reads).drives(m_reads);
   }
 
   static input_parameter_controller parameters() {
@@ -361,11 +360,13 @@ private:
   template<typename U>
   void emplace_state(const std::string& name) {
     auto& ref = base::template add_output<typename U::value_type>(name);
+    m_written.push_back(&ref);
     m_state.push_back(
         std::make_unique<state_layout<value_type, U>>(ref));
 
     const auto& in = base::template add_input<typename U::value_type>(
         m_func, "residual_" + name, EdgeKind::Local);
+    m_reads.push_back(&in);
     m_residual.push_back(
         std::make_unique<residual_layout<value_type, U>>(in));
 
@@ -376,10 +377,12 @@ private:
       using de_block = jacobian_block_layout<value_type, U, sym_k>;
       const auto& din = base::template add_input<typename de_block::value_type>(
           m_func, "d_residual_" + name + "_d_strain", EdgeKind::Local);
+      m_reads.push_back(&din);
       m_dR_de_layout.push_back(std::make_unique<de_block>(din));
 
       auto& dout = base::template add_output<typename de_block::value_type>(
           "d_" + name + "_d_strain");
+      m_written.push_back(&dout);
       m_dx_de_layout.push_back(
           std::make_unique<strain_derivative_layout<value_type, Dim, U>>(dout));
     }
@@ -413,6 +416,7 @@ private:
     using block_t = jacobian_block_layout<value_type, UI, UJ>;
     const auto& in = base::template add_input<typename block_t::value_type>(
         m_func, "jacobian_" + name_i + "_" + name_j, EdgeKind::Local);
+    m_reads.push_back(&in);
     m_jacobian[i][j] = std::make_unique<block_t>(in);
   }
 
@@ -545,6 +549,9 @@ private:
   const bool& m_strain_derivative;
   std::vector<std::unique_ptr<layout_base<value_type>>> m_dR_de_layout;
   std::vector<std::unique_ptr<block_scatter_base<value_type>>> m_dx_de_layout;
+
+  std::vector<void const*> m_written;            ///< every output, filled by update()
+  std::vector<input_wire_base const*> m_reads;  ///< every input of the function material
 
   std::size_t m_N{0};
   std::size_t m_W{0};

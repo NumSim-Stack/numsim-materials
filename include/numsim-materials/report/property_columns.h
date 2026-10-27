@@ -67,6 +67,9 @@ private:
     if (auto const *s{property_value<value_type>(p)}) {
       require(name, idx.empty(), "a scalar takes no component");
       push(name, [s] { return *s; });
+    } else if (auto const *flag{property_value<int>(p)}) { // predicates such as is_yielding
+      require(name, idx.empty(), "a flag takes no component");
+      push(name, [flag] { return static_cast<value_type>(*flag); });
     } else if (auto const *t2{property_value<tensor2>(p)}) {
       if (idx.empty()) {
         for (std::size_t a{0}; a < (full ? full_components.size() : symmetric_components.size()); ++a)
@@ -80,7 +83,7 @@ private:
       require(name, idx.size() == 4, "a rank-4 tensor takes four indices");
       push(name, [t4, idx] { return (*t4)(idx[0], idx[1], idx[2], idx[3]); });
     } else {
-      throw std::invalid_argument("column '" + name + "': '" + source + "' is not a scalar, rank-2 or rank-4 3D tensor property");
+      throw std::invalid_argument("column '" + name + "': '" + source + "' is not a scalar, a flag, a rank-2 or a rank-4 3D tensor property");
     }
   }
 

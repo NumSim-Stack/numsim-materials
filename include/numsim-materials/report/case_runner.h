@@ -30,6 +30,15 @@ private:
 
 namespace detail {
 
+/// The document's "point", with the case's fd_step when it sets one.
+template <typename Traits>
+typename Traits::ParameterHandler point_for(nlohmann::json const &doc, load_case<typename Traits::value_type> const &c) {
+  auto out{parse_point<Traits>(doc)};
+  if (c.fd_step)
+    out.template insert<typename Traits::value_type>("fd_step", *c.fd_step);
+  return out;
+}
+
 /// One step of a case: the columns of the trial, the tangent check when due, then accept, or reject and stop.
 template <typename Traits, typename Driver, typename Sink, typename Values>
 bool record_step(Driver &driver, typename Driver::step_result const &res, load_step<typename Traits::value_type> const &s,
@@ -51,7 +60,7 @@ bool run_small_strain(nlohmann::json const &doc, load_case<typename Traits::valu
   using T = typename Traits::value_type;
   using tensor2 = tmech::tensor<T, 3, 2>;
   case_model<Traits> model(doc);
-  material_point_driver<Traits> driver{model.context(), parse_point<Traits>(doc)};
+  material_point_driver<Traits> driver{model.context(), detail::point_for<Traits>(doc, c)};
   property_columns<Traits> const columns{model.context(), parse_columns(doc)};
   sink.begin(columns.names());
   auto const values = [&](auto const &) { return columns.values(); };
@@ -83,7 +92,7 @@ bool run_finite_strain(nlohmann::json const &doc, load_case<typename Traits::val
   using T = typename Traits::value_type;
   using tensor2 = tmech::tensor<T, 3, 2>;
   case_model<Traits> model(doc);
-  deformation_gradient_driver<Traits> driver{model.context(), parse_point<Traits>(doc)};
+  deformation_gradient_driver<Traits> driver{model.context(), detail::point_for<Traits>(doc, c)};
   property_columns<Traits> const columns{model.context(), parse_columns(doc)};
   auto names{columns.names()};
   for (auto const &comp : symmetric_components)
@@ -113,7 +122,7 @@ bool run_finite_strain(nlohmann::json const &doc, load_case<typename Traits::val
 /// Runs one load case on a fresh material point; false if a step does not converge (it is still recorded, then
 /// rejected). Every converged step is accepted after its columns and tangent check. Small strain drives the
 /// strain, finite strain F = I + (interpolated points), and records P, Cauchy stress and J. The driver's
-/// parameters are the document's "point".
+/// parameters are the document's "point" and the case's fd_step.
 template <typename Traits, typename Sink>
   requires step_sink<Sink, Traits>
 bool run_case(nlohmann::json const &doc, load_case<typename Traits::value_type> const &c, Sink &sink) {

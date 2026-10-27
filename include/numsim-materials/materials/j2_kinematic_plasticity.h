@@ -84,11 +84,9 @@ public:
   template <typename... Args>
   explicit j2_kinematic_plasticity(Args&&... args)
       : base(std::forward<Args>(args)...),
-        m_stress(base::template add_output<tensor2>(
-            "stress", &j2_kinematic_plasticity::compute)),
+        m_stress(base::template add_output<tensor2>("stress")),
         m_tangent(base::template add_output<tensor4>("tangent")),
-        m_r_l(base::template add_output<value_type>(
-            "residual_dlambda", &j2_kinematic_plasticity::compute_residual)),
+        m_r_l(base::template add_output<value_type>("residual_dlambda")),
         m_r_b(base::template add_output<tensor2>("residual_dbeta")),
         m_j_ll(base::template add_output<value_type>("jacobian_dlambda_dlambda")),
         m_j_lb(base::template add_output<tensor2>("jacobian_dlambda_dbeta")),
@@ -133,7 +131,15 @@ public:
                                         tmech::eye<value_type, Dim, 2>()) /
                               value_type{Dim}),
         m_C_e(plasticity_detail::make_isotropic_tangent<value_type, Dim>(m_K, m_G))
-  {}
+  {
+    base::add_callback(&j2_kinematic_plasticity::compute, m_stress, m_tangent, m_eps_p, m_kappa, m_beta)
+        .reads(m_strain, m_H, m_dH, m_dl, m_db, m_dl_de, m_db_de)
+        .drives(m_H, m_dH);
+    base::add_callback(&j2_kinematic_plasticity::compute_residual, m_r_l, m_r_b, m_j_ll, m_j_lb, m_j_bl,
+                       m_j_bb, m_dr_l, m_dr_b)
+        .reads(m_dl, m_db, m_H, m_dH)
+        .drives(m_H, m_dH);
+  }
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
