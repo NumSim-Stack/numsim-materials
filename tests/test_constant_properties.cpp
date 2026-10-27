@@ -10,7 +10,7 @@
 #include "numsim-materials/core/material_base.h"
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/core/parameter_helpers.h"
-#include "numsim-materials/umat/external_state_source.h"
+#include "numsim-materials/driver/external_state_source.h"
 
 // The fixtures below also test the deprecated declarations (constant_output, written_by, runs_after, a callback
 // passed to add_output) for as long as they exist.
