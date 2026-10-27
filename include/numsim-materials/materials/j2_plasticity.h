@@ -7,6 +7,7 @@
 #include <string>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_base.h"
+#include "numsim-materials/core/parameter_helpers.h"
 #include "numsim-materials/core/material_ref.h"
 #include "numsim-materials/materials/plasticity_utils.h"
 #include "numsim-materials/solvers/local_newton.h"
@@ -79,7 +80,7 @@ public:
             base::template get_parameter<std::string>("solver_source"))),
         m_strain(base::template add_input<tensor2>(
             base::template get_parameter<std::string>("strain_source"),
-            "strain", EdgeKind::Global)),
+            base::template get_parameter<std::string>("strain_property"), EdgeKind::Global)),
         m_H(base::template add_input<value_type>(
             base::template get_parameter<std::string>("hardening_source"),
             "hardening_stress", EdgeKind::Local)),
@@ -101,15 +102,13 @@ public:
   /// yielding starts.
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
-    para.template insert<std::string>("hardening_source")
-        .template add<is_required>();
-    para.template insert<std::string>("strain_source")
-        .template add<is_required>();
-    para.template insert<std::string>("solver_source")
-        .template add<is_required>();
-    para.template insert<value_type>("K").template add<is_required>();
-    para.template insert<value_type>("G").template add<is_required>();
-    para.template insert<value_type>("sigma_0").template add<is_required>();
+    required<std::string>(para, "hardening_source");
+    required<std::string>(para, "strain_source");
+    optional<std::string>(para, "strain_property", std::string{"strain"});
+    required<std::string>(para, "solver_source");
+    required<value_type>(para, "K");
+    required<value_type>(para, "G");
+    required<value_type>(para, "sigma_0");
     return para;
   }
 

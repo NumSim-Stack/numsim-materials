@@ -37,7 +37,7 @@ public:
         m_K(base::template get_parameter<value_type>("K")),
         m_G(base::template get_parameter<value_type>("G")),
         m_eps_name(base::template get_parameter<std::string>("strain_producer_name")),
-        m_eps(base::template add_input<tensor2>(m_eps_name, "strain", EdgeKind::Global))
+        m_eps(base::template add_input<tensor2>(m_eps_name, base::template get_parameter<std::string>("strain_property"), EdgeKind::Global))
   {
     update_tangent();
   }
@@ -55,6 +55,7 @@ public:
     required<value_type>(para, "K");
     required<value_type>(para, "G");
     required<std::string>(para, "strain_producer_name");
+    optional<std::string>(para, "strain_property", std::string{"strain"});
     return para;
   }
 

@@ -4,6 +4,7 @@
 #include <cmath>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_base.h"
+#include "numsim-materials/core/parameter_helpers.h"
 
 namespace numsim::materials {
 
@@ -33,7 +34,7 @@ public:
         m_deps_eq(base::template add_output<tensor2>("d_equivalent_strain")),
         m_strain_source(base::template get_parameter<std::string>("strain_source")),
         m_strain(base::template add_input<tensor2>(
-            m_strain_source, "strain", EdgeKind::Global))
+            m_strain_source, base::template get_parameter<std::string>("strain_property"), EdgeKind::Global))
   {
     // Initialize direction vectors from parameters
     const auto& m_indices = base::template get_parameter<std::vector<std::size_t>>("m_direction");
@@ -51,9 +52,10 @@ public:
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
-    para.template insert<std::string>("strain_source").template add<is_required>();
-    para.template insert<std::vector<std::size_t>>("m_direction").template add<is_required>();
-    para.template insert<std::vector<std::size_t>>("n_direction").template add<is_required>();
+    required<std::string>(para, "strain_source");
+    optional<std::string>(para, "strain_property", std::string{"strain"});
+    required<std::vector<std::size_t>>(para, "m_direction");
+    required<std::vector<std::size_t>>(para, "n_direction");
     return para;
   }
 

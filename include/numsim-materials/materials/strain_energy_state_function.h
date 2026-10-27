@@ -4,6 +4,7 @@
 #include <cmath>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_base.h"
+#include "numsim-materials/core/parameter_helpers.h"
 
 namespace numsim::materials {
 
@@ -34,16 +35,17 @@ public:
         m_strain_source(base::template get_parameter<std::string>("strain_source")),
         m_tangent_source(base::template get_parameter<std::string>("tangent_source")),
         m_strain(base::template add_input<tensor2>(
-            m_strain_source, "strain", EdgeKind::Global)),
+            m_strain_source, base::template get_parameter<std::string>("strain_property"), EdgeKind::Global)),
         m_tangent(base::template add_input<tensor4>(
             m_tangent_source, "tangent", EdgeKind::Global))
   {}
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
-    para.template insert<std::string>("strain_source").template add<is_required>();
-    para.template insert<std::string>("tangent_source").template add<is_required>();
-    para.template insert<value_type>("youngs_modulus").template add<is_required>();
+    required<std::string>(para, "strain_source");
+    optional<std::string>(para, "strain_property", std::string{"strain"});
+    required<std::string>(para, "tangent_source");
+    required<value_type>(para, "youngs_modulus");
     return para;
   }
 
