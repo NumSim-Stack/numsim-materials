@@ -13,6 +13,7 @@
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/umat/errors.h"
+#include "numsim-materials/core/stress_like.h"
 #include "numsim-materials/umat/tensor_conversion.h"
 
 /// Flat STATEV <-> the context's history properties.
@@ -52,6 +53,7 @@ public:
   using tensor4 = tmech::tensor<value_type, 3, 4>;
   using hist_scalar = numsim_core::history_property<value_type, property_traits>;
   using hist_tensor2 = numsim_core::history_property<tensor2, property_traits>;
+  using hist_stress2 = numsim_core::history_property<stress_like<value_type>, property_traits>;
   using hist_tensor4 = numsim_core::history_property<tensor4, property_traits>;
 
   /// Build the map over every history property in @p ctx except those named in
@@ -164,7 +166,7 @@ public:
       out.push_back(std::to_string(e.offset) + ".." +
                     std::to_string(e.offset + e.width - 1) + "  " + e.owner +
                     "::" + e.name +
-                    (e.width == canonical_width ? "  [engineering shear]" : ""));
+                    (e.stress ? "  [stress]" : e.width == canonical_width ? "  [engineering shear]" : ""));
     return out;
   }
 
@@ -178,6 +180,7 @@ private:
     std::function<void(value_type*)> pack;
     /// Empty for scalars, which no rotation affects.
     std::function<void(const tensor2&)> rotate;
+    bool stress{false}; ///< stored without the engineering-shear factor
   };
 
   /// A rank-2 history variable is stored in 6 slots, which can only represent a
@@ -240,6 +243,26 @@ private:
            [h](value_type* dst) { *dst = h->new_value(); },
            nullptr});
       m_width += 1;
+      return;
+    }
+
+    if (auto* h = dynamic_cast<hist_stress2*>(prop)) {
+      m_entries.push_back(
+          {id.owner, id.name, offset, canonical_width,
+           [h](const value_type* src) {
+             h->old_value() = stress_from_buffer<value_type>(src);
+             h->new_value() = h->old_value();
+           },
+           [h, who](value_type* dst) {
+             require_symmetric(h->new_value(), who);
+             stress_to_buffer<value_type>(h->new_value(), dst);
+           },
+           [h](const tensor2& R) {
+             h->old_value() = rotate(h->old_value(), R);
+             h->new_value() = rotate(h->new_value(), R);
+           },
+           true});
+      m_width += canonical_width;
       return;
     }
 
