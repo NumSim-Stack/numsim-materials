@@ -27,13 +27,16 @@ public:
   template <typename... Args>
   explicit incremental_linear_elasticity(Args &&...args)
       : base(std::forward<Args>(args)...),
-        m_stress(base::template add_history_output<tensor2>("stress", &incremental_linear_elasticity::update)),
+        m_stress(base::template add_history_output<tensor2>("stress")),
         m_tangent(base::template add_output<tensor4>("tangent")),
         m_strain(base::template add_input_history<tensor2>(
             connection_source{base::template get_parameter<std::string>("strain_source"), base::template get_parameter<std::string>("strain_property")},
             EdgeKind::Global)),
         m_C(base::template add_input<tensor4>(base::template get_parameter<std::string>("tangent_source"),
-                                              base::template get_parameter<std::string>("tangent_property"), EdgeKind::Global)) {}
+                                              base::template get_parameter<std::string>("tangent_property"), EdgeKind::Global)) {
+    base::add_callback(&incremental_linear_elasticity::copy_tangent, m_tangent).reads(m_C);
+    base::add_callback(&incremental_linear_elasticity::update, m_stress).reads(m_strain, m_tangent);
+  }
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
@@ -44,8 +47,9 @@ public:
     return para;
   }
 
+  void copy_tangent() noexcept { m_tangent = m_C.get(); }
+
   void update() noexcept {
-    m_tangent = m_C.get();
     m_stress.new_value() = m_stress.old_value() + tmech::dcontract(m_tangent, tensor2{m_strain.new_value() - m_strain.old_value()});
   }
 

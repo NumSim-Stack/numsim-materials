@@ -32,8 +32,7 @@ public:
   template <typename... Args>
   explicit isotropic_tangent(Args&&... args)
       : base(std::forward<Args>(args)...),
-        m_C(base::template add_output<tensor4>(
-            "tangent", &isotropic_tangent::update_tangent)),
+        m_C(base::template add_output<tensor4>("tangent")),
         m_K(base::template add_input<value_type>(
             base::template get_parameter<std::string>("K_source"),
             base::template get_parameter<std::string>("K_property"),
@@ -42,7 +41,7 @@ public:
             base::template get_parameter<std::string>("G_source"),
             base::template get_parameter<std::string>("G_property"),
             EdgeKind::Global)) {
-    base::constant_output(m_C);
+    base::add_callback(&isotropic_tangent::update_tangent, m_C).reads(m_K, m_G);
   }
 
   static input_parameter_controller parameters() {

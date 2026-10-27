@@ -29,14 +29,15 @@ public:
   template <typename... Args>
   explicit von_mises_state_function(Args&&... args)
       : base(std::forward<Args>(args)...),
-        m_eps_eq(base::template add_output<value_type>(
-            "equivalent_strain", &von_mises_state_function::compute)),
+        m_eps_eq(base::template add_output<value_type>("equivalent_strain")),
         m_deps_eq(base::template add_output<tensor2>(
             "d_equivalent_strain")),
         m_strain_source(base::template get_parameter<std::string>("strain_source")),
         m_strain(base::template add_input<tensor2>(
             m_strain_source, base::template get_parameter<std::string>("strain_property"), EdgeKind::Global))
-  {}
+  {
+    base::add_callback(&von_mises_state_function::compute, m_eps_eq, m_deps_eq).reads(m_strain);
+  }
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};

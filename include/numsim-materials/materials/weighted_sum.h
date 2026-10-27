@@ -1,6 +1,7 @@
 #ifndef WEIGHTED_SUM_H
 #define WEIGHTED_SUM_H
 
+#include <ranges>
 #include <stdexcept>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_base.h"
@@ -41,8 +42,8 @@ public:
   template <typename... Args>
   explicit weighted_sum(Args&&... args)
       : base(std::forward<Args>(args)...),
-        m_stress(base::template add_output<tensor2>("stress", &weighted_sum::update_stress)),
-        m_tangent(base::template add_output<tensor4>("tangent", &weighted_sum::update_tangent)),
+        m_stress(base::template add_output<tensor2>("stress")),
+        m_tangent(base::template add_output<tensor4>("tangent")),
         m_terms_param(base::template get_parameter<terms_type>("terms")),
         m_weight_property(base::template get_parameter<std::string>("weight_property")),
         m_stress_property(base::template get_parameter<std::string>("stress_property")),
@@ -76,12 +77,9 @@ public:
       m_terms.push_back({&w, &s, &c});
       ++i;
     }
-    std::vector<input_wire_base const*> tangent_reads;
-    for (auto const& [w, _, C] : m_terms) {
-      tangent_reads.push_back(w);
-      tangent_reads.push_back(C);
-    }
-    base::constant_output(m_tangent, std::move(tangent_reads));
+    auto const reads{[this](auto member) { return m_terms | std::views::transform(member); }};
+    base::add_callback(&weighted_sum::update_stress, m_stress).reads(reads(&term::weight), reads(&term::stress));
+    base::add_callback(&weighted_sum::update_tangent, m_tangent).reads(reads(&term::weight), reads(&term::tangent));
   }
 
   static input_parameter_controller parameters() {

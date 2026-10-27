@@ -32,7 +32,7 @@ public:
   template <typename... Args>
   explicit linear_elasticity(Args &&...args)
       : base(std::forward<Args>(args)...),
-        m_sig(base::template add_output<tensor2>("stress", &linear_elasticity::update_stress)),
+        m_sig(base::template add_output<tensor2>("stress")),
         m_C(base::template add_output<tensor4>("tangent")),
         m_K(base::template get_parameter<value_type>("K")),
         m_G(base::template get_parameter<value_type>("G")),
@@ -40,8 +40,9 @@ public:
         m_eps(base::template add_input<tensor2>(m_eps_name, base::template get_parameter<std::string>("strain_property"), EdgeKind::Global)),
         m_eigenstrain(eigenstrain_input())
   {
-    update_tangent();
-    base::constant_output(m_C, {}); // from the parameters alone
+    update_tangent(); // readable before the first update
+    base::add_callback(&linear_elasticity::update_tangent, m_C).reads();
+    base::add_callback(&linear_elasticity::update_stress, m_sig).reads(m_C, m_eps, m_eigenstrain);
   }
 
   /**
