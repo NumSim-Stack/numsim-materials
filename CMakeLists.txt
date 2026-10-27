@@ -42,8 +42,8 @@ include(NumSimWarnings)
 
 set(NUMSIM_MATERIALS_NUMSIM_CORE_TAG "v1.0.0" CACHE STRING
     "numsim-core version (tag or commit) to fetch")
-set(NUMSIM_MATERIALS_TMECH_TAG "v1.2.0" CACHE STRING
-    "tmech version (tag or commit) to fetch")
+set(NUMSIM_MATERIALS_TMECH_TAG "46d8fdd3b919e823c4caa10cbffeb2acc5cd0329" CACHE STRING
+    "tmech version (tag or commit) to fetch; main after tmech#38 (eigen decomposition at repeated eigenvalues)")
 
 numsim_dependency(numsim-core
   TARGET numsim-core::numsim-core

@@ -8,6 +8,7 @@
 #include <limits>
 #include <span>
 #include <stdexcept>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -32,6 +33,7 @@ struct load_case {
   load_path<T> path;
   int tangent_every{1};        ///< finite-difference tangent check every n-th step; 0 = never
   bool finite_strain{false};   ///< which of the two controls was parsed
+  std::optional<T> fd_step;    ///< perturbation of the tangent check; unset = the driver's default
 
   /// Prescribed strain at a step: linear between the points of its segment.
   [[nodiscard]] tensor2 strain_at(load_step<T> const &s) const {
@@ -128,7 +130,8 @@ load_case<T> parse_case(nlohmann::json const &c, bool finite_strain = false) {
           c.contains("stress") ? parse_symmetric<T>(c["stress"]) : tensor2{},
           load_path<T>{std::move(factors), detail::count(c, "steps", 50, 1), c.contains("points") ? T{1} : scale,
                        c.value("dt", T{1})},
-          detail::count(c, "tangent_every", 1, 0), finite_strain};
+          detail::count(c, "tangent_every", 1, 0), finite_strain,
+          c.contains("fd_step") ? std::optional<T>{c.at("fd_step").get<T>()} : std::nullopt};
 }
 
 /// A case run again with several step counts (document key "studies").

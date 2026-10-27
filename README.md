@@ -28,6 +28,7 @@ Abaqus or CalculiX.
 |---|---|
 | [docs/plasticity.md](docs/plasticity.md) | Using the plasticity materials: parameters, wiring, worked decks |
 | [docs/plasticity-theory.md](docs/plasticity-theory.md) | J2 and Drucker-Prager from kinematics to the consistent tangent |
+| [docs/mean_field.md](docs/mean_field.md) | Composites: phase nodes, tangent homogenisation, strain localisation, the self-consistent and nonlinear fixed points |
 
 ## Architecture
 
@@ -115,10 +116,15 @@ the graph's properties). The UMAT entry points stay small strain.
 
 ## Material catalogue
 
-All 31 types registered by `register_default_materials<policy>()`.
+The types registered by `register_default_materials<policy>()`.
 
 **Elasticity and stress** — `linear_elasticity`, `linear_stress`,
 `isotropic_tangent`, `weighted_sum`
+
+**Composites** (see [docs/mean_field.md](docs/mean_field.md)) — `phase`, `rule_of_mixture`,
+`mean_field_tangent`, `mean_field_strain`, `mean_field_stress`, `short_fibre_composite`;
+`eshelby_sphere` / `_cylinder` / `_spheroid` / `_ellipsoid`, `depolarisation_sphere` / `_cylinder` /
+`_spheroid` / `_ellipsoid`, `poisson_ratio_from_moduli`, `isotropic_moduli`
 
 **Hyperelasticity (finite strain)** — `saint_venant_kirchhoff`, `neo_hooke`
 (driven by `external_deformation_gradient_source`)

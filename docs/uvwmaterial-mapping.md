@@ -13,7 +13,8 @@ is a `*_source` parameter. `tools/convert_uvwmaterial_card.py` converts the old 
 | `linear_elastic_incremental`, `incremental_solid_material` | `incremental_linear_elasticity` | `strain_source`, `tangent_source` | #134 |
 | `saint_venant_kirchhoff` (K, G) | `saint_venant_kirchhoff` | `K`, `G`, `deformation_gradient_source` | existing |
 | `neo_hookean_incompressible` | — | | #112 (formulation open) |
-| `incremental_saint_venant_kirchhoff`, `hencky_strains_linear_*` | — | | #113 |
+| `hencky_strains_linear_elastic` (K, G), `_thermo_elastic`, `_thermo_chemo_elastic` | `hencky_elasticity` (+ `thermal_eigenstrain`) | `tangent_source` (an `isotropic_tangent` of produced K, G), `deformation_gradient_source`, optional `eigenstrain_source`; outputs P and dP/dF instead of S(ln C) and dS/dC | #141 |
+| `incremental_saint_venant_kirchhoff` | — | | #113 |
 | `small_strain_rule_of_mixture_composite` (`kernal` voigt / reuss / vrh) | `rule_of_mixture` + `linear_stress` | `phases` (phase nodes), `kernel` voigt / reuss / hill; a tangent producer, the stress is a `linear_stress` on it (nonlinear phases: Voigt through `mean_field_stress`, Reuss and Hill need #117) | #130 |
 | `eshelby_tensor_solid_sphere`, `_cylinder_x1/x2/x3`, `_cylinder`, `_cylindrical_ellipsoid`, `_general_geometry` | `eshelby_sphere`, `eshelby_cylinder`, `eshelby_spheroid`, `eshelby_ellipsoid` | `nu_source` / `nu_property` (Poisson's ratio as a produced property: `poisson_ratio_from_moduli` of K and G, or `isotropic_moduli` of a tangent), `direction`, `aspect_ratio`, `semi_axes`; output `tensor` | #128 |
 | `inclusion` (a phase of any composite) | `phase` | produced properties only: `tangent_source`, `fraction_source` (a `constant_scalar` or a cure), optional `eshelby_source` / `depolarisation_source` (the nodes above); `tangent_edge` local for a nonlinear phase inside `mean_field_strain` | #130, #131, #137, #144 |
@@ -34,7 +35,7 @@ is a `*_source` parameter. `tools/convert_uvwmaterial_card.py` converts the old 
 | `eigenstrain_curing_material_base`, `degree_of_cure_dependent_material` | `thermal_eigenstrain` with the cure as source; `inclusion.fraction_source`; `weighted_sum` | | #137 |
 | `small_strain_rule_of_mixture_history` (Voigt) | `weighted_sum` with `constant_scalar` fractions: every phase reads the composite strain, the sum is Σ cᵢσᵢ, Σ cᵢCᵢ (`tests/test_voigt_composite.cpp`) | `terms`, weights | #117; not from JSON yet (no reader for `terms`) |
 | `small_strain_rule_of_mixture_history` (Reuss) | — | | #117, after the vector Newton lands |
-| `small_strain_mean_field_composite_history`, `_plastic` | — | | #116 |
+| `small_strain_mean_field_composite_history`, `_plastic`, `_damage` | `mean_field_strain` + the phase materials + `mean_field_stress` | the strain node produces `strain_<phase>` (history) and the concentrations; the materials consume them (`strain_source`, `strain_property`); the stress node averages what they produce (linear phases here; the nonlinear fixed point follows) | #116 |
 | `small_strain_short_fibre_history_composite` | — | | #118 |
 | `*_nonlocal*`, `element_deletion` | — | | #121 |
 | `finite_strain_mean_field_composite*` | — | | #122 |
