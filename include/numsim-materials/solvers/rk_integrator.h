@@ -32,8 +32,7 @@ public:
   template<typename... Args>
   explicit rk_integrator(Args&&... args)
       : base(std::forward<Args>(args)...),
-        m_state(base::template add_history_output<value_type>(
-            "state", &rk_integrator::compute)),
+        m_state(base::template add_history_output<value_type>("state")),
         m_h(base::template get_parameter<value_type>("step_size")),
         m_tol(base::template get_parameter<value_type>("tolerance")),
         m_max_iter(base::template get_parameter<int>("max_iter")),
@@ -69,6 +68,7 @@ public:
       m_df.resize(s);
       m_J.resize(s, s);
     }
+    base::add_callback(&rk_integrator::compute, m_state).reads(m_rate, m_drate).drives(m_rate, m_drate);
   }
 
   static input_parameter_controller parameters() {

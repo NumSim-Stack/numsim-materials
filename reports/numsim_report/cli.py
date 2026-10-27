@@ -8,7 +8,8 @@ report.json
   parameters   values; every string "$name" in the document is replaced by parameters.name
   derived      expressions of the parameters ("E": "9 * K * G / (3 * K + G)")
   model        the material graph, a json_model document {"materials": [...]}
-  point        strain_source, stress_source; optional tangent_source, time_source
+  point        strain_source (or deformation_gradient_source), stress_source; optional tangent_source,
+               stress_property, tangent_property ("damaged_stress"), time_source
   record       extra columns wired to graph properties: "kappa": "j2::equivalent_plastic_strain";
                a rank-2 tensor gives six columns name_11 ... name_23, a component is selected with
                "j2::plastic_strain[1,1]" (1-based); columns are ordered by name
@@ -17,7 +18,7 @@ report.json
                points (strain states in order, the load factor counts segments); stress (target per
                unit load factor); tensors as components [11, 22, 33, 12, 13, 23]; steps per segment,
                scale (applies to the strains), dt;
-               tangent_every: finite-difference tangent check every n-th step (1; 0 = never)
+               tangent_every: finite-difference tangent check every n-th step (1; 0 = never), fd_step (1e-7)
   figures      title, text, columns, panels: kind line (x, y, reference, logy, xlabel, ylabel),
                residuals, iterations; case or cases (list or "*")
   checks       name, case/cases, value, expected (default 0), tolerance, relative, where;

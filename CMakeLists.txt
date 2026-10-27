@@ -32,6 +32,9 @@ option(NUMSIM_MATERIALS_BUILD_EXAMPLES  "Build the numsim-materials examples"   
 option(NUMSIM_MATERIALS_ENABLE_PLOTTING "Qt6 + QCustomPlot live plotting"       OFF)
 option(NUMSIM_MATERIALS_BUILD_REPORTS  "Build the material report generator"   OFF)
 option(NUMSIM_MATERIALS_INSTALL         "Install the library and its CMake package" ON)
+set(NUMSIM_MATERIALS_DEBUG_CHECKS AUTO CACHE STRING
+    "Read check and verification of constants: AUTO (off in Release, RelWithDebInfo, MinSizeRel), ON or OFF")
+set_property(CACHE NUMSIM_MATERIALS_DEBUG_CHECKS PROPERTY STRINGS AUTO ON OFF)
 set(NUMSIM_MATERIALS_REPORT_TESTS AUTO CACHE STRING
     "Report regression tests (Python 3 + numpy, figures: matplotlib): AUTO skips what is missing, ON requires it, OFF")
 set_property(CACHE NUMSIM_MATERIALS_REPORT_TESTS PROPERTY STRINGS AUTO ON OFF)
@@ -42,8 +45,8 @@ include(NumSimWarnings)
 
 set(NUMSIM_MATERIALS_NUMSIM_CORE_TAG "v1.0.0" CACHE STRING
     "numsim-core version (tag or commit) to fetch")
-set(NUMSIM_MATERIALS_TMECH_TAG "v1.2.0" CACHE STRING
-    "tmech version (tag or commit) to fetch")
+set(NUMSIM_MATERIALS_TMECH_TAG "46d8fdd3b919e823c4caa10cbffeb2acc5cd0329" CACHE STRING
+    "tmech version (tag or commit) to fetch; main after tmech#38 (eigen decomposition at repeated eigenvalues)")
 
 numsim_dependency(numsim-core
   TARGET numsim-core::numsim-core
@@ -85,6 +88,26 @@ else()
   message(STATUS "${PROJECT_NAME}: Eigen3 (installed)")
 endif()
 
+# Boost.Math (header only) for the Carlson elliptic integrals of the Eshelby tensors: an installed
+# Boost, otherwise the standalone Boost.Math headers (build interface only, like fetched Eigen).
+if(POLICY CMP0167)
+  cmake_policy(SET CMP0167 NEW)
+endif()
+find_package(Boost 1.74 QUIET)
+if(NOT TARGET Boost::headers)
+  FetchContent_Declare(
+    boost_math
+    GIT_REPOSITORY https://github.com/boostorg/math.git
+    GIT_TAG boost-1.83.0
+    GIT_SHALLOW TRUE
+    SOURCE_SUBDIR headers-only-do-not-configure
+  )
+  FetchContent_MakeAvailable(boost_math)
+  message(STATUS "${PROJECT_NAME}: Boost.Math (fetched boost-1.83.0 headers, standalone)")
+else()
+  message(STATUS "${PROJECT_NAME}: Boost.Math (installed Boost ${Boost_VERSION})")
+endif()
+
 add_library(${PROJECT_NAME} INTERFACE)
 add_library(${PROJECT_NAME}::${PROJECT_NAME} ALIAS ${PROJECT_NAME})
 
@@ -95,9 +118,25 @@ target_include_directories(${PROJECT_NAME}
 )
 
 target_compile_features(${PROJECT_NAME} INTERFACE cxx_std_23)
+# one value for every translation unit using the target: the checks change inline function bodies
+if(NUMSIM_MATERIALS_DEBUG_CHECKS STREQUAL "AUTO")
+  target_compile_definitions(${PROJECT_NAME} INTERFACE
+    NUMSIM_MATERIALS_DEBUG_CHECKS=$<IF:$<CONFIG:Release,RelWithDebInfo,MinSizeRel>,0,1>)
+elseif(NUMSIM_MATERIALS_DEBUG_CHECKS)
+  target_compile_definitions(${PROJECT_NAME} INTERFACE NUMSIM_MATERIALS_DEBUG_CHECKS=1)
+else()
+  target_compile_definitions(${PROJECT_NAME} INTERFACE NUMSIM_MATERIALS_DEBUG_CHECKS=0)
+endif()
 target_link_libraries(${PROJECT_NAME} INTERFACE
   numsim-core::numsim-core tmech::tmech nlohmann_json::nlohmann_json)
 set(NUMSIM_MATERIALS_EXPORTED_DEPS numsim-core tmech nlohmann_json)
+if(TARGET Boost::headers)
+  target_link_libraries(${PROJECT_NAME} INTERFACE Boost::headers)
+  list(APPEND NUMSIM_MATERIALS_EXPORTED_DEPS Boost)
+else()
+  target_include_directories(${PROJECT_NAME} SYSTEM INTERFACE $<BUILD_INTERFACE:${boost_math_SOURCE_DIR}/include>)
+  target_compile_definitions(${PROJECT_NAME} INTERFACE $<BUILD_INTERFACE:BOOST_MATH_STANDALONE=1>)
+endif()
 if(TARGET Eigen3::Eigen)
   target_link_libraries(${PROJECT_NAME} INTERFACE Eigen3::Eigen)
   list(APPEND NUMSIM_MATERIALS_EXPORTED_DEPS Eigen3)

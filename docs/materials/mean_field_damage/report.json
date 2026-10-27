@@ -1,0 +1,55 @@
+{
+  "title": "mean_field_strain and mean_field_composite_local_nonlinear with a damaging matrix",
+  "include": ["../standard_small_strain.json"],
+  "notes": "Mori-Tanaka with local strains (incremental: the local strains advance with the concentrations of the current tangents, so after a damage-loading reversal they do not retrace and the composite keeps a residual stress at zero strain, visible against the intact Mori-Tanaka): mean_field_strain produces the phase strains from the composite increment and the concentration tensors of the algorithmic tangents (the matrix phase reads its tangent over a local edge, the previous pass); the damage chain and the stiff spheres are evaluated at those strains; mean_field_composite_local_nonlinear averages them. The evaluator repeats the pass until mt::residual is below tolerance. The published tangent sum c_r C_r : A_r is first order in the strain increment (exact as it vanishes, see test_mean_field_local); across the damage-surface kinks a central difference does not approximate it, so the tangent check is off here.",
+  "parameters": {"Km": 3333.33, "Gm": 1153.85, "Ki": 166666.67, "Gi": 76923.08, "c": 0.3, "cm": 0.7, "kappa_0": 0.002, "beta": 30.0, "amplitude": 0.008, "tangent_every": 0},
+  "model": {"materials": [
+    {"type": "external_strain_source", "name": "strain"},
+    {"type": "constant_scalar", "name": "Km_", "value": "$Km"}, {"type": "constant_scalar", "name": "Gm_", "value": "$Gm"},
+    {"type": "constant_scalar", "name": "Ki_", "value": "$Ki"}, {"type": "constant_scalar", "name": "Gi_", "value": "$Gi"},
+    {"type": "isotropic_tangent", "name": "C_m", "K_source": "Km_", "G_source": "Gm_"},
+    {"type": "isotropic_tangent", "name": "C_i", "K_source": "Ki_", "G_source": "Gi_"},
+    {"type": "isotropic_moduli", "name": "moduli", "tangent_source": "C_m"},
+    {"type": "eshelby_sphere", "name": "sphere", "nu_source": "moduli", "nu_property": "poisson_ratio"},
+    {"type": "constant_scalar", "name": "c_", "value": "$c"},
+    {"type": "constant_scalar", "name": "cm_", "value": "$cm"},
+    {"type": "phase", "name": "matrix", "tangent_source": "damage", "tangent_property": "damaged_tangent", "tangent_edge": "local",
+     "initial_tangent_source": "C_m", "fraction_source": "cm_"},
+    {"type": "phase", "name": "spheres", "tangent_source": "C_i", "fraction_source": "c_", "eshelby_source": "sphere"},
+    {"type": "mean_field_strain", "name": "mt_strain", "strain_source": "strain", "phases": ["matrix", "spheres"], "kernel": {"type": "mori_tanaka"}},
+    {"type": "linear_elasticity", "name": "elastic", "strain_producer_name": "mt_strain", "strain_property": "strain_matrix", "K": "$Km", "G": "$Gm"},
+    {"type": "von_mises_state_function", "name": "state", "strain_source": "mt_strain", "strain_property": "strain_matrix"},
+    {"type": "strain_threshold_yield", "name": "yield", "state_source": "state", "kappa_critical": "$kappa_0"},
+    {"type": "exponential_damage_law", "name": "law", "yield_source": "yield", "kappa_0": "$kappa_0", "beta": "$beta"},
+    {"type": "isotropic_damage", "name": "damage", "elastic_source": "elastic", "damage_source": "law", "state_source": "state", "yield_source": "yield"},
+    {"type": "linear_stress", "name": "stiff", "tangent_source": "C_i", "strain_source": "mt_strain", "strain_property": "strain_spheres"},
+    {"type": "mean_field_composite_local_nonlinear", "name": "mt", "phases": [
+      {"concentration": "mt_strain::concentration_matrix", "stress": "damage::damaged_stress", "tangent": "damage::damaged_tangent",
+       "fraction": "matrix::volume_fraction", "used_tangent": "matrix::tangent"},
+      {"concentration": "mt_strain::concentration_spheres", "stress": "stiff::stress", "tangent": "C_i::tangent", "fraction": "spheres::volume_fraction"}]},
+    {"type": "phase", "name": "matrix_intact", "tangent_source": "C_m", "fraction_source": "cm_"},
+    {"type": "mean_field_composite_global", "name": "mt_intact", "phases": ["matrix_intact", "spheres"], "kernel": {"type": "mori_tanaka"}},
+    {"type": "linear_stress", "name": "intact", "tangent_source": "mt_intact", "strain_source": "strain"}]},
+  "point": {"strain_source": "strain", "stress_source": "mt", "residual_source": "mt::residual", "residual_tolerance": 1e-10, "max_passes": 200},
+  "record": {"d": "law::damage", "eps_m": "mt_strain::strain_matrix", "eps_i": "mt_strain::strain_spheres", "sig_m": "damage::damaged_stress", "sig_i": "stiff::stress", "res": "mt::residual", "sig_intact": "intact::stress"},
+  "checks": [
+    {"name": "local strains partition the composite strain", "cases": "*", "value": "(1 - c) * eps_m_11 + c * eps_i_11", "expected": "strain_11", "tolerance": 1e-10, "relative": true},
+    {"name": "stress is the phase average", "cases": "*", "value": "(1 - c) * sig_m_11 + c * sig_i_11", "expected": "stress_11", "tolerance": 1e-10, "relative": true},
+    {"name": "every step ends at the fixed point", "cases": "*", "value": "np.max(res)", "tolerance": 1e-10},
+    {"name": "on first loading the damaged composite is softer than the intact one", "case": "uniaxial_strain", "value": "np.maximum(abs(stress_11) - abs(sig_intact_11), 0)", "where": "np.arange(strain_11.size) <= np.argmax(strain_11)", "tolerance": 1e-9},
+    {"name": "the matrix damages under uniaxial strain", "case": "uniaxial_strain", "value": "np.max(d)", "expected": 0.3, "tolerance": 0.7, "plot": {"x": "strain_11", "y": "d", "xlabel": "ε₁₁", "ylabel": "D"}}
+  ],
+  "figures": [
+    {"title": "The nonlinear composite against the intact one", "panels": [
+      {"title": "composite stress, uniaxial strain", "case": "uniaxial_strain", "x": "strain_11", "xlabel": "ε₁₁", "ylabel": "σ₁₁",
+       "y": [{"expr": "stress_11", "label": "damaging matrix (local)"}, {"expr": "sig_intact_11", "label": "intact Mori-Tanaka"}]},
+      {"title": "phase stresses, uniaxial strain", "case": "uniaxial_strain", "x": "strain_11", "xlabel": "ε₁₁", "ylabel": "σ₁₁",
+       "y": [{"expr": "sig_m_11", "label": "matrix"}, {"expr": "sig_i_11", "label": "spheres"}, {"expr": "stress_11", "label": "composite"}]},
+      {"title": "damage of the matrix", "case": "uniaxial_strain", "x": "strain_11", "y": [{"expr": "d", "label": "D"}], "xlabel": "ε₁₁"},
+      {"title": "composite stress, uniaxial stress", "case": "uniaxial_stress", "x": "strain_11", "xlabel": "ε₁₁", "ylabel": "σ₁₁",
+       "y": [{"expr": "stress_11", "label": "damaging matrix (local)"}, {"expr": "sig_intact_11", "label": "intact Mori-Tanaka"}]}]},
+    {"title": "Local strains", "panels": [
+      {"title": "uniaxial strain", "case": "uniaxial_strain", "x": "strain_11", "y": ["eps_m_11", "eps_i_11", "strain_11"], "xlabel": "ε₁₁"},
+      {"title": "uniaxial stress", "case": "uniaxial_stress", "x": "strain_11", "y": ["eps_m_11", "eps_i_11", "strain_11"], "xlabel": "ε₁₁"}]}
+  ]
+}

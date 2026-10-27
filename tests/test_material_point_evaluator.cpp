@@ -5,6 +5,7 @@
 #include "numsim-materials/umat/tensor_conversion.h"
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_context.h"
+#include "numsim-materials/core/parameter_helpers.h"
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/materials/linear_isotropic_hardening.h"
 #include "numsim-materials/materials/tensor_component_stepper.h"
@@ -164,6 +165,63 @@ TEST(MaterialPointEvaluator, ReproducesStepperDrivenTrajectory) {
 /// A UMAT is re-called on unconverged global iterates. Calling twice with the
 /// same STATEV must give the same answer — if any state leaked across the call
 /// boundary, the second result would drift.
+/// Throws when the strain's norm exceeds "limit": a material failing on too large an increment.
+template <typename Traits>
+class fuse final : public nm::material_base<fuse<Traits>, Traits> {
+public:
+  using base = nm::material_base<fuse<Traits>, Traits>;
+  using value_type = typename base::value_type;
+  using input_parameter_controller = typename base::input_parameter_controller;
+
+  template <typename... Args>
+  explicit fuse(Args&&... args)
+      : base(std::forward<Args>(args)...), m_ok(base::template add_output<value_type>("ok")),
+        m_strain(base::template add_input<tensor2>("stepper", "strain")),
+        m_limit(base::template get_parameter<value_type>("limit")) {
+    base::add_callback(&fuse::check, m_ok).reads(m_strain);
+  }
+
+  static input_parameter_controller parameters() {
+    input_parameter_controller para{base::parameters()};
+    nm::required<value_type>(para, "limit");
+    return para;
+  }
+
+  void check() {
+    if (tmech::norm(m_strain.get()) > m_limit)
+      throw std::runtime_error("fuse: increment too large");
+    m_ok = 1;
+  }
+
+private:
+  value_type& m_ok;
+  nm::input_property<tensor2, nm::property_traits> const& m_strain;
+  value_type const& m_limit;
+};
+
+/// A failed call leaves the context failed; the next call reloads STATEV and runs (#187).
+TEST(MaterialPointEvaluator, ACallAfterAFailedOneStartsFromStatev) {
+  ctx_type failing, fresh;
+  for (auto* ctx : {&failing, &fresh}) {
+    param_type p;
+    p.insert<std::string>("name", "fuse");
+    p.insert<T>("limit", 0.5);
+    ctx->create<fuse<policy>>(p);
+    build_j2(*ctx);
+  }
+  evaluator eval(failing, j2_config()), reference(fresh, j2_config());
+  std::vector<T> statev(eval.nstatv(), 0.0), statev_ref(statev);
+  T stran[6] = {0, 0, 0, 0, 0, 0};
+  const T too_large[6] = {1.0, 0, 0, 0, 0, 0}, dstran[6] = {0.01, -0.0025, 0.0, 0.005, 0.0, 0.0};
+  T stress[6], ddsdde[36], stress_ref[6], ddsdde_ref[36];
+  EXPECT_THROW(eval.evaluate({.stran = stran, .dstran = too_large, .stress = stress, .ddsdde = ddsdde, .statev = statev}),
+               std::runtime_error);
+  ASSERT_NO_THROW(eval.evaluate({.stran = stran, .dstran = dstran, .stress = stress, .ddsdde = ddsdde, .statev = statev}));
+  reference.evaluate({.stran = stran, .dstran = dstran, .stress = stress_ref, .ddsdde = ddsdde_ref, .statev = statev_ref});
+  for (std::size_t i = 0; i < 6; ++i) EXPECT_DOUBLE_EQ(stress[i], stress_ref[i]) << i;
+  for (std::size_t i = 0; i < statev.size(); ++i) EXPECT_DOUBLE_EQ(statev[i], statev_ref[i]) << i;
+}
+
 TEST(MaterialPointEvaluator, RepeatedCallOnSameStateIsIdempotent) {
   ctx_type ctx;
   build_j2(ctx);

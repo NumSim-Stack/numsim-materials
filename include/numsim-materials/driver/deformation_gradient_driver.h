@@ -43,21 +43,28 @@ public:
   static input_parameter_controller parameters() {
     input_parameter_controller para;
     required<std::string>(para, "deformation_gradient_source");    // external_deformation_gradient_source
-    required<std::string>(para, "stress_source");                  // material publishing "stress" (P)
-    optional<std::string>(para, "tangent_source", std::string{});  // publishing "tangent" (dP/dF); empty: stress_source
+    required<std::string>(para, "stress_source");                  // material publishing stress_property (P)
+    optional<std::string>(para, "tangent_source", std::string{});  // publishing tangent_property (dP/dF); empty: stress_source
+    optional<std::string>(para, "stress_property", std::string{"stress"});   // e.g. "damaged_stress"
+    optional<std::string>(para, "tangent_property", std::string{"tangent"});
     optional<std::string>(para, "time_source", std::string{});     // external_scalar_source; empty: none
     optional<value_type>(para, "tolerance", value_type{1e-10});    // on |M:(P - P*)| relative to |P|
     optional<int>(para, "max_iter", 25);
     optional<value_type>(para, "fd_step", value_type{1e-7});       // perturbation of F in tangent_error()
+    // passed to the material point (same defaults): a fixed point of the graph, e.g. "scs::residual"
+    optional<std::string>(para, "residual_source", std::string{});
+    optional<value_type>(para, "residual_tolerance", value_type{1e-10});
+    optional<int>(para, "max_passes", 100);
     return para;
   }
 
   deformation_gradient_driver(material_context<Traits> &ctx, parameter_handler parameters)
       : m_parameters(checked(std::move(parameters))), m_point(ctx, point_parameters()),
         m_F(m_point.template input<external_deformation_gradient_source<Traits>>(text("deformation_gradient_source"))),
-        m_stress(m_point.template output<tensor2>(text("stress_source"), "stress")),
+        m_stress(m_point.template output<tensor2>(text("stress_source"), text("stress_property"))),
         m_tangent(m_point.template output<tensor4>(
-            text("tangent_source").empty() ? text("stress_source") : text("tangent_source"), "tangent")),
+            text("tangent_source").empty() ? text("stress_source") : text("tangent_source"),
+            text("tangent_property"))),
         m_tolerance(m_parameters.template get<value_type>("tolerance")),
         m_max_iter(m_parameters.template get<int>("max_iter")),
         m_fd_step(m_parameters.template get<value_type>("fd_step")) {
@@ -128,13 +135,16 @@ private:
 
   std::string const &text(std::string const &key) const { return m_parameters.template get<std::string>(key); }
 
-  /// The point's inputs: the kinematics source and the optional time source.
+  /// The point's inputs (the kinematics source and the optional time source) and residual settings.
   parameter_handler point_parameters() const {
     std::vector<std::string> inputs{text("deformation_gradient_source")};
     if (!text("time_source").empty())
       inputs.push_back(text("time_source"));
     parameter_handler out;
     out.template insert<std::vector<std::string>>("inputs", std::move(inputs));
+    out.template insert<std::string>("residual_source", text("residual_source"));
+    out.template insert<value_type>("residual_tolerance", m_parameters.template get<value_type>("residual_tolerance"));
+    out.template insert<int>("max_passes", m_parameters.template get<int>("max_passes"));
     return out;
   }
 

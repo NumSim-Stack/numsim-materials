@@ -22,14 +22,16 @@ public:
   template <typename... Args>
   explicit neo_hooke(Args&&... args)
       : base(std::forward<Args>(args)...),
-        m_P(base::template add_output<tensor2>("stress", &neo_hooke::update)),
+        m_P(base::template add_output<tensor2>("stress")),
         m_A(base::template add_output<tensor4>("tangent")),
         m_K(base::template get_parameter<value_type>("K")),
         m_G(base::template get_parameter<value_type>("G")),
         m_F_name(base::template get_parameter<std::string>("deformation_gradient_source")),
         m_F(base::template add_input<tensor2>(m_F_name, "deformation_gradient", EdgeKind::Global)),
         m_F_inv(base::template add_input<tensor2>(m_F_name, "inverse", EdgeKind::Global)),
-        m_J(base::template add_input<value_type>(m_F_name, "determinant", EdgeKind::Global)) {}
+        m_J(base::template add_input<value_type>(m_F_name, "determinant", EdgeKind::Global)) {
+    base::add_callback(&neo_hooke::update, m_P, m_A).reads(m_F, m_F_inv, m_J);
+  }
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};

@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include <cmath>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -37,11 +38,13 @@ public:
 
   template <typename... Args>
   explicit memory(Args &&...args)
-      : base(std::forward<Args>(args)...), m_stress(base::template add_output<tensor2>("stress", &memory::compute)),
+      : base(std::forward<Args>(args)...), m_stress(base::template add_output<tensor2>("stress")),
         m_count(base::template add_history_output<value_type>("count")),
         m_last(base::template add_history_output<tensor2>("last")),
         m_limit(base::template get_parameter<value_type>("limit")),
-        m_strain(base::template add_input<tensor2>("strain", "strain", nm::EdgeKind::Global)) {}
+        m_strain(base::template add_input<tensor2>("strain", "strain", nm::EdgeKind::Global)) {
+    base::add_callback(&memory::compute, m_stress, m_count, m_last).reads(m_strain);
+  }
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
@@ -75,8 +78,10 @@ public:
 
   template <typename... Args>
   explicit relaxer(Args &&...args)
-      : base(std::forward<Args>(args)...), m_x(base::template add_output<value_type>("x", &relaxer::compute)),
-        m_residual(base::template add_output<value_type>("residual")) {}
+      : base(std::forward<Args>(args)...), m_x(base::template add_output<value_type>("x")),
+        m_residual(base::template add_output<value_type>("residual")) {
+    base::add_callback(&relaxer::compute, m_x, m_residual).reads().stateful(); // moves from its last value
+  }
 
   static input_parameter_controller parameters() { return input_parameter_controller{base::parameters()}; }
 
@@ -258,6 +263,21 @@ TEST(MaterialPoint, EngineOwnedHistoryNeedsNoHostLayout) {
   point.accept();
   EXPECT_EQ(point.history<int>("tag", "count").new_value(), 2);
   EXPECT_THROW(static_cast<void>(point.history_width()), nm::umat::fatal_error) << "an int has no STATEV layout";
+}
+
+TEST(MaterialPoint, CheckpointsThroughStreams) {
+  setup s, restarted;
+  point_type point{s.ctx, strain_input()};
+  trial(point, 0, 1);
+  point.accept();
+  std::stringstream checkpoint;
+  point.save(checkpoint);
+  auto const expected{trial(point, 1, 2)};
+
+  point_type copy{restarted.ctx, strain_input()};
+  copy.load(checkpoint);
+  EXPECT_EQ(trial(copy, 1, 2), expected);
+  EXPECT_EQ(copy.history<T>("mem", "count").new_value(), 2);
 }
 
 TEST(MaterialPoint, IteratesToTheResidual) {
