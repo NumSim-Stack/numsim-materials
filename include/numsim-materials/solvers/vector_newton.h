@@ -120,7 +120,7 @@ public:
     // Graph-driven mode: solve() is bound to the first unknown so that a downstream
     // update_source() on it drives the iteration, as backward_euler does with
     // "delta".
-    base::add_callback(&vector_newton::update, m_written).reads(m_reads);
+    base::add_callback(&vector_newton::update, m_written).reads(m_reads).drives(m_reads);
   }
 
   static input_parameter_controller parameters() {

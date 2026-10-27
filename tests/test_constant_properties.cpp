@@ -939,3 +939,289 @@ TEST(CallbackEdges, CallbacksOfOneMaterialFormNoFalseCycle) {
   ctx.update();
   EXPECT_EQ(ctx.get<T>("pair", "a"), 2.0 * 3.0);
 }
+
+namespace {
+/// "count" = the call count of the counter named by "target", reached through a material_ref, not an input.
+template <typename Traits>
+class referrer final : public nm::material_base<referrer<Traits>, Traits> {
+public:
+  using base = nm::material_base<referrer<Traits>, Traits>;
+  using value_type = typename base::value_type;
+  using input_parameter_controller = typename base::input_parameter_controller;
+
+  template <typename... Args>
+  explicit referrer(Args &&...args)
+      : base(std::forward<Args>(args)...), m_count(base::template add_output<value_type>("count")),
+        m_target(base::template add_material_ref<counter<Traits>>(base::template get_parameter<std::string>("target"))) {
+    base::add_callback(&referrer::compute, m_count).reads();
+  }
+
+  static input_parameter_controller parameters() {
+    input_parameter_controller para{base::parameters()};
+    nm::required<std::string>(para, "target");
+    return para;
+  }
+
+  void compute() { m_count = m_target.get().calls; }
+
+private:
+  value_type &m_count;
+  nm::material_ref<counter<Traits>, Traits> &m_target;
+};
+
+} // namespace
+
+TEST(HiddenDependencies, AMaterialReachedByReferenceKeepsItsReaderVarying) {
+  ctx_type ctx;
+  param_type p;
+  p.insert<std::string>("name", "r");
+  p.insert<std::string>("target", "b");
+  ctx.create<referrer<policy>>(p); // created first: only an edge runs it after b's source
+  p.clear();
+  p.insert<std::string>("name", "x");
+  auto &x{ctx.create<nm::external_scalar_source<policy>>(p)};
+  make(ctx, "b", reading("x", "state"));
+  ctx.finalize();
+  x.bind(0.0, 1.0);
+  ctx.update();
+  EXPECT_FALSE(ctx.is_constant("r", "count"));
+}
+
+namespace {
+/// "r" = x::state (+ 0 * solver::y with "unknown"): the function a solver reruns; "grouped" fills "j" and "r"
+/// from one callback bound to "j".
+template <typename Traits>
+class function final : public nm::material_base<function<Traits>, Traits> {
+public:
+  using base = nm::material_base<function<Traits>, Traits>;
+  using value_type = typename base::value_type;
+  using input_parameter_controller = typename base::input_parameter_controller;
+
+  template <typename... Args>
+  explicit function(Args &&...args)
+      : base(std::forward<Args>(args)...), m_j(base::template add_output<value_type>("j")),
+        m_r(base::template add_output<value_type>("r")), m_x(base::template add_input<value_type>("x", "state")) {
+    if (auto const &unknown{base::template get_parameter<std::string>("unknown")}; !unknown.empty())
+      m_y = &base::template add_input<value_type>(unknown, "y");
+    if (base::template get_parameter<bool>("grouped"))
+      base::add_callback(&function::compute, m_j, m_r).reads(m_x, m_y);
+    else
+      base::add_callback(&function::compute, m_r, m_j).reads(m_x, m_y);
+  }
+
+  static input_parameter_controller parameters() {
+    input_parameter_controller para{base::parameters()};
+    nm::optional<std::string>(para, "unknown", std::string{});
+    nm::optional<bool>(para, "grouped", false);
+    return para;
+  }
+
+  void compute() {
+    m_r = m_x.get() + (m_y ? 0 * m_y->get() : value_type{0});
+    m_j = 1;
+  }
+
+private:
+  value_type &m_j, &m_r;
+  nm::input_property<value_type, nm::property_traits> const &m_x;
+  nm::input_property<value_type, nm::property_traits> const *m_y{nullptr};
+};
+
+/// "x" = f::r after rerunning f, "y" = 2 x: one callback filling two unknowns. "mode" declares wrongly:
+/// "before_reads" drives first, "global" drives a global input, "twice" drives twice.
+template <typename Traits>
+class two_unknowns final : public nm::material_base<two_unknowns<Traits>, Traits> {
+public:
+  using base = nm::material_base<two_unknowns<Traits>, Traits>;
+  using value_type = typename base::value_type;
+  using input_parameter_controller = typename base::input_parameter_controller;
+
+  template <typename... Args>
+  explicit two_unknowns(Args &&...args)
+      : base(std::forward<Args>(args)...), m_x(base::template add_output<value_type>("x")),
+        m_y(base::template add_output<value_type>("y")),
+        m_r(base::template add_input<value_type>("f", "r", mode() == "global" ? nm::EdgeKind::Global : nm::EdgeKind::Local)) {
+    auto handle{base::add_callback(&two_unknowns::solve, m_x, m_y)};
+    if (mode() == "before_reads")
+      handle.drives(m_r);
+    else
+      handle.reads(m_r).drives(m_r);
+    if (mode() == "twice")
+      handle.drives(m_r);
+  }
+
+  static input_parameter_controller parameters() {
+    input_parameter_controller para{base::parameters()};
+    nm::optional<std::string>(para, "mode", std::string{"ok"});
+    return para;
+  }
+
+  void solve() {
+    m_r.update_source();
+    m_x = m_r.get();
+    m_y = 2 * m_x;
+  }
+
+private:
+  std::string const &mode() const { return base::template get_parameter<std::string>("mode"); }
+  value_type &m_x, &m_y;
+  nm::input_property<value_type, nm::property_traits> const &m_r;
+};
+
+struct solved {
+  ctx_type ctx;
+  explicit solved(bool reads_unknown, bool grouped = false, std::string const &mode = "ok") {
+    param_type p;
+    p.insert<std::string>("name", "s");
+    p.insert<std::string>("mode", mode);
+    ctx.create<two_unknowns<policy>>(p); // created first: only edges order it
+    p.clear();
+    p.insert<std::string>("name", "x");
+    ctx.create<nm::external_scalar_source<policy>>(p).bind(0.0, 2.0);
+    p.clear();
+    p.insert<std::string>("name", "f");
+    p.insert<std::string>("unknown", reads_unknown ? "s" : "");
+    p.insert<bool>("grouped", grouped);
+    ctx.create<function<policy>>(p);
+  }
+};
+} // namespace
+
+TEST(HiddenDependencies, AFunctionReadingASecondUnknownFormsNoCycle) {
+  solved s{true};
+  ASSERT_NO_THROW(s.ctx.finalize());
+  s.ctx.update();
+  EXPECT_EQ(s.ctx.get<T>("s", "x"), 2.0);
+  EXPECT_EQ(s.ctx.get<T>("s", "y"), 4.0);
+}
+
+TEST(HiddenDependencies, DrivingAGroupedOutputRerunsItsWriter) {
+  solved s{false, true};
+  s.ctx.finalize();
+  s.ctx.update();
+  EXPECT_EQ(s.ctx.get<T>("s", "x"), 2.0);
+}
+
+TEST(HiddenDependencies, DrivesNeedsReadsFirst) {
+  EXPECT_THAT_MESSAGE(solved(false, false, "before_reads"), std::logic_error, "before its reads");
+}
+
+TEST(HiddenDependencies, DrivesNeedsALocalInput) {
+  EXPECT_THAT_MESSAGE(solved(false, false, "global"), std::logic_error, "over a local edge");
+}
+
+TEST(HiddenDependencies, DrivesOnce) {
+  EXPECT_THAT_MESSAGE(solved(false, false, "twice"), std::logic_error, "twice");
+}
+
+TEST(HiddenDependencies, AReferenceToVaryingStateKeepsItsReaderVarying) {
+  ctx_type ctx;
+  ctx.verify_constants(false); // counts the calls
+  param_type p;
+  p.insert<bool>("constant", false);
+  make(ctx, "b", p); // no inputs, but runs on every update
+  p.clear();
+  p.insert<std::string>("name", "r");
+  p.insert<std::string>("target", "b");
+  ctx.create<referrer<policy>>(p);
+  ctx.finalize();
+  for (int i{0}; i < 3; ++i)
+    ctx.update();
+  EXPECT_FALSE(ctx.is_constant("r", "count"));
+  EXPECT_EQ(ctx.get<T>("r", "count"), 3.0);
+}
+
+TEST(HiddenDependencies, AReferenceToConstantsStaysConstant) {
+  ctx_type ctx;
+  make(ctx, "b");
+  param_type p;
+  p.insert<std::string>("name", "r");
+  p.insert<std::string>("target", "b");
+  ctx.create<referrer<policy>>(p);
+  ctx.finalize();
+  ctx.update();
+  EXPECT_TRUE(ctx.is_constant("b", "value"));
+  EXPECT_TRUE(ctx.is_constant("r", "count"));
+}
+
+namespace {
+/// "value" from a callback, "bare" from none: a material that reaches it through a reference fills it.
+template <typename Traits>
+class bare_target final : public nm::material_base<bare_target<Traits>, Traits> {
+public:
+  using base = nm::material_base<bare_target<Traits>, Traits>;
+  using value_type = typename base::value_type;
+
+  template <typename... Args>
+  explicit bare_target(Args &&...args)
+      : base(std::forward<Args>(args)...), m_value(base::template add_output<value_type>("value")),
+        m_bare(base::template add_output<value_type>("bare")) {
+    base::add_callback(&bare_target::compute, m_value).reads().stateful();
+  }
+
+  void compute() { m_value = 1; }
+  value_type &bare() { return m_bare; }
+
+private:
+  value_type &m_value, &m_bare;
+};
+
+/// Writes 7 into "t::bare" through a material_ref; "reads_bare" also reads it back over a global input.
+template <typename Traits>
+class bare_filler final : public nm::material_base<bare_filler<Traits>, Traits> {
+public:
+  using base = nm::material_base<bare_filler<Traits>, Traits>;
+  using value_type = typename base::value_type;
+  using input_parameter_controller = typename base::input_parameter_controller;
+
+  template <typename... Args>
+  explicit bare_filler(Args &&...args)
+      : base(std::forward<Args>(args)...), m_done(base::template add_output<value_type>("done")),
+        m_target(base::template add_material_ref<bare_target<Traits>>("t")) {
+    if (base::template get_parameter<bool>("reads_bare"))
+      m_read = &base::template add_input<value_type>("t", "bare");
+    base::add_callback(&bare_filler::compute, m_done).reads(m_read).stateful();
+  }
+
+  static input_parameter_controller parameters() {
+    input_parameter_controller para{base::parameters()};
+    nm::optional<bool>(para, "reads_bare", false);
+    return para;
+  }
+
+  void compute() {
+    m_target.get().bare() = 7;
+    m_done = m_read ? m_read->get() : 1;
+  }
+
+private:
+  value_type &m_done;
+  nm::material_ref<bare_target<Traits>, Traits> &m_target;
+  nm::input_property<value_type, nm::property_traits> const *m_read{nullptr};
+};
+
+void make_bare(ctx_type &ctx, bool reads_bare) {
+  make(ctx, "c", reading("t", "bare")); // created first: only an edge runs it after the filler
+  param_type p;
+  p.insert<std::string>("name", "t");
+  ctx.create<bare_target<policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "filler");
+  p.insert<bool>("reads_bare", reads_bare);
+  ctx.create<bare_filler<policy>>(p);
+}
+} // namespace
+
+TEST(HiddenDependencies, ABareOutputOfATargetWithCallbacksRunsAfterItsFiller) {
+  ctx_type ctx;
+  make_bare(ctx, false);
+  ctx.finalize();
+  ctx.update();
+  EXPECT_EQ(value_of(ctx, "c"), 7.0);
+}
+
+TEST(HiddenDependencies, AFillerReadingTheBareOutputFormsNoCycle) {
+  ctx_type ctx;
+  make_bare(ctx, true);
+  EXPECT_NO_THROW(ctx.finalize());
+}

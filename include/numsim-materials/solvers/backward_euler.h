@@ -45,7 +45,7 @@ public:
         m_jacobian(base::template add_input<value_type>(
             m_func_name, "jacobian", EdgeKind::Local))
   {
-    base::add_callback(&backward_euler::update, m_delta).reads(m_residual, m_jacobian);
+    base::add_callback(&backward_euler::update, m_delta).reads(m_residual, m_jacobian).drives(m_residual, m_jacobian);
   }
 
   static input_parameter_controller parameters() {

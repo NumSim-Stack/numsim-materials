@@ -82,7 +82,7 @@ public:
       m_diag[i] = m_tableau.a(i, i);
       m_is_implicit[i] = std::abs(m_diag[i]) >= 1e-30;
     }
-    base::add_callback(&j2_rk_plasticity::compute, m_stress, m_tangent, m_eps_p, m_kappa).reads(m_strain, m_H, m_dH);
+    base::add_callback(&j2_rk_plasticity::compute, m_stress, m_tangent, m_eps_p, m_kappa).reads(m_strain, m_H, m_dH).drives(m_H, m_dH);
   }
 
   static input_parameter_controller parameters() {

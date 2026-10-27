@@ -89,7 +89,7 @@ public:
         m_C_e(plasticity_detail::make_isotropic_tangent<value_type, Dim>(
             m_K, m_G))
   {
-    base::add_callback(&j2_plasticity::compute, m_stress, m_tangent, m_eps_p, m_kappa).reads(m_strain, m_H, m_dH);
+    base::add_callback(&j2_plasticity::compute, m_stress, m_tangent, m_eps_p, m_kappa).reads(m_strain, m_H, m_dH).drives(m_H, m_dH);
   }
 
   /// m_C_e above is the elastic stiffness, built here rather than read from

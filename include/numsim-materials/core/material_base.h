@@ -137,6 +137,16 @@ protected:
       return *this;
     }
 
+    /// The callback reruns the callbacks behind these local inputs (update_source()): it runs after whatever
+    /// they read globally, as backward_euler after the time step its residual reads. After reads().
+    template <typename... Inputs>
+    callback_handle& drives(Inputs const&... inputs) {
+      std::vector<input_wire_base const*> driven;
+      (collect(driven, inputs), ...);
+      m_owner.declare_drives(m_outputs.front(), std::move(driven));
+      return *this;
+    }
+
     /// The callback keeps state of its own or acts outside its outputs (it adds to its last value, records a
     /// row): it runs on every update, however constant its reads are.
     callback_handle& stateful() {
