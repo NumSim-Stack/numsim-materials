@@ -168,7 +168,7 @@ class Converter:
                 tangents.append((material, tangent_property))
             phases.append(self.add(phase))
         self.add({"type": "mean_field_strain", "name": strain_node, "strain_source": self.strain_source,
-                  "matrix": phases[0], "phases": phases[1:], "kernel": kernel})
+                  "phases": phases, "kernel": {"type": kernel}})
         if kernel != "voigt":
             self.residual = f"{name}::residual"
         if len({(sp, tp) for (_, sp), (_, tp) in zip(stresses[1:], tangents[1:])}) > 1:

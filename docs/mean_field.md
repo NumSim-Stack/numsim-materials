@@ -22,7 +22,7 @@ an evolving fraction) the consumers follow. A mean-field scheme is a **kernel ob
 | `phase` | `tangent_source`, `fraction_source`, optional `eshelby_source`, `depolarisation_source` (`tangent_edge`, `initial_tangent_source`) | `tangent`, `volume_fraction`, `eshelby`, `depolarisation` |
 | `mean_field_composite_global` | `phases` (matrix first), `kernel` {object} | `tangent`, `concentration_<phase>` |
 | `short_fibre_composite` | `matrix`, `fibre`, `orientation`, `precision`, `averaging` | `tangent`, `concentration_matrix`, `concentration_fibre` |
-| `mean_field_strain` | `strain_source` (history), `matrix`, `phases`, `kernel` (voigt, reuss, hill, dilute, mori_tanaka) | `strain_<phase>` (history), `concentration_<phase>` |
+| `mean_field_strain` | `strain_source` (history), `phases` (matrix first), `kernel` {object} | `strain_<phase>` (history), `concentration_<phase>` |
 | `mean_field_stress` | `concentration_source`, `matrix`, `phases`, `matrix_stress_source`, `stress_sources`, `tangent_sources` | `stress`, `tangent`, `residual` |
 
 Every `<x>_source` names a material, every `<x>_property` the property on it (defaults: `tangent`, `value`,
@@ -126,9 +126,9 @@ strain ──► mean_field_strain ──strain_matrix──► matrix material 
 
 - `mean_field_strain` consumes the composite strain (history) and the phases' tangents, fractions and Eshelby
   tensors, and produces `strain_<phase>` = ε_r,ₙ + Aᵣ : Δε (history properties: commit, revert and the UMAT
-  state vector carry them) and `concentration_<phase>`. Its `kernel` is any of §3 — `voigt` (A = I, reads no
-  tangents), `reuss`, `hill` (Aᵣ = ℂᵣ⁻¹ : ℂ_R and the mean with I; no Eshelby tensors), `dilute`, `mori_tanaka`
-  — so the rule of mixtures localises through the same pair.
+  state vector carry them) and `concentration_<phase>`. Its `kernel` is the same object as in §3 — any of
+  `voigt`, `reuss`, `hill`, `dilute`, `mori_tanaka`, `self_consistent` — so with linear phases one pass equals
+  the global composite exactly; the self-consistent kernel converges its own fixed point inside every pass.
 - The phase materials consume those strains like any other strain: `"strain_source": "mt_strain",
   "strain_property": "strain_matrix"`. Every strain consumer takes `strain_property` (default `strain`).
 - `mean_field_stress` produces `stress` = Σ cᵣ σᵣ and `tangent` = Σ cᵣ ℂᵣ : Aᵣ from the materials' current
@@ -140,7 +140,7 @@ strain ──► mean_field_strain ──strain_matrix──► matrix material 
 §3 to round-off — with the phase strains and stresses available as properties:
 
 ```json
-{"type": "mean_field_strain", "name": "mt_strain", "strain_source": "strain", "matrix": "matrix", "phases": ["spheres"]},
+{"type": "mean_field_strain", "name": "mt_strain", "strain_source": "strain", "phases": ["matrix", "spheres"], "kernel": {"type": "mori_tanaka"}},
 {"type": "linear_stress", "name": "m", "tangent_source": "Cm", "strain_source": "mt_strain", "strain_property": "strain_matrix"},
 {"type": "linear_stress", "name": "s", "tangent_source": "Cf", "strain_source": "mt_strain", "strain_property": "strain_spheres"},
 {"type": "mean_field_stress", "name": "mt", "concentration_source": "mt_strain", "matrix": "matrix", "phases": ["spheres"],
@@ -154,7 +154,7 @@ local edge, starting from the elastic one:
 ```json
 {"type": "phase", "name": "matrix", "tangent_source": "damage", "tangent_property": "damaged_tangent",
  "tangent_edge": "local", "initial_tangent_source": "Cm", "fraction_source": "cm"},
-{"type": "mean_field_strain", "name": "mt_strain", "strain_source": "strain", "matrix": "matrix", "phases": ["spheres"]},
+{"type": "mean_field_strain", "name": "mt_strain", "strain_source": "strain", "phases": ["matrix", "spheres"], "kernel": {"type": "mori_tanaka"}},
 {"type": "linear_elasticity", "name": "elastic", "strain_producer_name": "mt_strain", "strain_property": "strain_matrix", "K": 3, "G": 1},
 {"type": "von_mises_state_function", "name": "state", "strain_source": "mt_strain", "strain_property": "strain_matrix"},
 {"type": "strain_threshold_yield", "name": "yield", "state_source": "state", "kappa_critical": 0.002},

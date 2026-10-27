@@ -82,11 +82,13 @@
         "type": "mean_field_strain",
         "name": "mt_strain",
         "strain_source": "strain",
-        "matrix": "matrix",
         "phases": [
+          "matrix",
           "spheres"
         ],
-        "kernel": "reuss"
+        "kernel": {
+          "type": "reuss"
+        }
       },
       {
         "type": "local_newton",

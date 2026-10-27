@@ -91,7 +91,7 @@ class ConvertTest(unittest.TestCase):
             top = by_name(doc, "rom")
             self.assertEqual((top["type"], top["concentration_source"]), ("mean_field_stress", "rom_strain"))
             strain = by_name(doc, "rom_strain")
-            self.assertEqual((strain["type"], strain["kernel"], strain["matrix"], strain["phases"]), ("mean_field_strain", kernel, "rom_material1", ["rom_material2"]))
+            self.assertEqual((strain["type"], strain["kernel"], strain["phases"]), ("mean_field_strain", {"type": kernel}, ["rom_material1", "rom_material2"]))
             damaged = by_name(doc, top["matrix_stress_source"])  # the damage material is the first phase
             self.assertEqual((damaged["type"], top["matrix_stress_property"], top["matrix_tangent_property"]), ("isotropic_damage", "damaged_stress", "damaged_tangent"))
             state = by_name(doc, damaged["state_source"])  # the chain reads the phase strain
