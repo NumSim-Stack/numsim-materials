@@ -78,6 +78,7 @@ materials, so a hardening law is written once and reused by every return map.
 | `j2_plasticity` | von Mises radial return, closed-form consistent tangent |
 | `j2_rk_plasticity` | J2 integrated with a Runge-Kutta tableau (explicit or DIRK) |
 | `drucker_prager_plasticity` | Non-associated Drucker-Prager with an apex return |
+| `j2_kinematic_plasticity` | J2 with Armstrong-Frederick kinematic hardening, a coupled return map on `vector_newton` |
 | `linear_isotropic_hardening` | `σ_y = σ_0 + K·κ` |
 | `exponential_isotropic_hardening` | `σ_y = σ_0 + K_inf·(1 − e^(−δκ))` |
 | `local_newton` | Scalar Newton solver used by the return maps |
@@ -144,8 +145,8 @@ The types registered by `register_default_materials<policy>()`.
 (driven by `external_deformation_gradient_source`)
 
 **Plasticity** — `j2_plasticity`, `j2_rk_plasticity`,
-`drucker_prager_plasticity`, `linear_isotropic_hardening`,
-`exponential_isotropic_hardening`
+`drucker_prager_plasticity`, `j2_kinematic_plasticity`,
+`linear_isotropic_hardening`, `exponential_isotropic_hardening`
 
 **Damage** — `isotropic_damage`, `linear_damage_law`, `exponential_damage_law`,
 `strain_threshold_yield`, `von_mises_state_function`,

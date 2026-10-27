@@ -77,6 +77,29 @@ These used to arrive inside a `yield_function` **C++ object**, which the JSON
 reader cannot convert — so the material could not be configured from a document
 at all. As plain scalars it can (issue #33).
 
+### `j2_kinematic_plasticity`
+
+J2 with Armstrong-Frederick kinematic hardening, `β̇ = (2/3) C ε̇_p − γ β λ̇`,
+on top of the same isotropic `hardening_source`. The return map is a coupled
+system over `{Δλ, Δβ}` solved by a `vector_newton`:
+
+| parameter | meaning |
+|---|---|
+| `hardening_source`, `strain_source` | as for `j2_plasticity` |
+| `solver_source` | a `vector_newton` with `function` = this material, `graph_driven = false`, `strain_derivative = true`, `unknowns = [{dlambda, scalar}, {dbeta, sym_tensor}]` |
+| `K`, `G`, `sigma_0` | as for `j2_plasticity` |
+| `C` | kinematic hardening modulus |
+| `gamma` | recovery; `0` (the default) is Prager hardening |
+
+Outputs: `stress`, `tangent`, and the history `plastic_strain`,
+`equivalent_plastic_strain`, `back_stress`. The back stress is stress-like;
+`statev_map` exports it with the strain shear factor until #91 lands.
+
+With `gamma = 0` the return is radial in the shifted space and Newton lands on
+the closed form `Δλ = (q_tr − σ_0 − H_n)/(3G + C + H')` in one step from the
+trial seed. With `gamma > 0` the flow direction rotates during the step and the
+solve iterates; that is the case `vector_newton` exists for.
+
 ### `j2_rk_plasticity`
 
 Takes `K`, `G`, `sigma_0`, the two sources, plus `tolerance`, `max_iter` and a
@@ -395,6 +418,24 @@ topological sort, so the plasticity↔solver ordering is not an edge the engine
 knows about. That is safe only because `local_newton` holds **no per-solve
 state** — its `solve()` is `const` and returns everything it computes. Give it
 mutable state and the ordering becomes real and unenforced.
+
+**The same decision, applied to `vector_newton`.** `j2_kinematic_plasticity`
+holds its `vector_newton` by `material_ref` too and calls `solve()` only when
+the trial state yields. Two things make that work:
+
+- the solver is created with `graph_driven = false`, so the engine does not
+  also run a cold-start solve at every point, elastic ones included. The
+  material checks this at its first update and throws otherwise;
+- the material's residual callback is still a property the engine fires once
+  per update, at whatever the solver's unknowns hold. On an elastic step the
+  material therefore calls `vector_newton::reset()`, which zeroes the unknowns
+  and their strain derivatives: zero is the local solution there, and a stale
+  `Δλ` from the previous point would otherwise be added to this point's `κ`
+  through the hardening pull.
+
+`vector_newton` does hold per-solve state, unlike `local_newton`. It is all
+written by `solve()` and read back by the same `compute()` call, so the
+ordering the engine cannot see is contained in one callback.
 
 ## 10. Known gaps
 

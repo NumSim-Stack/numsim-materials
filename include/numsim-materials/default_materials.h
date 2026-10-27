@@ -13,6 +13,7 @@
 #include "numsim-materials/materials/props_scalar.h"
 #include "numsim-materials/materials/j2_plasticity.h"
 #include "numsim-materials/materials/j2_rk_plasticity.h"
+#include "numsim-materials/materials/j2_kinematic_plasticity.h"
 #include "numsim-materials/materials/drucker_prager_plasticity.h"
 #include "numsim-materials/materials/linear_isotropic_hardening.h"
 #include "numsim-materials/materials/exponential_isotropic_hardening.h"
@@ -146,6 +147,10 @@ void register_default_materials() {
   // over the yield-function type, so the registrable names are the classes.
   factory.template register_type<j2_plasticity<Traits>>("j2_plasticity");
   factory.template register_type<j2_rk_plasticity<Traits>>("j2_rk_plasticity");
+  // Kinematic hardening on vector_newton: the solver is named by solver_source
+  // and must be a vector_newton with graph_driven = false (see the header).
+  factory.template register_type<j2_kinematic_plasticity<Traits>>(
+      "j2_kinematic_plasticity");
 
   // Drucker-Prager was held back while its cone parameters arrived inside a
   // C++ "yield_function" object the JSON reader could not convert: a document
