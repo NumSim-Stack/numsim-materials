@@ -20,15 +20,19 @@ public:
 
   template <typename... Args>
   explicit depolarisation_tensor_base(Args &&...args)
-      : base(std::forward<Args>(args)...), m_N(base::template add_output<tensor2>("tensor")) {
-    base::constant_output(m_N);
-  }
+      : base(std::forward<Args>(args)...), m_N(base::template add_output<tensor2>("tensor")) {}
 
   static input_parameter_controller parameters() { return base::parameters(); }
 
 protected:
-  /// Derived calls this once its geometry parameters are read.
+  /// The tensor of the shape; the engine reruns it after set_parameter().
   void publish() { m_N = static_cast<Derived const &>(*this).shape(); }
+
+  /// Called by the shape's own constructor once its geometry is read: binding needs the most-derived object.
+  void register_output() {
+    publish();
+    base::add_callback(&depolarisation_tensor_base::publish, m_N).reads();
+  }
 
 private:
   tensor2 &m_N;
