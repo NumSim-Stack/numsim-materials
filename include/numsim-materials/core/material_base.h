@@ -50,10 +50,9 @@ public:
   material_base() = delete;
 
   material_base(parameter_handler const& parameter,
-                property_handler& property_handler,
-                material_handler& material_handler)
-      : base(parameter, property_handler),
-        m_material_handler(material_handler)
+                property_handler& properties,
+                material_handler& /*materials*/)
+      : base(parameter, properties)
   {
     // Validation only. Registration in the material handler happens in
     // object_store::create, AFTER the derived constructor has returned -- see
@@ -74,7 +73,6 @@ public:
   }
 
 protected:
-  material_handler& m_material_handler;
 
   /// Create an output property; add_callback() binds the callback that fills it.
   template<typename T>

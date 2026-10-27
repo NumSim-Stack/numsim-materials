@@ -537,7 +537,6 @@ namespace {
 /// yield residual of +10880, with no error. It became reachable from a deck
 /// when the tableau turned into a named parameter.
 TEST(J2RKScheme, RefusesAFullyImplicitTableau) {
-  using policy = numsim::materials::material_policy_default;
   numsim::materials::material_context<policy> ctx;
   policy::ParameterHandler p;
   p.insert<std::string>("name", "stepper");
@@ -564,7 +563,6 @@ TEST(J2RKScheme, RefusesAFullyImplicitTableau) {
 /// The DIRK and explicit schemes it CAN integrate must still be accepted, so
 /// the guard cannot pass by refusing everything.
 TEST(J2RKScheme, AcceptsEveryDirkAndExplicitScheme) {
-  using policy = numsim::materials::material_policy_default;
   for (const char* scheme : {"forward_euler", "explicit_midpoint", "rk4",
                              "implicit_euler", "implicit_midpoint",
                              "crank_nicolson", "sdirk3"}) {
@@ -607,13 +605,13 @@ TEST(J2RKScheme, AcceptsEveryDirkAndExplicitScheme) {
 /// isotropy argument in docs/plasticity.md rests on.
 template <std::size_t Dim>
 void expect_tangent_matches_shortcut(const char* label) {
-  using tensor2 = tmech::tensor<T, Dim, 2>;
-  constexpr T K{166.67}, G{76.92};
+  using tensor2_d = tmech::tensor<T, Dim, 2>;
+  constexpr T bulk{166.67}, shear{76.92};
   const auto C = numsim::materials::plasticity_detail::
-      make_isotropic_tangent<T, Dim>(K, G);
+      make_isotropic_tangent<T, Dim>(bulk, shear);
   const auto I = tmech::eye<T, Dim, 2>();
 
-  tensor2 x;
+  tensor2_d x;
   x.fill(T{0});
   x(0, 0) = T{0.03};
   x(1, 1) = T{-0.01};
@@ -621,9 +619,10 @@ void expect_tangent_matches_shortcut(const char* label) {
   x(1, 0) = T{0.02};
   if constexpr (Dim == 3) x(2, 2) = T{0.005};
 
-  const tensor2 shortcut{T{2} * G * tmech::dev(x) + K * tmech::trace(x) * I};
-  const tensor2 contracted{tmech::dcontract(C, x)};
-  const tensor2 diff{contracted - shortcut};
+  const tensor2_d shortcut{T{2} * shear * tmech::dev(x) +
+                           bulk * tmech::trace(x) * I};
+  const tensor2_d contracted{tmech::dcontract(C, x)};
+  const tensor2_d diff{contracted - shortcut};
   const T err = std::sqrt(tmech::dcontract(diff, diff));
   const T scale = std::sqrt(tmech::dcontract(shortcut, shortcut));
   EXPECT_LT(err, T{1e-12} * scale)

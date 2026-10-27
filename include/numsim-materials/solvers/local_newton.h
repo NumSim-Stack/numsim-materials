@@ -58,7 +58,7 @@ public:
   /// can forget and which goes stale between solves.
   /// Iterations of the last solve are published as "iterations" (for reports; an elastic step leaves it).
   template <typename Eval>
-  result solve(Eval&& eval, value_type x0 = value_type{}) const {
+  [[nodiscard]] result solve(Eval&& eval, value_type x0 = value_type{}) const {
     auto const r{m_solver.solve(std::forward<Eval>(eval), x0)};
     m_iterations = static_cast<value_type>(r.iterations);
     return r;

@@ -54,8 +54,7 @@ public:
     }
     // Exhausted the budget: the last step may still have landed on the root,
     // so the residual is checked once more rather than assumed bad.
-    const auto [residual, jacobian] = eval(r.x);
-    (void)jacobian;
+    [[maybe_unused]] const auto [residual, jacobian] = eval(r.x);
     r.converged = std::abs(residual) < m_tol;
     return r;
   }
