@@ -49,6 +49,10 @@ public:
     optional<value_type>(para, "tolerance", value_type{1e-10});    // on |M:(P - P*)| relative to |P|
     optional<int>(para, "max_iter", 25);
     optional<value_type>(para, "fd_step", value_type{1e-7});       // perturbation of F in tangent_error()
+    // passed to the material point (same defaults): a fixed point of the graph, e.g. "scs::residual"
+    optional<std::string>(para, "residual_source", std::string{});
+    optional<value_type>(para, "residual_tolerance", value_type{1e-10});
+    optional<int>(para, "max_passes", 100);
     return para;
   }
 
@@ -128,13 +132,16 @@ private:
 
   std::string const &text(std::string const &key) const { return m_parameters.template get<std::string>(key); }
 
-  /// The point's inputs: the kinematics source and the optional time source.
+  /// The point's inputs (the kinematics source and the optional time source) and residual settings.
   parameter_handler point_parameters() const {
     std::vector<std::string> inputs{text("deformation_gradient_source")};
     if (!text("time_source").empty())
       inputs.push_back(text("time_source"));
     parameter_handler out;
     out.template insert<std::vector<std::string>>("inputs", std::move(inputs));
+    out.template insert<std::string>("residual_source", text("residual_source"));
+    out.template insert<value_type>("residual_tolerance", m_parameters.template get<value_type>("residual_tolerance"));
+    out.template insert<int>("max_passes", m_parameters.template get<int>("max_passes"));
     return out;
   }
 

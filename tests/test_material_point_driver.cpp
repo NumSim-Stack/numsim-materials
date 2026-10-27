@@ -4,6 +4,7 @@
 #include <string>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_context.h"
+#include "numsim-materials/materials/constant_scalar.h"
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/materials/linear_isotropic_hardening.h"
 #include "numsim-materials/materials/exponential_isotropic_hardening.h"
@@ -32,8 +33,15 @@ constexpr T nu{(3 * K - 2 * G) / (2 * (3 * K + G))};
 constexpr T sigma_0{0.5}; // yields at about 2.5e-3
 constexpr T H{1000.0};
 
-void build_elastic(ctx_type& ctx) {
+/// `stuck`: a constant_scalar "stuck::value" of 1, a residual that never falls.
+void build_elastic(ctx_type& ctx, bool stuck = false) {
   param_type p;
+  if (stuck) {
+    p.insert<std::string>("name", "stuck");
+    p.insert<T>("value", 1);
+    ctx.create<nm::constant_scalar<policy>>(p);
+    p.clear();
+  }
   p.insert<std::string>("name", "strain");
   ctx.create<nm::external_strain_source<policy>>(p);
   p.clear();
@@ -271,6 +279,19 @@ TEST(MaterialPointDriver, ParametersAreChecked) {
   wrong.insert<std::string>("strain_source", "elastic");
   wrong.insert<std::string>("stress_source", "elastic");
   EXPECT_THROW(static_cast<void>(driver{ctx, wrong}), u::fatal_error) << "not a strain source";
+}
+
+TEST(MaterialPointDriver, PassesTheResidualSettingsToThePoint) {
+  ctx_type ctx;
+  build_elastic(ctx, true);
+  auto p{parameters_for("elastic")};
+  p.insert<std::string>("residual_source", "stuck::value");
+  p.insert<int>("max_passes", 3);
+  driver stuck{ctx, p};
+  EXPECT_THROW(static_cast<void>(stuck.step(axial(1e-3), tensor2{}, control::strain(), 0, 1)), u::cutback_error);
+  p.insert<T>("residual_tolerance", 2);
+  driver loose{ctx, p};
+  EXPECT_TRUE(loose.step(axial(1e-3), tensor2{}, control::strain(), 0, 1).converged);
 }
 
 } // namespace

@@ -55,6 +55,7 @@ add_numsim_test(test_scalar_producers test_scalar_producers.cpp)
 add_numsim_test(test_sphere_tools test_sphere_tools.cpp)
 add_numsim_test(test_depolarisation_materials test_depolarisation_materials.cpp)
 add_numsim_test(test_rule_of_mixture test_rule_of_mixture.cpp)
+add_numsim_test(test_mean_field_tangent test_mean_field_tangent.cpp)
 add_numsim_test(test_material_point test_material_point.cpp)
 
 # Data dumper for plotting (not a test — standalone executable)

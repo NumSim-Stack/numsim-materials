@@ -2,6 +2,7 @@
 #include <cmath>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_context.h"
+#include "numsim-materials/materials/constant_scalar.h"
 #include "numsim-materials/materials/neo_hooke.h"
 #include "numsim-materials/materials/saint_venant_kirchhoff.h"
 #include "numsim-materials/driver/deformation_gradient_driver.h"
@@ -25,9 +26,16 @@ constexpr T G{76.92};
 constexpr T E{9 * K * G / (3 * K + G)};
 constexpr T nu{(3 * K - 2 * G) / (2 * (3 * K + G))};
 
+/// `stuck`: a constant_scalar "stuck::value" of 1, a residual that never falls.
 template <typename Model>
-void build(ctx_type& ctx) {
+void build(ctx_type& ctx, bool stuck = false) {
   param_type p;
+  if (stuck) {
+    p.insert<std::string>("name", "stuck");
+    p.insert<T>("value", 1);
+    ctx.create<nm::constant_scalar<policy>>(p);
+    p.clear();
+  }
   p.insert<std::string>("name", "F");
   ctx.create<nm::external_deformation_gradient_source<policy>>(p);
   p.clear();
@@ -175,6 +183,19 @@ TEST(DeformationGradientDriver, InvalidSettingsAreFatal) {
   auto p{parameters()};
   p.insert<int>("max_iter", -1);
   EXPECT_THROW(static_cast<void>(driver{ctx, p}), u::fatal_error);
+}
+
+TEST(DeformationGradientDriver, PassesTheResidualSettingsToThePoint) {
+  ctx_type ctx;
+  build<nm::neo_hooke<policy>>(ctx, true);
+  auto p{parameters()};
+  p.insert<std::string>("residual_source", "stuck::value");
+  p.insert<int>("max_passes", 3);
+  driver stuck{ctx, p};
+  EXPECT_THROW(static_cast<void>(stuck.step(stretch(1.01), tensor2{}, control::deformation(), 0, 1)), u::cutback_error);
+  p.insert<T>("residual_tolerance", 2);
+  driver loose{ctx, p};
+  EXPECT_TRUE(loose.step(stretch(1.01), tensor2{}, control::deformation(), 0, 1).converged);
 }
 
 } // namespace
