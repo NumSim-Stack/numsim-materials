@@ -29,8 +29,7 @@ public:
   template <typename... Args>
   explicit strain_threshold_yield(Args&&... args)
       : base(std::forward<Args>(args)...),
-        m_kappa(base::template add_history_output<value_type>(
-            "kappa", &strain_threshold_yield::compute)),
+        m_kappa(base::template add_history_output<value_type>("kappa")),
         m_is_yielding(base::template add_output<int>("is_yielding")),
         m_kappa_critical(base::template get_parameter<value_type>("kappa_critical")),
         m_state_source(base::template get_parameter<std::string>("state_source")),
@@ -39,6 +38,7 @@ public:
   {
     m_kappa.old_value() = m_kappa_critical;
     m_kappa.new_value() = m_kappa_critical;
+    base::add_callback(&strain_threshold_yield::compute, m_kappa, m_is_yielding).reads(m_eps_eq);
   }
 
   static input_parameter_controller parameters() {

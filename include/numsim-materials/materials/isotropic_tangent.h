@@ -18,10 +18,7 @@ namespace numsim::materials {
 /// K_property/G_property if it does not publish under "value". Which one you
 /// wire IS the choice, so no flag can disagree with it.
 ///
-/// Rebuilds on every update: no memo, so no cached state to go stale. The pair
-/// costs ~315 ns per update against ~26 ns for linear_elasticity, which
-/// computes its tangent once — so where the moduli are fixed and 12x matters,
-/// that is still the cheaper material.
+/// A constant output: computed once when K and G are constant, on every update otherwise.
 template <typename Traits>
 class isotropic_tangent final
     : public material_base<isotropic_tangent<Traits>, Traits> {
@@ -35,8 +32,7 @@ public:
   template <typename... Args>
   explicit isotropic_tangent(Args&&... args)
       : base(std::forward<Args>(args)...),
-        m_C(base::template add_output<tensor4>(
-            "tangent", &isotropic_tangent::update_tangent)),
+        m_C(base::template add_output<tensor4>("tangent")),
         m_K(base::template add_input<value_type>(
             base::template get_parameter<std::string>("K_source"),
             base::template get_parameter<std::string>("K_property"),
@@ -44,7 +40,9 @@ public:
         m_G(base::template add_input<value_type>(
             base::template get_parameter<std::string>("G_source"),
             base::template get_parameter<std::string>("G_property"),
-            EdgeKind::Global)) {}
+            EdgeKind::Global)) {
+    base::add_callback(&isotropic_tangent::update_tangent, m_C).reads(m_K, m_G);
+  }
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
@@ -64,7 +62,7 @@ public:
     const auto I{tmech::eye<value_type, Dim, 2>()};
     const auto IIvol{tmech::otimes(I, I) / Dim};
     m_C = 3 * m_K.get() * IIvol +
-          2 * m_G.get() * plasticity_detail::make_IIdev<value_type, Dim>();
+          2 * m_G.get() * dev_projector<value_type, Dim>();
   }
 
 private:

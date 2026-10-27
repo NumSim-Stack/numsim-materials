@@ -1,0 +1,47 @@
+{
+  "title": "j2_plasticity",
+  "include": ["../standard_small_strain.json"],
+  "parameters": {"K": 166666.67, "G": 76923.08, "sigma_0": 250.0, "H": 1000.0},
+  "derived": {"E": "9 * K * G / (3 * K + G)"},
+  "model": {"materials": [
+    {"type": "external_strain_source", "name": "strain"},
+    {"type": "local_newton", "name": "solver"},
+    {"type": "linear_isotropic_hardening", "name": "hardening", "source": "j2", "K": "$H"},
+    {"type": "j2_plasticity", "name": "j2", "strain_source": "strain", "solver_source": "solver",
+     "hardening_source": "hardening", "K": "$K", "G": "$G", "sigma_0": "$sigma_0"}]},
+  "point": {"strain_source": "strain", "stress_source": "j2"},
+  "record": {"kappa": "j2::equivalent_plastic_strain", "eps_p": "j2::plastic_strain", "R": "hardening::hardening_stress",
+             "return_map_iterations": "solver::iterations"},
+  "cases": [
+    {"name": "uniaxial_stress_monotonic", "control": "uniaxial_stress", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], "scale": "$amplitude", "steps": "$steps"},
+    {"name": "tension_then_shear", "points": [[0, 0, 0, 0, 0, 0], [1, 0, 0, 0, 0, 0], [1, 0, 0, 1, 0, 0]], "scale": "$amplitude", "steps": "$steps", "tangent_every": "$tangent_every"}
+  ],
+  "studies": [
+    {"name": "radial return on a proportional path", "case": "uniaxial_stress_monotonic", "steps": [5, 10, 20, 40, 80], "quantity": "stress_11"},
+    {"name": "backward Euler on a non-proportional path", "case": "tension_then_shear", "steps": [5, 10, 20, 40, 80, 160, 320], "quantity": "stress_12", "min_order": 0.9}
+  ],
+  "checks": [
+    {"name": "bilinear σ11(ε11)", "case": "uniaxial_stress_monotonic", "value": "stress_11",
+     "expected": "np.where(strain_11 <= sigma_0 / E, E * strain_11, (strain_11 + sigma_0 / H) / (1 / E + 1 / H))", "tolerance": 1e-10, "relative": true, "plot": {"x": "strain_11"}},
+    {"name": "on or inside the yield surface", "cases": "*", "value": "np.maximum(q - sigma_0 - R, 0)", "tolerance": 1e-8},
+    {"name": "plastic incompressibility", "cases": "*", "value": "eps_p_11 + eps_p_22 + eps_p_33", "tolerance": 1e-15},
+    {"name": "κ never decreases", "cases": "*", "value": "np.minimum(np.diff(kappa, prepend=0), 0)", "tolerance": 0},
+    {"name": "R = H κ", "cases": "*", "value": "R", "expected": "H * kappa", "tolerance": 1e-12, "relative": true},
+    {"name": "hydrostatic loading stays elastic", "case": "hydrostatic_strain", "value": "kappa", "tolerance": 0}
+  ],
+  "figures": [
+    {"title": "Return map", "columns": 2,
+     "text": "Iterations of the material's own Newton (local_newton) per step; the property keeps its last value through elastic steps, so it is shown only where κ grows.",
+     "panels": [
+      {"title": "return-map iterations, uniaxial stress", "case": "uniaxial_stress", "x": "step",
+       "y": [{"expr": "np.where(np.diff(kappa, prepend=0) > 0, return_map_iterations, 0)", "label": "iterations"}]},
+      {"title": "return-map iterations, simple shear", "case": "simple_shear", "x": "step",
+       "y": [{"expr": "np.where(np.diff(kappa, prepend=0) > 0, return_map_iterations, 0)", "label": "iterations"}]}]},
+    {"title": "Non-proportional path: tension, then shear at constant tension", "panels": [
+      {"title": "stress components", "case": "tension_then_shear", "x": "step", "y": ["stress_11", "stress_12", "stress_22"]},
+      {"title": "stress path", "case": "tension_then_shear", "x": "stress_11", "y": ["stress_12"]}]},
+    {"title": "History variables", "panels": [
+      {"title": "equivalent plastic strain", "cases": ["uniaxial_stress", "simple_shear"], "x": "step", "y": ["kappa"]},
+      {"title": "plastic strain, uniaxial stress", "case": "uniaxial_stress", "x": "strain_11", "y": ["eps_p_11", "eps_p_22", "eps_p_33"]}]}
+  ]
+}

@@ -4,6 +4,7 @@
 #include <cmath>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_base.h"
+#include "numsim-materials/core/parameter_helpers.h"
 
 namespace numsim::materials {
 
@@ -14,7 +15,7 @@ namespace numsim::materials {
 ///   "d_equivalent_strain"  — tensor2: gradient d(eps_eq)/d(eps)
 ///
 /// Inputs:
-///   strain_source::strain  — tensor2 strain from a stepper or FEM kernel
+///   strain_source::strain_property  — tensor2 strain (default property "strain")
 template <typename Traits>
 class von_mises_state_function final
     : public material_base<von_mises_state_function<Traits>, Traits> {
@@ -28,18 +29,20 @@ public:
   template <typename... Args>
   explicit von_mises_state_function(Args&&... args)
       : base(std::forward<Args>(args)...),
-        m_eps_eq(base::template add_output<value_type>(
-            "equivalent_strain", &von_mises_state_function::compute)),
+        m_eps_eq(base::template add_output<value_type>("equivalent_strain")),
         m_deps_eq(base::template add_output<tensor2>(
             "d_equivalent_strain")),
         m_strain_source(base::template get_parameter<std::string>("strain_source")),
         m_strain(base::template add_input<tensor2>(
-            m_strain_source, "strain", EdgeKind::Global))
-  {}
+            m_strain_source, base::template get_parameter<std::string>("strain_property"), EdgeKind::Global))
+  {
+    base::add_callback(&von_mises_state_function::compute, m_eps_eq, m_deps_eq).reads(m_strain);
+  }
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
-    para.template insert<std::string>("strain_source").template add<is_required>();
+    required<std::string>(para, "strain_source");
+    optional<std::string>(para, "strain_property", std::string{"strain"});
     return para;
   }
 

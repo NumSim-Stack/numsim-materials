@@ -25,14 +25,15 @@ public:
   template <typename... Args>
   explicit linear_isotropic_hardening(Args&&... args)
       : base(std::forward<Args>(args)...),
-        m_H(base::template add_output<value_type>(
-            "hardening_stress", &linear_isotropic_hardening::compute)),
+        m_H(base::template add_output<value_type>("hardening_stress")),
         m_dH(base::template add_output<value_type>("hardening_modulus")),
         m_K(base::template get_parameter<value_type>("K")),
         m_source(base::template get_parameter<std::string>("source")),
         m_kappa(base::template add_input<value_type>(
             m_source, "equivalent_plastic_strain", EdgeKind::Local))
-  {}
+  {
+    base::add_callback(&linear_isotropic_hardening::compute, m_H, m_dH).reads(m_kappa);
+  }
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};

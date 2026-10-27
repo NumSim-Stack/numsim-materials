@@ -1,0 +1,49 @@
+{
+  "title": "short_fibre_composite",
+  "include": ["../standard_small_strain.json"],
+  "parameters": {"Km": 3333.33, "Gm": 1153.85, "Kf": 166666.67, "Gf": 76923.08, "c": 0.2, "cm": 0.8, "aspect_ratio": 15.0, "precision": 23},
+  "model": {"materials": [
+    {"type": "external_strain_source", "name": "strain"},
+    {"type": "constant_scalar", "name": "Km_", "value": "$Km"}, {"type": "constant_scalar", "name": "Gm_", "value": "$Gm"},
+    {"type": "constant_scalar", "name": "Kf_", "value": "$Kf"}, {"type": "constant_scalar", "name": "Gf_", "value": "$Gf"},
+    {"type": "isotropic_tangent", "name": "C_matrix", "K_source": "Km_", "G_source": "Gm_"},
+    {"type": "isotropic_tangent", "name": "C_fibre", "K_source": "Kf_", "G_source": "Gf_"},
+    {"type": "isotropic_moduli", "name": "moduli", "tangent_source": "C_matrix"},
+    {"type": "eshelby_spheroid", "name": "shape", "nu_source": "moduli", "nu_property": "poisson_ratio", "aspect_ratio": "$aspect_ratio", "direction": [1, 0, 0]},
+    {"type": "constant_scalar", "name": "c_", "value": "$c"},
+    {"type": "constant_scalar", "name": "cm_", "value": "$cm"},
+    {"type": "phase", "name": "spheroid", "tangent_source": "C_fibre", "eshelby_source": "shape", "fraction_source": "c_"},
+    {"type": "phase", "name": "matrix", "tangent_source": "C_matrix", "fraction_source": "cm_"},
+    {"type": "mean_field_composite_global", "name": "ud", "phases": ["matrix", "spheroid"], "kernel": {"type": "mori_tanaka"}},
+    {"type": "short_fibre_composite", "name": "aligned", "matrix": "matrix", "fibre": "spheroid",
+     "orientation": [1, 0, 0, 0, 0, 0], "precision": "$precision"},
+    {"type": "short_fibre_composite", "name": "injection", "matrix": "matrix", "fibre": "spheroid",
+     "orientation": [0.7, 0.25, 0.05, 0, 0, 0], "precision": "$precision"},
+    {"type": "short_fibre_composite", "name": "random", "matrix": "matrix", "fibre": "spheroid",
+     "orientation": [0.3333333333333333, 0.3333333333333333, 0.3333333333333334, 0, 0, 0], "precision": "$precision"},
+    {"type": "short_fibre_composite", "name": "random_stiffness", "matrix": "matrix", "fibre": "spheroid",
+     "orientation": [0.3333333333333333, 0.3333333333333333, 0.3333333333333334, 0, 0, 0], "precision": "$precision", "averaging": "stiffness"},
+    {"type": "linear_stress", "name": "ud_stress", "tangent_source": "ud", "strain_source": "strain"},
+    {"type": "linear_stress", "name": "aligned_stress", "tangent_source": "aligned", "strain_source": "strain"},
+    {"type": "linear_stress", "name": "injection_stress", "tangent_source": "injection", "strain_source": "strain"},
+    {"type": "linear_stress", "name": "random_stress", "tangent_source": "random", "strain_source": "strain"},
+    {"type": "linear_stress", "name": "random_stiffness_stress", "tangent_source": "random_stiffness", "strain_source": "strain"}]},
+  "point": {"strain_source": "strain", "stress_source": "injection_stress", "tangent_source": "injection"},
+  "record": {"sig_ud": "ud_stress::stress", "sig_aligned": "aligned_stress::stress", "sig_random": "random_stress::stress", "sig_random_stiffness": "random_stiffness_stress::stress",
+             "C1111_random": "random::tangent[1,1,1,1]", "C2222_random": "random::tangent[2,2,2,2]", "C1122_random": "random::tangent[1,1,2,2]", "C1212_random": "random::tangent[1,2,1,2]",
+             "A_m": "injection::concentration_matrix[1,1,1,1]", "A_f": "injection::concentration_fibre[1,1,1,1]"},
+  "checks": [
+    {"name": "aligned fibres equal the unidirectional Mori-Tanaka spheroid", "cases": "*", "value": "np.sqrt((sig_aligned_11 - sig_ud_11)**2 + (sig_aligned_22 - sig_ud_22)**2 + (sig_aligned_12 - sig_ud_12)**2) / np.maximum(np.sqrt(sig_ud_11**2 + sig_ud_22**2 + sig_ud_12**2), 1e-30)", "tolerance": 1e-9},
+    {"name": "random orientation is isotropic: C1111 = C2222, C1212 = (C1111 − C1122)/2", "case": "uniaxial_strain", "value": "np.maximum(abs(C1111_random - C2222_random), abs(C1212_random - (C1111_random - C1122_random) / 2)) / C1111_random", "tolerance": 1e-6},
+    {"name": "injection moulded: stiffer along the flow than across", "case": "uniaxial_strain", "value": "np.maximum(stress_22 - stress_11, 0)", "where": "strain_11 > 0", "tolerance": 0},
+    {"name": "ordering along x1: aligned ≥ injection ≥ random", "case": "uniaxial_strain", "value": "np.maximum(stress_11 - sig_aligned_11, 0) + np.maximum(sig_random_11 - stress_11, 0)", "where": "strain_11 > 0", "tolerance": 1e-9},
+    {"name": "concentrations average to one", "cases": "*", "value": "(1 - c) * A_m + c * A_f", "expected": 1, "tolerance": 1e-10}
+  ],
+  "figures": [
+    {"title": "Orientation states under uniaxial strain", "columns": 2, "panels": [
+      {"title": "σ₁₁ along the flow direction", "case": "uniaxial_strain", "x": "strain_11", "ylabel": "σ₁₁",
+       "y": [{"expr": "sig_aligned_11", "label": "aligned"}, {"expr": "stress_11", "label": "injection (0.7, 0.25, 0.05)"}, {"expr": "sig_random_11", "label": "random"}, {"expr": "sig_random_stiffness_11", "label": "random, stiffness averaging"}]},
+      {"title": "σ₂₂ across the flow direction", "case": "uniaxial_strain", "x": "strain_11", "ylabel": "σ₂₂",
+       "y": [{"expr": "sig_aligned_22", "label": "aligned"}, {"expr": "stress_22", "label": "injection"}, {"expr": "sig_random_22", "label": "random"}]}]}
+  ]
+}

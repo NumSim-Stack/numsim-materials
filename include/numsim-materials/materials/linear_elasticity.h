@@ -3,6 +3,8 @@
 
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_base.h"
+#include "numsim-materials/core/parameter_helpers.h"
+#include "numsim-materials/core/tensor_identities.h"
 
 namespace numsim::materials {
 
@@ -30,14 +32,17 @@ public:
   template <typename... Args>
   explicit linear_elasticity(Args &&...args)
       : base(std::forward<Args>(args)...),
-        m_sig(base::template add_output<tensor2>("stress", &linear_elasticity::update_stress)),
+        m_sig(base::template add_output<tensor2>("stress")),
         m_C(base::template add_output<tensor4>("tangent")),
         m_K(base::template get_parameter<value_type>("K")),
         m_G(base::template get_parameter<value_type>("G")),
         m_eps_name(base::template get_parameter<std::string>("strain_producer_name")),
-        m_eps(base::template add_input<tensor2>(m_eps_name, "strain", EdgeKind::Global))
+        m_eps(base::template add_input<tensor2>(m_eps_name, base::template get_parameter<std::string>("strain_property"), EdgeKind::Global)),
+        m_eigenstrain(eigenstrain_input())
   {
-    update_tangent();
+    update_tangent(); // readable before the first update
+    base::add_callback(&linear_elasticity::update_tangent, m_C).reads();
+    base::add_callback(&linear_elasticity::update_stress, m_sig).reads(m_C, m_eps, m_eigenstrain);
   }
 
   /**
@@ -50,26 +55,32 @@ public:
    */
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
-    para.template insert<value_type>("K").template add<is_required>();
-    para.template insert<value_type>("G").template add<is_required>();
-    para.template insert<std::string>("strain_producer_name")
-        .template add<is_required>();
+    required<value_type>(para, "K");
+    required<value_type>(para, "G");
+    required<std::string>(para, "strain_producer_name");
+    optional<std::string>(para, "strain_property", std::string{"strain"});
+    optional<std::string>(para, "eigenstrain_source", std::string{});
     return para;
   }
 
+  /// sigma = C : (eps - eps_eig) with the optional eigenstrain (thermal, chemical).
   void update_stress(){
-    m_sig = tmech::dcontract(m_C, m_eps.get());
+    if (m_eigenstrain)
+      m_sig = tmech::dcontract(m_C, tensor2{m_eps.get() - m_eigenstrain->get()});
+    else
+      m_sig = tmech::dcontract(m_C, m_eps.get());
   }
 
   void update_tangent(){
-    const auto I{tmech::eye<value_type, Dim, 2>()};
-    const auto IIsym{(tmech::otimesu(I,I) + (tmech::otimesl(I,I)))*0.5};
-    const auto IIvol{tmech::otimes(I, I)/Dim};
-    const auto IIdev{IIsym - IIvol};
-    m_C = 3*m_K*IIvol + 2*m_G*IIdev;
+    m_C = 3*m_K*vol_projector<value_type, Dim>() + 2*m_G*dev_projector<value_type, Dim>();
   }
 
 private:
+  const input_property<tensor2, property_traits>* eigenstrain_input() {
+    auto const &source{base::template get_parameter<std::string>("eigenstrain_source")};
+    return source.empty() ? nullptr : &base::template add_input<tensor2>(source, "eigenstrain", EdgeKind::Global);
+  }
+
   /// Produced properties
   tensor2 &m_sig;
   tensor4 &m_C;
@@ -81,6 +92,7 @@ private:
 
   /// Consumed properties
   const input_property<tensor2, property_traits> &m_eps;
+  const input_property<tensor2, property_traits>* m_eigenstrain; ///< null without an eigenstrain_source
 };
 
 }

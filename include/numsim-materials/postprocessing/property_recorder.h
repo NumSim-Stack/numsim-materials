@@ -67,7 +67,7 @@ public:
     // EVERY property in topological order (no consumed-only / dead-code pruning),
     // so this consumer-less output's callback fires once per ctx.update() — the
     // invariant the whole recorder (and property_plot) relies on.
-    base::template add_output<int>("_record_tick", &property_recorder::update);
+    auto& tick{base::template add_output<int>("_record_tick")};
 
     // Scalar sources → one column each.
     for (auto const& s : scalar_srcs) {
@@ -89,6 +89,7 @@ public:
           m_buffer.declare_column(stem + "_" + std::to_string(i) +
                                   std::to_string(j));
     }
+    base::add_callback(&property_recorder::update, tick).reads(m_scalar_inputs, m_tensor_inputs).stateful(); // a row per update
   }
 
   static input_parameter_controller parameters() {

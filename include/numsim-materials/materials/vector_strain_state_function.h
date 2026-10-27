@@ -4,6 +4,7 @@
 #include <cmath>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_base.h"
+#include "numsim-materials/core/parameter_helpers.h"
 
 namespace numsim::materials {
 
@@ -28,12 +29,11 @@ public:
   template <typename... Args>
   explicit vector_strain_state_function(Args&&... args)
       : base(std::forward<Args>(args)...),
-        m_eps_eq(base::template add_output<value_type>(
-            "equivalent_strain", &vector_strain_state_function::compute)),
+        m_eps_eq(base::template add_output<value_type>("equivalent_strain")),
         m_deps_eq(base::template add_output<tensor2>("d_equivalent_strain")),
         m_strain_source(base::template get_parameter<std::string>("strain_source")),
         m_strain(base::template add_input<tensor2>(
-            m_strain_source, "strain", EdgeKind::Global))
+            m_strain_source, base::template get_parameter<std::string>("strain_property"), EdgeKind::Global))
   {
     // Initialize direction vectors from parameters
     const auto& m_indices = base::template get_parameter<std::vector<std::size_t>>("m_direction");
@@ -47,13 +47,15 @@ public:
     m_n = tensor1{};
     if (!m_indices.empty()) m_m(m_indices[0]) = value_type{1};
     if (!n_indices.empty()) m_n(n_indices[0]) = value_type{1};
+    base::add_callback(&vector_strain_state_function::compute, m_eps_eq, m_deps_eq).reads(m_strain);
   }
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
-    para.template insert<std::string>("strain_source").template add<is_required>();
-    para.template insert<std::vector<std::size_t>>("m_direction").template add<is_required>();
-    para.template insert<std::vector<std::size_t>>("n_direction").template add<is_required>();
+    required<std::string>(para, "strain_source");
+    optional<std::string>(para, "strain_property", std::string{"strain"});
+    required<std::vector<std::size_t>>(para, "m_direction");
+    required<std::vector<std::size_t>>(para, "n_direction");
     return para;
   }
 

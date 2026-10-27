@@ -1,0 +1,21 @@
+{
+  "title": "hencky_elasticity",
+  "include": ["../standard_finite_strain.json"],
+  "parameters": {"K": 166666.67, "G": 76923.08},
+  "derived": {"E": "9 * K * G / (3 * K + G)", "nu": "(3 * K - 2 * G) / (2 * (3 * K + G))"},
+  "model": {"materials": [
+    {"type": "external_deformation_gradient_source", "name": "F"},
+    {"type": "constant_scalar", "name": "K", "value": "$K"},
+    {"type": "constant_scalar", "name": "G", "value": "$G"},
+    {"type": "isotropic_tangent", "name": "stiffness", "K_source": "K", "G_source": "G"},
+    {"type": "hencky_elasticity", "name": "hencky", "deformation_gradient_source": "F", "tangent_source": "stiffness"}]},
+  "point": {"deformation_gradient_source": "F", "stress_source": "hencky"},
+  "record": {"eps": "hencky::log_strain"},
+  "checks": [
+    {"name": "uniaxial stress: ln F22 = −ν ln F11", "case": "uniaxial_stress", "value": "np.log(F_22)", "expected": "-nu * np.log(F_11)", "tolerance": 1e-9, "relative": true},
+    {"name": "uniaxial stress: P11 = E ln(F11) / F11", "case": "uniaxial_stress", "value": "P_11", "expected": "E * np.log(F_11) / F_11", "tolerance": 1e-9, "relative": true, "plot": {"x": "F_11", "xlabel": "λ"}},
+    {"name": "volumetric: P11 = 3 K ln λ / λ", "case": "volumetric", "value": "P_11", "expected": "3 * K * np.log(F_11) / F_11", "tolerance": 1e-9, "relative": true, "plot": {"x": "J"}},
+    {"name": "log strain of the volumetric case is ln λ", "case": "volumetric", "value": "eps_11", "expected": "np.log(F_11)", "tolerance": 1e-12, "relative": true},
+    {"name": "simple shear: Kirchhoff stress is traceless (J = 1)", "case": "simple_shear", "value": "abs(P_11 * F_11 + P_12 * F_12 + P_22 * F_22 + P_33 * F_33) / np.maximum(abs(P_12 * F_11), 1e-30)", "tolerance": 1e-9}
+  ]
+}

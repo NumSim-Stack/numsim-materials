@@ -1,0 +1,268 @@
+{
+  "title": "mean_field_strain (Reuss) with a hardening J2 matrix",
+  "include": [
+    "../standard_small_strain.json"
+  ],
+  "notes": "Equal stress in series through the local pair: the concentrations A_r = C_r^-1 : C_R are formed with the algorithmic tangents of the previous pass, the matrix phase reads its tangent over a local edge, and the point repeats the pass until the residual is small. With a hardening phase the phase stresses agree to first order in the step (checked loosely here at 50 steps; see test_mean_field_damage for the refinement). The published tangent is first order in the step too, so the finite-difference check is off.",
+  "parameters": {
+    "Km": 3333.33,
+    "Gm": 1153.85,
+    "Ki": 166666.67,
+    "Gi": 76923.08,
+    "c": 0.3,
+    "cm": 0.7,
+    "sigma_0": 8.0,
+    "H": 1000.0,
+    "amplitude": 0.006,
+    "tangent_every": 0
+  },
+  "model": {
+    "materials": [
+      {
+        "type": "external_strain_source",
+        "name": "strain"
+      },
+      {
+        "type": "constant_scalar",
+        "name": "Km_",
+        "value": "$Km"
+      },
+      {
+        "type": "constant_scalar",
+        "name": "Gm_",
+        "value": "$Gm"
+      },
+      {
+        "type": "constant_scalar",
+        "name": "Ki_",
+        "value": "$Ki"
+      },
+      {
+        "type": "constant_scalar",
+        "name": "Gi_",
+        "value": "$Gi"
+      },
+      {
+        "type": "isotropic_tangent",
+        "name": "C_m",
+        "K_source": "Km_",
+        "G_source": "Gm_"
+      },
+      {
+        "type": "isotropic_tangent",
+        "name": "C_i",
+        "K_source": "Ki_",
+        "G_source": "Gi_"
+      },
+      {
+        "type": "constant_scalar",
+        "name": "c_",
+        "value": "$c"
+      },
+      {
+        "type": "constant_scalar",
+        "name": "cm_",
+        "value": "$cm"
+      },
+      {
+        "type": "phase",
+        "name": "matrix",
+        "tangent_source": "plastic",
+        "tangent_edge": "local",
+        "initial_tangent_source": "C_m",
+        "fraction_source": "cm_"
+      },
+      {
+        "type": "phase",
+        "name": "spheres",
+        "tangent_source": "C_i",
+        "fraction_source": "c_"
+      },
+      {
+        "type": "mean_field_strain",
+        "name": "mt_strain",
+        "strain_source": "strain",
+        "phases": [
+          "matrix",
+          "spheres"
+        ],
+        "kernel": {
+          "type": "reuss"
+        }
+      },
+      {
+        "type": "local_newton",
+        "name": "solver"
+      },
+      {
+        "type": "linear_isotropic_hardening",
+        "name": "hardening",
+        "source": "plastic",
+        "K": "$H"
+      },
+      {
+        "type": "j2_plasticity",
+        "name": "plastic",
+        "K": "$Km",
+        "G": "$Gm",
+        "sigma_0": "$sigma_0",
+        "hardening_source": "hardening",
+        "solver_source": "solver",
+        "strain_source": "mt_strain",
+        "strain_property": "strain_matrix"
+      },
+      {
+        "type": "linear_stress",
+        "name": "stiff",
+        "tangent_source": "C_i",
+        "strain_source": "mt_strain",
+        "strain_property": "strain_spheres"
+      },
+      {
+        "type": "mean_field_composite_local_nonlinear",
+        "name": "mt",
+        "phases": [
+          {
+            "concentration": "mt_strain::concentration_matrix",
+            "stress": "plastic::stress",
+            "tangent": "plastic::tangent",
+            "fraction": "matrix::volume_fraction",
+            "used_tangent": "matrix::tangent"
+          },
+          {
+            "concentration": "mt_strain::concentration_spheres",
+            "stress": "stiff::stress",
+            "tangent": "C_i::tangent",
+            "fraction": "spheres::volume_fraction"
+          }
+        ]
+      }
+    ]
+  },
+  "point": {
+    "strain_source": "strain",
+    "stress_source": "mt",
+    "residual_source": "mt::residual",
+    "residual_tolerance": 1e-10,
+    "max_passes": 200
+  },
+  "record": {
+    "eps_m": "mt_strain::strain_matrix",
+    "eps_i": "mt_strain::strain_spheres",
+    "sig_m": "plastic::stress",
+    "sig_i": "stiff::stress",
+    "kappa": "plastic::equivalent_plastic_strain",
+    "res": "mt::residual"
+  },
+  "checks": [
+    {
+      "name": "local strains partition the composite strain",
+      "cases": "*",
+      "value": "cm * eps_m_11 + c * eps_i_11",
+      "expected": "strain_11",
+      "tolerance": 1e-10,
+      "relative": true
+    },
+    {
+      "name": "stress is the phase average",
+      "cases": "*",
+      "value": "cm * sig_m_11 + c * sig_i_11",
+      "expected": "stress_11",
+      "tolerance": 1e-10,
+      "relative": true
+    },
+    {
+      "name": "every step ends at the fixed point",
+      "cases": "*",
+      "value": "np.max(res)",
+      "tolerance": 1e-10
+    },
+    {
+      "name": "Reuss: the phases carry the same stress (first order in the step)",
+      "case": "uniaxial_strain",
+      "value": "sig_m_11",
+      "expected": "sig_i_11",
+      "tolerance": 0.01,
+      "relative": true,
+      "where": "abs(sig_i_11) > 1"
+    },
+    {
+      "name": "the matrix yields under uniaxial strain",
+      "case": "uniaxial_strain",
+      "value": "np.minimum(np.max(kappa) - 1e-3, 0)",
+      "tolerance": 0
+    }
+  ],
+  "figures": [
+    {
+      "title": "Equal stress in series",
+      "panels": [
+        {
+          "title": "phase and composite stress, uniaxial strain",
+          "case": "uniaxial_strain",
+          "x": "strain_11",
+          "xlabel": "ε₁₁",
+          "ylabel": "σ₁₁",
+          "y": [
+            {
+              "expr": "sig_m_11",
+              "label": "matrix (J2)"
+            },
+            {
+              "expr": "sig_i_11",
+              "label": "spheres"
+            },
+            {
+              "expr": "stress_11",
+              "label": "composite"
+            }
+          ]
+        },
+        {
+          "title": "local strains, uniaxial strain",
+          "case": "uniaxial_strain",
+          "x": "strain_11",
+          "xlabel": "ε₁₁",
+          "y": [
+            "eps_m_11",
+            "eps_i_11",
+            "strain_11"
+          ]
+        },
+        {
+          "title": "equivalent plastic strain",
+          "case": "uniaxial_strain",
+          "x": "strain_11",
+          "xlabel": "ε₁₁",
+          "y": [
+            {
+              "expr": "kappa",
+              "label": "κ"
+            }
+          ]
+        },
+        {
+          "title": "phase stresses, uniaxial stress",
+          "case": "uniaxial_stress",
+          "x": "strain_11",
+          "xlabel": "ε₁₁",
+          "ylabel": "σ₁₁",
+          "y": [
+            {
+              "expr": "sig_m_11",
+              "label": "matrix (J2)"
+            },
+            {
+              "expr": "sig_i_11",
+              "label": "spheres"
+            },
+            {
+              "expr": "stress_11",
+              "label": "composite"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -3,7 +3,7 @@
 
 #include <cassert>
 #include <cmath>
-#include <numsim-core/print.h>
+#include <print>
 #include <string>
 #include <type_traits>
 #include <unordered_set>
@@ -76,7 +76,7 @@ void report_mismatches(T analytical, T numerical, T tol) {
   auto ref = std::max(std::abs(analytical), std::abs(numerical));
   auto rel = (ref > T{1e-30}) ? diff / ref : diff;
   if (rel > tol)
-    numsim_core::println("    scalar: analytical={:.6e} numerical={:.6e} diff={:.6e} rel={:.6e}",
+    std::println("    scalar: analytical={:.6e} numerical={:.6e} diff={:.6e} rel={:.6e}",
                  analytical, numerical, diff, rel);
 }
 
@@ -89,7 +89,7 @@ void report_mismatches(const tmech::tensor<T,Dim,2>& analytical,
       auto ref = std::max(std::abs(analytical(i,j)), std::abs(numerical(i,j)));
       auto rel = (ref > T{1e-30}) ? diff / ref : diff;
       if (rel > tol)
-        numsim_core::println("    ({},{}) analytical={:.6e} numerical={:.6e} rel={:.6e}",
+        std::println("    ({},{}) analytical={:.6e} numerical={:.6e} rel={:.6e}",
                      i, j, analytical(i,j), numerical(i,j), rel);
     }
 }
@@ -105,7 +105,7 @@ void report_mismatches(const tmech::tensor<T,Dim,4>& analytical,
           auto ref = std::max(std::abs(analytical(i,j,k,l)), std::abs(numerical(i,j,k,l)));
           auto rel = (ref > T{1e-30}) ? diff / ref : diff;
           if (rel > tol)
-            numsim_core::println("    ({},{},{},{}) analytical={:.6e} numerical={:.6e} rel={:.6e}",
+            std::println("    ({},{},{},{}) analytical={:.6e} numerical={:.6e} rel={:.6e}",
                          i, j, k, l, analytical(i,j,k,l), numerical(i,j,k,l), rel);
         }
 }
@@ -152,7 +152,7 @@ public:
   template<typename... Args>
   explicit numerical_diff_checker(Args&&... args)
       : base(std::forward<Args>(args)...),
-        m_error(base::template add_output<value_type>("error", &numerical_diff_checker::compute)),
+        m_error(base::template add_output<value_type>("error")),
         m_rel_error(base::template add_output<value_type>("rel_error")),
         m_ctx(base::template get_parameter<context_type*>("context")),
         m_output_src(connection_source::parse(
@@ -165,12 +165,14 @@ public:
         m_report_threshold(base::template get_parameter<value_type>("report_threshold")),
         m_history_strs(base::template get_parameter<std::vector<std::string>>("history_sources"))
   {
-    base::template add_input<Input>(
-        m_input_src.material, m_input_src.property, EdgeKind::Global);
-    base::template add_input<result_type>(
-        m_analytical_src.material, m_analytical_src.property, EdgeKind::Global);
-    base::template add_input<Output>(
-        m_output_src.material, m_output_src.property, EdgeKind::Global);
+    auto const& input{base::template add_input<Input>(
+        m_input_src.material, m_input_src.property, EdgeKind::Global)};
+    auto const& analytical{base::template add_input<result_type>(
+        m_analytical_src.material, m_analytical_src.property, EdgeKind::Global)};
+    auto const& output{base::template add_input<Output>(
+        m_output_src.material, m_output_src.property, EdgeKind::Global)};
+    // perturbs the graph through the context: never constant
+    base::add_callback(&numerical_diff_checker::compute, m_error, m_rel_error).reads(input, analytical, output).stateful();
 
     for (auto& s : m_history_strs)
       m_history_srcs.push_back(connection_source::parse(s));
@@ -257,7 +259,7 @@ public:
 
     // 8. Report mismatching components
     if (m_rel_error > m_report_threshold) {
-      numsim_core::println("  numerical_diff_checker '{}': mismatching components (rel > {:.2e}):",
+      std::println("  numerical_diff_checker '{}': mismatching components (rel > {:.2e}):",
                    base::name(), m_report_threshold);
       detail::report_mismatches(analytical, numerical, m_report_threshold);
     }

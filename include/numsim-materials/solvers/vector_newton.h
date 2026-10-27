@@ -54,7 +54,6 @@ public:
       : base(std::forward<Args>(args)...),
         m_func(base::template get_parameter<std::string>("function")),
         m_tol(base::template get_parameter<value_type>("tolerance")),
-        m_lin_tol(base::template get_parameter<value_type>("linear_tolerance")),
         m_max_iter(base::template get_parameter<int>("max_iter")),
         m_strain_derivative(
             base::template get_parameter<bool>("strain_derivative")),
@@ -118,11 +117,10 @@ public:
       m_dx_de.setZero(m_N, m_W);
     }
 
-    // Graph-driven mode: bind solve() to the first unknown so that a downstream
+    // Graph-driven mode: solve() is bound to the first unknown so that a downstream
     // update_source() on it drives the iteration, as backward_euler does with
     // "delta".
-    if (auto p = base::m_property_handler.find(base::m_name, specs.front().name))
-      (*p)->traits().update = [this]() { this->update(); };
+    base::add_callback(&vector_newton::update, m_written).reads(m_reads).drives(m_reads);
   }
 
   static input_parameter_controller parameters() {
@@ -132,9 +130,6 @@ public:
         .template add<is_required>();
     para.template insert<value_type>("tolerance")
         .template add<set_default>(value_type{1e-10});
-    // Backward-error tolerance for the linear solve; guards a singular Jacobian.
-    para.template insert<value_type>("linear_tolerance")
-        .template add<set_default>(value_type{1e-8});
     para.template insert<int>("max_iter").template add<set_default>(50);
     // Opt-in: wires d_residual_<name>_d_strain inputs and produces
     // d_<name>_d_strain outputs, solved from the converged factorization.
@@ -216,14 +211,10 @@ public:
       m_lu.compute(m_J);
       m_dx = m_lu.solve(m_R);
 
-      // Guard a singular / rank-deficient Jacobian. A backward-error check is
-      // cheaper than rank-revealing pivoting every iteration and catches the
-      // same failures; finiteness alone would not.
+      // An exactly singular Jacobian divides by a zero pivot and leaves inf or
+      // NaN in dx. No residual check: the LU is backward stable, so J*dx - R is
+      // rounding noise whose size depends on the toolchain (FMA or not), see #21.
       if (!m_dx.allFinite()) return;
-      const auto rn = m_R.template lpNorm<Eigen::Infinity>();
-      const auto back_err =
-          (m_J * m_dx - m_R).template lpNorm<Eigen::Infinity>();
-      if (back_err > m_lin_tol * rn) return;
 
       m_x -= m_dx;
     }
@@ -337,11 +328,13 @@ private:
   template<typename U>
   void emplace_state(const std::string& name) {
     auto& ref = base::template add_output<typename U::value_type>(name);
+    m_written.push_back(&ref);
     m_state.push_back(
         std::make_unique<state_layout<value_type, U>>(ref));
 
     const auto& in = base::template add_input<typename U::value_type>(
         m_func, "residual_" + name, EdgeKind::Local);
+    m_reads.push_back(&in);
     m_residual.push_back(
         std::make_unique<residual_layout<value_type, U>>(in));
 
@@ -352,10 +345,12 @@ private:
       using de_block = jacobian_block_layout<value_type, U, sym_k>;
       const auto& din = base::template add_input<typename de_block::value_type>(
           m_func, "d_residual_" + name + "_d_strain", EdgeKind::Local);
+      m_reads.push_back(&din);
       m_dR_de_layout.push_back(std::make_unique<de_block>(din));
 
       auto& dout = base::template add_output<typename de_block::value_type>(
           "d_" + name + "_d_strain");
+      m_written.push_back(&dout);
       m_dx_de_layout.push_back(
           std::make_unique<strain_derivative_layout<value_type, Dim, U>>(dout));
     }
@@ -389,6 +384,7 @@ private:
     using block_t = jacobian_block_layout<value_type, UI, UJ>;
     const auto& in = base::template add_input<typename block_t::value_type>(
         m_func, "jacobian_" + name_i + "_" + name_j, EdgeKind::Local);
+    m_reads.push_back(&in);
     m_jacobian[i][j] = std::make_unique<block_t>(in);
   }
 
@@ -508,7 +504,6 @@ private:
 private:
   const std::string& m_func;
   const value_type& m_tol;
-  const value_type& m_lin_tol;
   const int& m_max_iter;
 
   std::vector<std::unique_ptr<state_layout_base<value_type>>> m_state;
@@ -518,6 +513,9 @@ private:
   const bool& m_strain_derivative;
   std::vector<std::unique_ptr<layout_base<value_type>>> m_dR_de_layout;
   std::vector<std::unique_ptr<block_scatter_base<value_type>>> m_dx_de_layout;
+
+  std::vector<void const*> m_written;            ///< every output, filled by update()
+  std::vector<input_wire_base const*> m_reads;  ///< every input of the function material
 
   std::size_t m_N{0};
   std::size_t m_W{0};

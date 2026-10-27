@@ -122,10 +122,10 @@ public:
   template <typename... Args>
   explicit asym_tangent_material(Args&&... args)
       : base(std::forward<Args>(args)...),
-        m_stress(base::template add_output<tensor2>(
-            "stress", &asym_tangent_material::compute)),
+        m_stress(base::template add_output<tensor2>("stress")),
         m_tangent(base::template add_output<tensor4>("tangent")) {
     fill_tangent();
+    base::add_callback(&asym_tangent_material::compute, m_stress, m_tangent).reads();
   }
 
   static input_parameter_controller parameters() { return base::parameters(); }
@@ -171,11 +171,12 @@ public:
   template <typename... Args>
   explicit time_probe_material(Args&&... args)
       : base(std::forward<Args>(args)...),
-        m_stress(base::template add_output<tensor2>(
-            "stress", &time_probe_material::compute)),
+        m_stress(base::template add_output<tensor2>("stress")),
         m_tangent(base::template add_output<tensor4>("tangent")),
         m_time(base::template add_input_history<value_type>(
-            nm::connection_source{"clock", "state"}, nm::EdgeKind::Global)) {}
+            nm::connection_source{"clock", "state"}, nm::EdgeKind::Global)) {
+    base::add_callback(&time_probe_material::compute, m_stress, m_tangent).reads(m_time);
+  }
 
   static input_parameter_controller parameters() { return base::parameters(); }
 
@@ -206,9 +207,10 @@ class throwing_material final
   template <typename... Args>
   explicit throwing_material(Args&&... args)
       : base(std::forward<Args>(args)...),
-        m_stress(base::template add_output<tensor2>(
-            "stress", &throwing_material::compute)),
-        m_tangent(base::template add_output<tensor4>("tangent")) {}
+        m_stress(base::template add_output<tensor2>("stress")),
+        m_tangent(base::template add_output<tensor4>("tangent")) {
+    base::add_callback(&throwing_material::compute, m_stress, m_tangent).reads();
+  }
 
   static input_parameter_controller parameters() { return base::parameters(); }
   void compute() { throw std::runtime_error("deliberate non-convergence"); }

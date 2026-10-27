@@ -34,11 +34,12 @@ public:
   explicit tensor_component_stepper(Args &&...args)
       : base(std::forward<Args>(args)...),
         // produced properties
-        m_tensor(base::template add_output<tensor>("strain", &tensor_component_stepper::update)),
+        m_tensor(base::template add_output<tensor>("strain")),
         m_inc(base::template get_parameter<value_type>("increment")),
         m_indices(base::template get_parameter<indices>("indices"))
   {
     validate_indices();
+    base::add_callback(&tensor_component_stepper::update, m_tensor).reads().stateful(); // adds to its last value
   }
 
   /**

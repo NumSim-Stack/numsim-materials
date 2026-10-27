@@ -193,6 +193,48 @@ TEST(CuringSimulation, ConvergesToFullCure) {
   EXPECT_GT(curing, 0.99) << "curing should approach 1.0 after 500 s at 80 C";
 }
 
+/// The cure of CuringSimulation after `steps` steps; `solver_first` creates the solver before the steppers its
+/// function material reads, so only a dependency edge (not the creation order) can run it after them.
+T cure_after(int steps, bool solver_first) {
+  ctx_type ctx;
+  param_type p;
+  auto const solver{[&] {
+    p.clear();
+    p.insert<std::string>("name", "solver");
+    p.insert<std::string>("function", "curing");
+    ctx.create<numsim::materials::backward_euler<policy>>(p);
+  }};
+  if (solver_first)
+    solver();
+  for (auto const &[name, increment] : {std::pair{"temperature", T{0}}, std::pair{"time", T{0.5}}}) {
+    p.clear();
+    p.insert<std::string>("name", name);
+    p.insert<T>("increment", increment);
+    ctx.create<numsim::materials::scalar_stepper<policy>>(p);
+  }
+  if (!solver_first)
+    solver();
+  p.clear();
+  p.insert<std::string>("name", "curing");
+  p.insert<T>("A", T{1e6});
+  p.insert<T>("E", T{50000});
+  p.insert<T>("n", T{1.2});
+  p.insert<T>("m", T{0.8});
+  p.insert<T>("start_value", T{1e-8});
+  ctx.create<numsim::materials::autocatalytic_reaction<policy>>(p);
+  ctx.finalize();
+  ctx.get_mutable<T>("temperature", "state") = T{80};
+  for (int i{0}; i < steps; ++i) {
+    ctx.update();
+    ctx.commit();
+  }
+  return ctx.get<T>("curing", "current_state");
+}
+
+TEST(CuringSimulation, TheSolverRunsAfterTheTimeStepItsFunctionReads) {
+  EXPECT_EQ(cure_after(10, true), cure_after(10, false));
+}
+
 } // namespace
 
 namespace {
@@ -328,6 +370,9 @@ TEST(LocalNewtonSolver, SolvesAndReportsConvergence) {
       [](T2 x) { return std::pair<T2, T2>{x * x - T2{4}, T2{2} * x}; }, T2{3});
   EXPECT_TRUE(ok.converged);
   EXPECT_NEAR(ok.x, 2.0, 1e-10);
+  // The iteration count of the last solve is a property, for reports.
+  EXPECT_EQ(ctx.get<T2>("solver", "iterations"), T2(ok.iterations));
+  EXPECT_GT(ok.iterations, 0);
 
   // No root: x^2 + 1 = 0. Must report failure rather than a plausible number.
   const auto bad = s.solve(

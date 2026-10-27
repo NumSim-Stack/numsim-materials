@@ -7,6 +7,7 @@
 #include <string>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_base.h"
+#include "numsim-materials/core/parameter_helpers.h"
 #include "numsim-materials/core/material_ref.h"
 #include "numsim-materials/materials/plasticity_utils.h"
 #include "numsim-materials/solvers/local_newton.h"
@@ -66,8 +67,7 @@ public:
   template <typename... Args>
   explicit j2_plasticity(Args&&... args)
       : base(std::forward<Args>(args)...),
-        m_stress(base::template add_output<tensor2>(
-            "stress", &j2_plasticity::compute)),
+        m_stress(base::template add_output<tensor2>("stress")),
         m_tangent(base::template add_output<tensor4>("tangent")),
         m_eps_p(base::template add_history_output<tensor2>("plastic_strain")),
         m_kappa(base::template add_history_output<value_type>(
@@ -79,17 +79,18 @@ public:
             base::template get_parameter<std::string>("solver_source"))),
         m_strain(base::template add_input<tensor2>(
             base::template get_parameter<std::string>("strain_source"),
-            "strain", EdgeKind::Global)),
+            base::template get_parameter<std::string>("strain_property"), EdgeKind::Global)),
         m_H(base::template add_input<value_type>(
             base::template get_parameter<std::string>("hardening_source"),
             "hardening_stress", EdgeKind::Local)),
         m_dH(base::template add_input<value_type>(
             base::template get_parameter<std::string>("hardening_source"),
             "hardening_modulus", EdgeKind::Local)),
-        m_IIdev(plasticity_detail::make_IIdev<value_type, Dim>()),
         m_C_e(plasticity_detail::make_isotropic_tangent<value_type, Dim>(
             m_K, m_G))
-  {}
+  {
+    base::add_callback(&j2_plasticity::compute, m_stress, m_tangent, m_eps_p, m_kappa).reads(m_strain, m_H, m_dH).drives(m_H, m_dH);
+  }
 
   /// m_C_e above is the elastic stiffness, built here rather than read from
   /// another material.
@@ -102,15 +103,13 @@ public:
   /// yielding starts.
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
-    para.template insert<std::string>("hardening_source")
-        .template add<is_required>();
-    para.template insert<std::string>("strain_source")
-        .template add<is_required>();
-    para.template insert<std::string>("solver_source")
-        .template add<is_required>();
-    para.template insert<value_type>("K").template add<is_required>();
-    para.template insert<value_type>("G").template add<is_required>();
-    para.template insert<value_type>("sigma_0").template add<is_required>();
+    required<std::string>(para, "hardening_source");
+    required<std::string>(para, "strain_source");
+    optional<std::string>(para, "strain_property", std::string{"strain"});
+    required<std::string>(para, "solver_source");
+    required<value_type>(para, "K");
+    required<value_type>(para, "G");
+    required<value_type>(para, "sigma_0");
     return para;
   }
 
@@ -188,7 +187,7 @@ public:
     const auto a = value_type{6} * GG * dlambda / sig_eq;
     const auto b = value_type{4} * GG * dlambda / sig_eq -
                    value_type{4} * GG / (G_eff + m_dH.get());
-    m_tangent = C_e - a * m_IIdev + b * tmech::otimes(N, N);
+    m_tangent = C_e - a * dev_projector<value_type, Dim>() + b * tmech::otimes(N, N);
   }
 
 private:
@@ -206,7 +205,6 @@ private:
   const input_property<value_type, property_traits>& m_H;
   const input_property<value_type, property_traits>& m_dH;
 
-  const tensor4 m_IIdev;
   const tensor4 m_C_e;
 };
 
