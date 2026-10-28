@@ -82,9 +82,25 @@ public:
 
   // --- Execution (delegated to property_engine) ---
 
+  /// Runs the callbacks, then accumulates the requested derivatives (derivative()).
   void update() {
     check_finalized("update");
     m_engine.update();
+    m_engine.differentiate();
+  }
+
+  /// d material::property / d seed_material::seed_property as R (rank of both added, a scalar for two scalars),
+  /// filled by every update() after the values. A requested path through a callback without its partial throws.
+  template <typename R>
+  const R& derivative(const std::string& material, const std::string& property, const std::string& seed_material,
+                      const std::string& seed_property) {
+    check_finalized("derivative");
+    auto const* target{find_property(material, property)};
+    auto const* seed{find_property(seed_material, seed_property)};
+    if (!target || !seed)
+      throw std::runtime_error("derivative(): property '" + (target ? seed_material + "::" + seed_property : material + "::" + property) +
+                               "' not found");
+    return m_engine.template derivative<R>(target, seed);
   }
 
   void update_property(const std::string& material, const std::string& property,
