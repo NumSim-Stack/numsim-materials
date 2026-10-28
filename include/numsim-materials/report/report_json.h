@@ -34,6 +34,7 @@ struct load_case {
   int tangent_every{1};        ///< finite-difference tangent check every n-th step; 0 = never
   bool finite_strain{false};   ///< which of the two controls was parsed
   std::optional<T> fd_step;    ///< perturbation of the tangent check; unset = the driver's default
+  int max_cutbacks{0};         ///< halvings of a failing step before the case stops
 
   /// Prescribed strain at a step: linear between the points of its segment.
   [[nodiscard]] tensor2 strain_at(load_step<T> const &s) const {
@@ -72,6 +73,15 @@ inline int as_count(nlohmann::json const &v, std::string const &what, int min) {
 
 inline int count(nlohmann::json const &c, std::string const &key, int fallback, int min) {
   return c.contains(key) ? as_count(c[key], "case '" + c.value("name", std::string{}) + "': " + key, min) : fallback;
+}
+
+/// "max_cutbacks": 0 (the default) to 20, a million substeps.
+inline int max_cutbacks(nlohmann::json const &c) {
+  auto const n{count(c, "max_cutbacks", 0, 0)};
+  if (n > 20)
+    throw std::invalid_argument("case '" + c.value("name", std::string{}) + "': max_cutbacks is at most 20, got " +
+                                std::to_string(n));
+  return n;
 }
 
 template <typename Control>
@@ -131,7 +141,7 @@ load_case<T> parse_case(nlohmann::json const &c, bool finite_strain = false) {
           load_path<T>{std::move(factors), detail::count(c, "steps", 50, 1), c.contains("points") ? T{1} : scale,
                        c.value("dt", T{1})},
           detail::count(c, "tangent_every", 1, 0), finite_strain,
-          c.contains("fd_step") ? std::optional<T>{c.at("fd_step").get<T>()} : std::nullopt};
+          c.contains("fd_step") ? std::optional<T>{c.at("fd_step").get<T>()} : std::nullopt, detail::max_cutbacks(c)};
 }
 
 /// A case run again with several step counts (document key "studies").

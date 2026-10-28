@@ -11,6 +11,7 @@
 #include <queue>
 #include <ranges>
 #include <set>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -23,6 +24,17 @@
 #include "numsim-materials/core/material_interface.h"
 
 namespace numsim::materials {
+
+template <typename Traits>
+class property_engine;
+
+/// Old and new value of every history property of one context at one moment, as bytes in the engine's order.
+template <typename Traits>
+class history_checkpoint {
+  friend class property_engine<Traits>;
+  std::vector<std::string> m_bytes;
+  const property_engine<Traits>* m_owner{nullptr};
+};
 
 /// Manages the property dependency graph, topological sort, and execution.
 template<typename Traits>
@@ -128,6 +140,32 @@ public:
     m_failed = false;
     for (auto* hp : m_history_properties)
       hp->revert();
+  }
+
+  /// The history now, both values: restore() returns to it after any number of commits.
+  history_checkpoint<Traits> checkpoint() const {
+    if (m_failed)
+      throw std::logic_error("checkpoint(): the last update threw, the context is partly updated: revert() first");
+    history_checkpoint<Traits> cp;
+    cp.m_owner = this;
+    cp.m_bytes.reserve(m_history_properties.size());
+    for (auto const* hp : m_history_properties) {
+      std::ostringstream out;
+      hp->serialize(out);
+      cp.m_bytes.push_back(std::move(out).str());
+    }
+    return cp;
+  }
+
+  /// Back to a checkpoint of this engine; clears a failed update like revert().
+  void restore(history_checkpoint<Traits> const& cp) {
+    if (cp.m_owner != this)
+      throw std::logic_error("restore(): the checkpoint was taken from another context");
+    for (auto const& [hp, bytes] : std::views::zip(m_history_properties, cp.m_bytes)) {
+      std::istringstream in{bytes};
+      hp->deserialize(in);
+    }
+    m_failed = false;
   }
 
   property_base* find_property(property_handler& properties,

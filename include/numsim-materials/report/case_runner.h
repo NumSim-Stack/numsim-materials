@@ -1,6 +1,7 @@
 #ifndef NUMSIM_MATERIALS_REPORT_CASE_RUNNER_H
 #define NUMSIM_MATERIALS_REPORT_CASE_RUNNER_H
 
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -42,8 +43,13 @@ typename Traits::ParameterHandler point_for(nlohmann::json const &doc, load_case
 /// One step of a case: the columns of the trial, the tangent check when due, then accept, or reject and stop.
 template <typename Traits, typename Driver, typename Sink, typename Values>
 bool record_step(Driver &driver, typename Driver::step_result const &res, load_step<typename Traits::value_type> const &s,
-                 int tangent_every, Sink &sink, Values const &values) {
-  step_record<Traits> rec{s, step_summary<typename Traits::value_type>::of(res), values(res)};
+                 int tangent_every, Sink &sink, Values const &values, int cutbacks = 0,
+                 std::vector<step_summary<typename Traits::value_type>> substeps = {}) {
+  using T = typename Traits::value_type;
+  if (substeps.empty())
+    substeps.push_back(step_summary<T>::of(res));
+  step_record<Traits> rec{s, step_summary<T>::of(res), values(res), std::numeric_limits<T>::quiet_NaN(), cutbacks,
+                          std::move(substeps)};
   if (res.converged && tangent_every > 0 && s.index % tangent_every == 0)
     rec.tangent_error = driver.tangent_error(res);
   sink.record(rec);
@@ -53,6 +59,38 @@ bool record_step(Driver &driver, typename Driver::step_result const &res, load_s
   }
   driver.accept();
   return true;
+}
+
+/// Step `s` of the case in 2^cut substeps, every one but the last accepted. A substep that does not converge or
+/// throws a cutback_error returns to the start of the step and halves again, up to the case's max_cutbacks; at the
+/// last level it is recorded (or rethrown) as without cutbacks.
+template <typename Traits, typename Driver, typename Sink, typename Values, typename Solve>
+bool cut_step(Driver &driver, load_case<typename Traits::value_type> const &c, load_step<typename Traits::value_type> const &s,
+              Solve const &solve, Sink &sink, Values const &values) {
+  using T = typename Traits::value_type;
+  if (c.max_cutbacks == 0)
+    return record_step<Traits>(driver, solve(s), s, c.tangent_every, sink, values);
+  auto const start{driver.point().checkpoint()};
+  for (int cut{0};; ++cut) {
+    bool const last_level{cut == c.max_cutbacks};
+    auto const subs{c.path.substeps(s, 1 << cut)};
+    std::vector<step_summary<T>> summaries;
+    try {
+      for (auto const &sub : subs) {
+        auto const res{solve(sub)};
+        summaries.push_back(step_summary<T>::of(res));
+        if (!res.converged && !last_level)
+          break;
+        if (!res.converged || &sub == &subs.back())
+          return record_step<Traits>(driver, res, s, c.tangent_every, sink, values, cut, std::move(summaries));
+        driver.accept();
+      }
+    } catch (umat::cutback_error const &) {
+      if (last_level)
+        throw;
+    }
+    driver.point().restore(start);
+  }
 }
 
 template <typename Traits, typename Sink>
@@ -68,9 +106,11 @@ bool run_small_strain(nlohmann::json const &doc, load_case<typename Traits::valu
   auto const initial{driver.step(tensor2{}, tensor2{}, load_control<T>::strain(), 0, 0)};
   if (!record_step<Traits>(driver, initial, c.path.unloaded(), 0, sink, values))
     return false;
+  auto const solve{[&](load_step<T> const &s) {
+    return driver.step(c.strain_at(s), tensor2{s.load * c.stress}, c.control, s.time, s.dt);
+  }};
   for (auto const &s : c.path.steps())
-    if (!record_step<Traits>(driver, driver.step(c.strain_at(s), tensor2{s.load * c.stress}, c.control, s.time, s.dt), s,
-                             c.tangent_every, sink, values))
+    if (!cut_step<Traits>(driver, c, s, solve, sink, values))
       return false;
   return true;
 }
@@ -110,19 +150,21 @@ bool run_finite_strain(nlohmann::json const &doc, load_case<typename Traits::val
   auto const initial{driver.step(I, tensor2{}, deformation_control<T>::deformation(), 0, 0)};
   if (!record_step<Traits>(driver, initial, c.path.unloaded(), 0, sink, values))
     return false;
+  auto const solve{[&](load_step<T> const &s) {
+    return driver.step(tensor2{I + c.strain_at(s)}, tensor2{s.load * c.stress}, c.finite_control, s.time, s.dt);
+  }};
   for (auto const &s : c.path.steps())
-    if (!record_step<Traits>(driver, driver.step(tensor2{I + c.strain_at(s)}, tensor2{s.load * c.stress}, c.finite_control, s.time, s.dt),
-                             s, c.tangent_every, sink, values))
+    if (!cut_step<Traits>(driver, c, s, solve, sink, values))
       return false;
   return true;
 }
 
 } // namespace detail
 
-/// Runs one load case on a fresh material point; false if a step does not converge (it is still recorded, then
-/// rejected). Every converged step is accepted after its columns and tangent check. Small strain drives the
-/// strain, finite strain F = I + (interpolated points), and records P, Cauchy stress and J. The driver's
-/// parameters are the document's "point" and the case's fd_step.
+/// Runs one load case on a fresh material point; false if a step does not converge after the case's max_cutbacks
+/// halvings (it is still recorded, then rejected). Every converged step is accepted after its columns and tangent
+/// check. Small strain drives the strain, finite strain F = I + (interpolated points), and records P, Cauchy stress
+/// and J. The driver's parameters are the document's "point" and the case's fd_step.
 template <typename Traits, typename Sink>
   requires step_sink<Sink, Traits>
 bool run_case(nlohmann::json const &doc, load_case<typename Traits::value_type> const &c, Sink &sink) {
