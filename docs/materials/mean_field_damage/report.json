@@ -1,7 +1,7 @@
 {
   "title": "mean_field_strain and mean_field_composite_local_nonlinear with a damaging matrix",
   "include": ["../standard_small_strain.json"],
-  "notes": "Mori-Tanaka with local strains (incremental: the local strains advance with the concentrations of the current tangents, so after a damage-loading reversal they do not retrace and the composite keeps a residual stress at zero strain, visible against the intact Mori-Tanaka): mean_field_strain produces the phase strains from the composite increment and the concentration tensors of the algorithmic tangents (the matrix phase reads its tangent over a local edge, the previous pass); the damage chain and the stiff spheres are evaluated at those strains; mean_field_composite_local_nonlinear averages them. The evaluator repeats the pass until mt::residual is below tolerance. The published tangent sum c_r C_r : A_r is first order in the strain increment (exact as it vanishes, see test_mean_field_local); across the damage-surface kinks a central difference does not approximate it, so the tangent check is off here.",
+  "notes": "Mori-Tanaka with local strains (incremental: the local strains advance with the concentrations of the current tangents, so after a damage-loading reversal they do not retrace and the composite keeps a residual stress at zero strain, visible against the intact Mori-Tanaka): mean_field_strain produces the phase strains from the composite increment and the concentration tensors of the algorithmic tangents (the matrix phase reads its tangent over a local edge, the previous pass); the damage chain and the stiff spheres are evaluated at those strains; mean_field_composite_local_nonlinear averages them. update() repeats the pass until mt::residual is below the composite's tolerance (converges()). The published tangent sum c_r C_r : A_r is first order in the strain increment (exact as it vanishes, see test_mean_field_local); across the damage-surface kinks a central difference does not approximate it, so the tangent check is off here.",
   "parameters": {"Km": 3333.33, "Gm": 1153.85, "Ki": 166666.67, "Gi": 76923.08, "c": 0.3, "cm": 0.7, "kappa_0": 0.002, "beta": 30.0, "amplitude": 0.008, "tangent_every": 0},
   "model": {"materials": [
     {"type": "external_strain_source", "name": "strain"},
@@ -23,14 +23,14 @@
     {"type": "exponential_damage_law", "name": "law", "yield_source": "yield", "kappa_0": "$kappa_0", "beta": "$beta"},
     {"type": "isotropic_damage", "name": "damage", "elastic_source": "elastic", "damage_source": "law", "state_source": "state", "yield_source": "yield"},
     {"type": "linear_stress", "name": "stiff", "tangent_source": "C_i", "strain_source": "mt_strain", "strain_property": "strain_spheres"},
-    {"type": "mean_field_composite_local_nonlinear", "name": "mt", "phases": [
+    {"type": "mean_field_composite_local_nonlinear", "name": "mt", "tolerance": 1e-10, "max_passes": 200, "phases": [
       {"concentration": "mt_strain::concentration_matrix", "stress": "damage::damaged_stress", "tangent": "damage::damaged_tangent",
        "fraction": "matrix::volume_fraction", "used_tangent": "matrix::tangent"},
       {"concentration": "mt_strain::concentration_spheres", "stress": "stiff::stress", "tangent": "C_i::tangent", "fraction": "spheres::volume_fraction"}]},
     {"type": "phase", "name": "matrix_intact", "tangent_source": "C_m", "fraction_source": "cm_"},
     {"type": "mean_field_composite_global", "name": "mt_intact", "phases": ["matrix_intact", "spheres"], "kernel": {"type": "mori_tanaka"}},
     {"type": "linear_stress", "name": "intact", "tangent_source": "mt_intact", "strain_source": "strain"}]},
-  "point": {"strain_source": "strain", "stress_source": "mt", "residual_source": "mt::residual", "residual_tolerance": 1e-10, "max_passes": 200},
+  "point": {"strain_source": "strain", "stress_source": "mt"},
   "record": {"d": "law::damage", "eps_m": "mt_strain::strain_matrix", "eps_i": "mt_strain::strain_spheres", "sig_m": "damage::damaged_stress", "sig_i": "stiff::stress", "res": "mt::residual", "sig_intact": "intact::stress"},
   "checks": [
     {"name": "local strains partition the composite strain", "cases": "*", "value": "(1 - c) * eps_m_11 + c * eps_i_11", "expected": "strain_11", "tolerance": 1e-10, "relative": true},

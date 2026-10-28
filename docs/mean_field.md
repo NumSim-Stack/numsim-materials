@@ -241,15 +241,23 @@ Under Mori–Tanaka a softening fibre then attracts strain, so it damages more t
 
 ## 5. Who runs the fixed point
 
-Local edges make every pass acyclic; the fixed point is reached by repeating `update()`:
+Local edges make every pass acyclic. The engine runs the fixed point inside `update()`:
 
-- `material_point_evaluator`: `residual_property` (`"material::property"`), `residual_tolerance`, `max_passes`
-  — the graph is updated again per host call until the residual is at most the tolerance; the UMAT and the
-  drivers go through it. In a report document: `"point": {..., "residual": "mt::residual", "tolerance": 1e-10,
-  "max_passes": 200}`.
-- A solver's Newton loop re-evaluates the material each iteration; the material's own loop above still runs
-  so that the returned stress is consistent for the given increment.
-- In a test: `while (ctx.get<T>("mt", "residual") > tol) ctx.update();`.
+- `mean_field_composite_local_nonlinear` declares its `residual` with `converges()`. Its parameters are
+  `tolerance` (default 1e-10) and `max_passes` (default 200).
+- The engine reruns the iteration group until the residual is at most the tolerance. The group is the
+  callbacks from the phase that reads its tangent over the local edge to the composite.
+- The callbacks before the group (the strain source, the constant tangents) and after it (recorders, plots)
+  run once per update.
+- After `max_passes` passes, `update()` throws `cutback_error`, and the host cuts the step back.
+- Every host converges without further setup: the UMAT, the drivers, the report and a test calling
+  `ctx.update()`. A solver's Newton loop re-evaluates the material each iteration, so the returned stress is
+  consistent for the given increment.
+- Deprecated: the material point's `residual_source` (`residual_property` of `material_point_evaluator`,
+  `"point": {"residual_source": ...}` in a report) with `residual_tolerance` and `max_passes` repeats the whole
+  update. With a converging composite it finds the residual converged after the first update. In a report, set
+  `"tolerance"` and `"max_passes"` on the composite instead (on the `orientation_phases` entry for a
+  generated one).
 
 It is a Picard iteration on the tangents — linear convergence, fine for damage with moderate softening; near
 snap-back it can stall, which the residual then shows. The self-consistent kernel needs none of this: its own

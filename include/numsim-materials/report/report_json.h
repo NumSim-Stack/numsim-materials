@@ -186,7 +186,8 @@ inline std::vector<std::string> output_stems(nlohmann::json const &doc) {
 
 /// "point": the parameters of the material-point driver (strain_source or deformation_gradient_source,
 /// stress_source, optional tangent_source, stress_property, tangent_property ("damaged_stress") and time_source,
-/// and optionally tolerance, max_iter, fd_step, and the fixed point residual_source, residual_tolerance, max_passes).
+/// and optionally tolerance, max_iter, fd_step, and the deprecated fixed point residual_source, residual_tolerance,
+/// max_passes: a composite declaring converges() takes its tolerance and max_passes as parameters).
 template <typename Traits>
 typename Traits::ParameterHandler parse_point(nlohmann::json const &doc) {
   using T = typename Traits::value_type;

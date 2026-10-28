@@ -29,7 +29,8 @@ namespace numsim::materials {
 /// "fraction_source", "orientation" [a11, a22, a33, a12, a13, a23], "per_direction", "stress" ("{q}"
 /// template); optional "precision" (11), "phase", "fraction_property", "matrix_tangent" and "tangent"
 /// (default the phase nodes' tangents), "localisation" (linear | nonlinear: the fibres localise with their
-/// current tangents, read by the "phase" template over a local edge) and "matrix_used_tangent" (nonlinear).
+/// current tangents, read by the "phase" template over a local edge), "matrix_used_tangent", "tolerance" and
+/// "max_passes" (nonlinear: the composite's fixed point).
 /// Sources are "material::property".
 template <typename JsonType>
 std::vector<JsonType> expand_orientation_phases(JsonType const &e) {
@@ -64,8 +65,9 @@ std::vector<JsonType> expand_orientation_phases(JsonType const &e) {
   if (nonlinear && phase_template.value("tangent_edge", std::string{}) != "local")
     throw std::invalid_argument("orientation_phases: a nonlinear localisation reads the fibre tangents over a local edge: the \"phase\" "
                                 "template needs \"tangent_edge\": \"local\" and an \"initial_tangent_source\"");
-  if (!nonlinear && e.contains("matrix_used_tangent"))
-    throw std::invalid_argument("orientation_phases: matrix_used_tangent goes with \"localisation\": \"nonlinear\"");
+  for (char const *key : {"matrix_used_tangent", "tolerance", "max_passes"})
+    if (!nonlinear && e.contains(key))
+      throw std::invalid_argument(std::string{"orientation_phases: "} + key + " goes with \"localisation\": \"nonlinear\"");
   JsonType const &deck{require("per_direction")};
   if (!deck.is_array() || deck.empty())
     throw std::invalid_argument("orientation_phases: per_direction lists the entries of one direction");
@@ -125,6 +127,9 @@ std::vector<JsonType> expand_orientation_phases(JsonType const &e) {
     out.front()["property"] = e.at("fraction_property");
   out.push_back({{"type", "mean_field_strain"}, {"name", strain_name}, {"strain_source", require("strain_source")}, {"phases", phases}, {"kernel", kernel}});
   out.push_back({{"type", nonlinear ? "mean_field_composite_local_nonlinear" : "mean_field_composite_local_linear"}, {"name", name}, {"phases", locals}});
+  for (char const *key : {"tolerance", "max_passes"})
+    if (e.contains(key))
+      out.back()[key] = e.at(key);
   return out;
 }
 
