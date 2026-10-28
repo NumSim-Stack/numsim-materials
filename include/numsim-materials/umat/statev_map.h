@@ -13,7 +13,7 @@
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/umat/errors.h"
-#include "numsim-materials/core/stress_like.h"
+#include "numsim-materials/core/tensor_kind.h"
 #include "numsim-materials/umat/tensor_conversion.h"
 
 /// Flat STATEV <-> the context's history properties.
@@ -37,10 +37,11 @@ namespace numsim::materials::umat {
 /// seeded through *INITIAL CONDITIONS, TYPE=SOLUTION, would otherwise be out by
 /// a factor of two in shear, silently.
 ///
-/// Note this assumes tensor-valued history is STRAIN-like, which is true of
-/// every state variable the framework currently carries. A stress-like tensor
-/// state variable (a back stress, say) would want the unscaled convention, and
-/// would need this decision made per property rather than globally.
+/// A plain tensor<T,3,2> history is taken as strain-like. Any other storage or
+/// rotation is chosen per property by its kinded<T, voigt, leg...> type
+/// (core/tensor_kind.h): stress_like and moduli without the shear factor,
+/// vectors and non-symmetric tensors with all components, material legs
+/// never rotated.
 ///
 /// One `(material, property)` pair the host owns and STATEV must NOT contain.
 using statev_exclusion = std::pair<std::string, std::string>;
@@ -53,7 +54,6 @@ public:
   using tensor4 = tmech::tensor<value_type, 3, 4>;
   using hist_scalar = numsim_core::history_property<value_type, property_traits>;
   using hist_tensor2 = numsim_core::history_property<tensor2, property_traits>;
-  using hist_stress2 = numsim_core::history_property<stress_like<value_type>, property_traits>;
   using hist_tensor4 = numsim_core::history_property<tensor4, property_traits>;
 
   /// Build the map over every history property in @p ctx except those named in
@@ -143,9 +143,9 @@ public:
   /// (plastic strain, back stress) in a stale frame, and the error accumulates
   /// silently over the rotation history with no diagnostic anywhere.
   ///
-  /// Scalars are frame-indifferent and untouched. Every tensor entry is
-  /// rotated, which assumes tensor state is objective — true for the state
-  /// variables constitutive models actually carry.
+  /// Scalars are frame-indifferent and untouched. R acts on every spatial leg
+  /// of a tensor entry and on no material leg, so reference-configuration
+  /// history (Cp, Fp, a material vector) keeps its components.
   void rotate_history(const tensor2& R) const {
     for (const auto& e : m_entries)
       if (e.rotate) e.rotate(R);
@@ -165,8 +165,7 @@ public:
     for (const auto& e : m_entries)
       out.push_back(std::to_string(e.offset) + ".." +
                     std::to_string(e.offset + e.width - 1) + "  " + e.owner +
-                    "::" + e.name +
-                    (e.stress ? "  [stress]" : e.width == canonical_width ? "  [engineering shear]" : ""));
+                    "::" + e.name + (e.tags.empty() ? "" : "  " + e.tags));
     return out;
   }
 
@@ -178,9 +177,9 @@ private:
     std::size_t width;
     std::function<void(const value_type*)> unpack;
     std::function<void(value_type*)> pack;
-    /// Empty for scalars, which no rotation affects.
+    /// Empty for scalars and material-leg tensors, which no rotation affects.
     std::function<void(const tensor2&)> rotate;
-    bool stress{false}; ///< stored without the engineering-shear factor
+    std::string tags{}; ///< storage and leg marks for describe()
   };
 
   /// A rank-2 history variable is stored in 6 slots, which can only represent a
@@ -246,44 +245,22 @@ private:
       return;
     }
 
-    if (auto* h = dynamic_cast<hist_stress2*>(prop)) {
-      m_entries.push_back(
-          {id.owner, id.name, offset, canonical_width,
-           [h](const value_type* src) {
-             h->old_value() = stress_from_buffer<value_type>(src);
-             h->new_value() = h->old_value();
-           },
-           [h, who](value_type* dst) {
-             require_symmetric(h->new_value(), who);
-             stress_to_buffer<value_type>(h->new_value(), dst);
-           },
-           [h](const tensor2& R) {
-             h->old_value() = rotate(h->old_value(), R);
-             h->new_value() = rotate(h->new_value(), R);
-           },
-           true});
-      m_width += canonical_width;
+    // A plain rank-2 tensor is a strain in the current configuration.
+    if (auto* h = dynamic_cast<hist_tensor2*>(prop)) {
+      add_kinded<voigt::engineering, leg::spatial, leg::spatial>(*h, id);
       return;
     }
 
-    if (auto* h = dynamic_cast<hist_tensor2*>(prop)) {
-      m_entries.push_back(
-          {id.owner, id.name, offset, canonical_width,
-           [h](const value_type* src) {
-             h->old_value() = strain_from_buffer<value_type>(src);
-             h->new_value() = h->old_value();
-           },
-           [h, who](value_type* dst) {
-             require_symmetric(h->new_value(), who);
-             strain_to_buffer<value_type>(h->new_value(), dst);
-           },
-           [h](const tensor2& R) {
-             h->old_value() = rotate(h->old_value(), R);
-             h->new_value() = rotate(h->new_value(), R);
-           }});
-      m_width += canonical_width;
+    if (try_kind<voigt::none, leg::spatial>(prop) || try_kind<voigt::none, leg::material>(prop) ||
+        try_kind<voigt::none, leg::spatial, leg::spatial>(prop) ||
+        try_kind<voigt::none, leg::spatial, leg::material>(prop) ||
+        try_kind<voigt::none, leg::material, leg::spatial>(prop) ||
+        try_kind<voigt::none, leg::material, leg::material>(prop) ||
+        try_kind<voigt::engineering, leg::spatial, leg::spatial>(prop) ||
+        try_kind<voigt::engineering, leg::material, leg::material>(prop) ||
+        try_kind<voigt::plain, leg::spatial, leg::spatial>(prop) ||
+        try_kind<voigt::plain, leg::material, leg::material>(prop))
       return;
-    }
 
     if (auto* h = dynamic_cast<hist_tensor4*>(prop)) {
       constexpr std::size_t w = canonical_width * canonical_width;
@@ -308,7 +285,68 @@ private:
     throw fatal_error(
         "statev_map: history property '" + who +
         "' has a type that cannot be stored in STATEV — supported types are "
-        "the scalar value_type, tensor<T,3,2> and tensor<T,3,4>");
+        "the scalar value_type, tensor<T,3,2>, tensor<T,3,4> and the kinded "
+        "vectors and rank-2 tensors of core/tensor_kind.h");
+  }
+
+  template <voigt V, leg... Legs>
+  bool try_kind(property_base* prop) {
+    using hist = numsim_core::history_property<kinded<value_type, V, Legs...>, property_traits>;
+    auto* h = dynamic_cast<hist*>(prop);
+    if (h) add_kinded<V, Legs...>(*h, prop->traits().id);
+    return h != nullptr;
+  }
+
+  /// The entry of a vector or rank-2 history: width and shear factor from V, rotation from the legs.
+  template <voigt V, leg... Legs, typename Hist, typename Id>
+  void add_kinded(Hist& history, Id const& id) {
+    constexpr std::size_t rank = sizeof...(Legs);
+    constexpr std::size_t width = V == voigt::none ? (rank == 1 ? 3 : 9) : canonical_width;
+    auto* h = &history;
+    const std::string who = id.owner + "::" + id.name;
+
+    entry e{id.owner, id.name, m_width, width,
+            [h](const value_type* src) {
+              if constexpr (V == voigt::engineering)
+                h->old_value() = strain_from_buffer<value_type>(src);
+              else if constexpr (V == voigt::plain)
+                h->old_value() = stress_from_buffer<value_type>(src);
+              else
+                h->old_value() = full_from_buffer<value_type, rank>(src);
+              h->new_value() = h->old_value();
+            },
+            [h, who](value_type* dst) {
+              if constexpr (V == voigt::engineering) {
+                require_symmetric(h->new_value(), who);
+                strain_to_buffer<value_type>(h->new_value(), dst);
+              } else if constexpr (V == voigt::plain) {
+                require_symmetric(h->new_value(), who);
+                stress_to_buffer<value_type>(h->new_value(), dst);
+              } else {
+                full_to_buffer<value_type, rank>(h->new_value(), dst);
+              }
+            },
+            nullptr, kind_tags<V, Legs...>()};
+    if constexpr (((Legs == leg::spatial) || ...))
+      e.rotate = [h](const tensor2& R) {
+        h->old_value() = rotate_legs<Legs...>(h->old_value(), R);
+        h->new_value() = rotate_legs<Legs...>(h->new_value(), R);
+      };
+    m_entries.push_back(std::move(e));
+    m_width += width;
+  }
+
+  template <voigt V, leg... Legs>
+  static std::string kind_tags() {
+    std::string tags = V == voigt::engineering ? "[engineering shear]"
+                       : V == voigt::plain     ? "[stress]"
+                       : sizeof...(Legs) == 1  ? "[vector]"
+                                               : "[full]";
+    if constexpr (((Legs == leg::material) && ...))
+      tags += " [reference]";
+    else if constexpr (((Legs == leg::material) || ...))
+      tags += " [two-point]";
+    return tags;
   }
 
   std::vector<entry> m_entries;

@@ -208,6 +208,22 @@ inline void stress_to_buffer(const tmech::tensor<T, 3, 2>& sig,
   view = sig;
 }
 
+/// Full buffer -> vector or rank-2 tensor, all components, row-major {11 12 13 21 ...}.
+template <typename T, std::size_t Rank>
+inline tmech::tensor<T, 3, Rank> full_from_buffer(const T* buf) {
+  const tmech::adaptor<const T, 3, Rank, tmech::full<3>> view(buf);
+  tmech::tensor<T, 3, Rank> out;
+  out = view;
+  return out;
+}
+
+/// Vector or rank-2 tensor -> full buffer (3 or 9 slots), no symmetry assumed.
+template <typename T, std::size_t Rank>
+inline void full_to_buffer(const tmech::tensor<T, 3, Rank>& t, T* buf) {
+  tmech::adaptor<T, 3, Rank, tmech::full<3>> view(buf);
+  view = t;
+}
+
 /// True if @p c is minor-symmetric to within a relative tolerance.
 ///
 /// Mandel/Voigt storage keeps 36 of the 81 rank-4 components, so a tangent
