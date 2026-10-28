@@ -7,6 +7,10 @@
 #include "numsim-materials/materials/strain_threshold_yield.h"
 #include "numsim-materials/materials/exponential_damage_law.h"
 #include "numsim-materials/materials/isotropic_damage.h"
+#include "numsim-materials/materials/strain_energy_state_function.h"
+#include "numsim-materials/materials/vector_strain_state_function.h"
+#include "numsim-materials/umat/external_state_source.h"
+#include "numsim-materials/umat/json_model.h"
 #include "numsim-materials/postprocessing/numerical_diff_checker.h"
 
 namespace {
@@ -16,6 +20,9 @@ using T = policy::value_type;
 using ctx_type = numsim::materials::material_context<policy>;
 using param_type = policy::ParameterHandler;
 using tensor2 = tmech::tensor<T, 3, 2>;
+using tensor4 = tmech::tensor<T, 3, 4>;
+
+T relative(tensor4 const &a, tensor4 const &b) { return tmech::norm(tensor4{a - b}) / tmech::norm(b); }
 
 class IsotropicDamageTest : public ::testing::Test {
 protected:
@@ -109,6 +116,57 @@ TEST_F(IsotropicDamageTest, StressSoftening) {
       << "Stress should soften after peak (peak=" << peak_stress
       << ", final=" << final_stress << ")";
 }
+
+// the derivative accumulated from the partials of the chain is the hand-written damaged tangent
+TEST_F(IsotropicDamageTest, AccumulatedTangentIsTheDamagedTangent) {
+  auto const &derivative{ctx.derivative<tensor4>("damaged", "damaged_stress", "stepper", "strain")};
+  int damaging{0};
+  for (int i = 0; i < 20; ++i) {
+    ctx.update();
+    damaging += ctx.get<int>("yield", "is_yielding");
+    EXPECT_LE(relative(derivative, ctx.get<tensor4>("damaged", "damaged_tangent")), 1e-12) << "step " << i;
+    ctx.commit();
+  }
+  EXPECT_GT(damaging, 10);
+}
+
+/// The damage chain over each state function, loaded, unloaded and reloaded past its previous maximum.
+class DamageChain : public ::testing::TestWithParam<const char *> {};
+
+TEST_P(DamageChain, AccumulatedTangentIsTheDamagedTangentLoadingAndUnloading) {
+  ctx_type ctx;
+  numsim::materials::umat::make_json_builder<policy>(std::string{R"({"materials": [
+    {"type": "external_strain_source", "name": "strain"},
+    {"type": "linear_elasticity", "name": "elastic", "strain_producer_name": "strain", "K": 166.67, "G": 76.92},
+    )"} + GetParam() + R"(,
+    {"type": "strain_threshold_yield", "name": "yield", "state_source": "state", "kappa_critical": 0.002},
+    {"type": "exponential_damage_law", "name": "law", "yield_source": "yield", "kappa_0": 0.002, "beta": 300.0},
+    {"type": "isotropic_damage", "name": "damaged", "elastic_source": "elastic", "damage_source": "law", "state_source": "state", "yield_source": "yield"}]})")(ctx, {});
+  auto const &derivative{ctx.derivative<tensor4>("damaged", "damaged_stress", "strain", "strain")};
+  auto &source{*dynamic_cast<numsim::materials::external_strain_source<policy> *>(ctx.find("strain"))};
+  tensor2 direction;
+  direction(0, 0) = 1, direction(1, 1) = -0.3, direction(0, 1) = direction(1, 0) = 0.4;
+  T previous{0};
+  int damaging{0}, unloading{0};
+  for (T const load : {0.001, 0.003, 0.005, 0.007, 0.005, 0.002, -0.001, 0.004, 0.008, 0.01}) {
+    source.bind(tensor2{previous * direction}, tensor2{load * direction});
+    ctx.update();
+    bool const yielding{ctx.get<int>("yield", "is_yielding") != 0};
+    damaging += yielding;
+    unloading += !yielding && ctx.get<T>("law", "damage") > 0;
+    EXPECT_LE(relative(derivative, ctx.get<tensor4>("damaged", "damaged_tangent")), 1e-12) << "load " << load;
+    ctx.commit();
+    previous = load;
+  }
+  EXPECT_GT(damaging, 2);
+  EXPECT_GT(unloading, 2);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    StateFunctions, DamageChain,
+    ::testing::Values(R"({"type": "von_mises_state_function", "name": "state", "strain_source": "strain"})",
+                      R"({"type": "strain_energy_state_function", "name": "state", "strain_source": "strain", "tangent_source": "elastic", "youngs_modulus": 200.0})",
+                      R"({"type": "vector_strain_state_function", "name": "state", "strain_source": "strain", "m_direction": [0], "n_direction": [1]})"));
 
 // --- Tangent checker ---
 

@@ -3,6 +3,7 @@
 
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_base.h"
+#include "numsim-materials/core/tensor_identities.h"
 
 namespace numsim::materials {
 
@@ -13,7 +14,8 @@ namespace numsim::materials {
 ///   damaged_tangent = (1 - D) * tangent - dD * otimes(stress, d_equivalent_strain)
 ///
 /// The second term in the tangent accounts for the softening due to damage
-/// evolution (consistent tangent contribution).
+/// evolution (consistent tangent contribution). The damaged stress declares its
+/// partials (1 - D) Isym and -stress, so the tangent also accumulates from the graph.
 ///
 /// Outputs:
 ///   "damaged_stress"  — tensor2
@@ -67,7 +69,10 @@ public:
         m_is_yielding(base::template add_input<int>(
             m_yield_source, "is_yielding", EdgeKind::Global))
   {
-    base::add_callback(&isotropic_damage::compute, m_damaged_stress, m_damaged_tangent)
+    base::add_callback(&isotropic_damage::compute_stress, m_damaged_stress)
+        .reads(m_stress, m_damage)
+        .partials(m_damaged_stress, m_stress, m_damage);
+    base::add_callback(&isotropic_damage::compute_tangent, m_damaged_tangent)
         .reads(m_stress, m_tangent, m_damage, m_d_damage, m_deps_eq, m_is_yielding);
   }
 
@@ -82,14 +87,19 @@ public:
     return para;
   }
 
-  void compute() {
-    const auto D = m_damage.get();
-    const auto one_minus_D = value_type{1} - D;
+  void compute_stress() {
+    const auto one_minus_D = value_type{1} - m_damage.get();
+    m_damaged_stress = one_minus_D * m_stress.get();
+    if (base::want_partials()) {
+      base::partial(m_damaged_stress, m_stress) = one_minus_D * sym_identity<value_type, Dim>();
+      base::partial(m_damaged_stress, m_damage) = value_type{-1} * m_stress.get();
+    }
+  }
+
+  void compute_tangent() {
+    const auto one_minus_D = value_type{1} - m_damage.get();
     const auto& sig = m_stress.get();
     const auto& C = m_tangent.get();
-
-    // Damaged stress: (1-D) * sigma
-    m_damaged_stress = one_minus_D * sig;
 
     // Damaged tangent
     if (m_is_yielding.get() != 0) {

@@ -176,6 +176,44 @@ TEST(DamageLaws, OlderLawsShareTheCap) {
   EXPECT_EQ(dd2, 0);
 }
 
+/// d damage / d strain accumulated from the partials of state, yield and law against the chain written by hand
+/// (is_yielding d_damage d_equivalent_strain), loading, unloading and reloading into the cap.
+template <typename Law>
+void expect_accumulated_chain(param_type const &p) {
+  std::unique_ptr<ctx_type> const ctx{build<Law>(p)};
+  auto const &derivative{ctx->derivative<tensor2>("law", "damage", "strain", "strain")};
+  int damaging{0}, unloading{0};
+  for (T const x : {0.002, 0.004, 0.006, 0.008, 0.005, 0.001, 0.007, 0.01, 0.014, 0.02}) {
+    law_at(*ctx, x); // commits, the values stay
+    bool const yielding{ctx->get<int>("yield", "is_yielding") != 0};
+    damaging += yielding;
+    unloading += !yielding && ctx->get<T>("law", "damage") > 0;
+    tensor2 const expected{(yielding ? ctx->get<T>("law", "d_damage") : T{0}) * ctx->get<tensor2>("state", "d_equivalent_strain")};
+    EXPECT_LE(tmech::norm(tensor2{derivative - expected}), 1e-12 * tmech::norm(expected)) << Law::type_name() << " x = " << x;
+  }
+  EXPECT_GT(damaging, 3) << Law::type_name();
+  EXPECT_GT(unloading, 1) << Law::type_name();
+}
+
+TEST(DamageLaws, AccumulatedDerivativeIsTheHandWrittenChain) {
+  param_type power, saturation, peerlings, exponential, linear;
+  for (auto *p : {&power, &saturation, &peerlings, &exponential, &linear})
+    p->insert<T>("kappa_0", kappa_0);
+  power.insert<T>("K", 200.0);
+  power.insert<T>("m", 1.5);
+  saturation.insert<T>("K", 0.9);
+  saturation.insert<T>("m", 300.0);
+  peerlings.insert<T>("alpha", 0.95);
+  peerlings.insert<T>("beta", 200.0);
+  exponential.insert<T>("beta", 100.0);
+  linear.insert<T>("kappa_f", 0.008); // capped at the end of the path
+  expect_accumulated_chain<nm::power_damage_law<policy>>(power);
+  expect_accumulated_chain<nm::saturation_damage_law<policy>>(saturation);
+  expect_accumulated_chain<nm::peerlings_damage_law<policy>>(peerlings);
+  expect_accumulated_chain<nm::exponential_damage_law<policy>>(exponential);
+  expect_accumulated_chain<nm::linear_damage_law<policy>>(linear);
+}
+
 TEST(DamageLaws, FromJson) {
   ctx_type ctx;
   nm::umat::make_json_builder<policy>(R"({"materials": [

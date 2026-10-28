@@ -12,7 +12,7 @@ namespace numsim::materials::detail {
 
 /// Common part of the scalar damage laws: kappa from "yield_source" ("kappa"), the threshold "kappa_0",
 /// the cap "d_max", outputs "damage" and "d_damage" (d damage / d kappa). Derived::evaluate(kappa) returns
-/// {d, dd} above the threshold; at the cap the damage is d_max and the derivative zero.
+/// {d, dd} above the threshold; at the cap the damage is d_max and the derivative zero. Declares d damage / d kappa.
 template <typename Derived, typename Traits>
 class scalar_damage_law : public material_base<Derived, Traits> {
 public:
@@ -40,22 +40,24 @@ public:
     return para;
   }
 
-  void compute() noexcept {
+  void compute() {
     auto const kappa{m_kappa.get()};
     if (kappa <= m_kappa_0) {
       *m_damage = m_d_damage = value_type{0};
-      return;
+    } else {
+      auto const [d, dd]{static_cast<Derived const &>(*this).evaluate(kappa)};
+      *m_damage = d < m_d_max ? d : m_d_max;
+      m_d_damage = d < m_d_max ? dd : value_type{0};
     }
-    auto const [d, dd]{static_cast<Derived const &>(*this).evaluate(kappa)};
-    *m_damage = d < m_d_max ? d : m_d_max;
-    m_d_damage = d < m_d_max ? dd : value_type{0};
+    if (base::want_partials())
+      base::partial(*m_damage, m_kappa) = m_d_damage;
   }
 
 protected:
   /// Called by the law's own constructor: binding the update needs the most-derived object.
   void register_output() {
     m_damage = &base::template add_output<value_type>("damage");
-    base::add_callback(&scalar_damage_law::compute, *m_damage, m_d_damage).reads(m_kappa);
+    base::add_callback(&scalar_damage_law::compute, *m_damage, m_d_damage).reads(m_kappa).partials(*m_damage, m_kappa);
   }
 
   /// The law's own parameter check, with the type name in the message.

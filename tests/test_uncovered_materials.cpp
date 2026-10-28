@@ -13,6 +13,9 @@
 #include "numsim-materials/materials/strain_energy_state_function.h"
 #include "numsim-materials/materials/tensor_component_stepper.h"
 #include "numsim-materials/materials/vector_strain_state_function.h"
+#include "numsim-materials/materials/von_mises_state_function.h"
+#include "numsim-materials/umat/external_state_source.h"
+#include "numsim-materials/umat/json_model.h"
 
 /// Materials that had no test at all. Three of the five are the SECOND of a
 /// pair whose first is well covered -- exponential hardening beside linear,
@@ -277,6 +280,32 @@ TEST(VectorStrainStateFunction, PicksOneComponentAndIsSignSymmetric) {
   // and it is confined to the selected component
   EXPECT_NEAR(dp(1, 1), 0.0, 1e-12);
   EXPECT_NEAR(dp(0, 1), 0.0, 1e-12);
+}
+
+// ---------------------------------------------------------------------------
+
+/// The equivalent strain accumulated from the declared partial is the hand-written d_equivalent_strain.
+TEST(StateFunctions, AccumulatedDerivativeIsTheHandWrittenOne) {
+  for (const char *state : {
+           R"({"type": "von_mises_state_function", "name": "state", "strain_source": "strain"})",
+           R"({"type": "strain_energy_state_function", "name": "state", "strain_source": "strain", "tangent_source": "elastic", "youngs_modulus": 200.0})",
+           R"({"type": "vector_strain_state_function", "name": "state", "strain_source": "strain", "m_direction": [0], "n_direction": [1]})"}) {
+    ctx_type ctx;
+    nm::umat::make_json_builder<policy>(std::string{R"({"materials": [
+      {"type": "external_strain_source", "name": "strain"},
+      {"type": "linear_elasticity", "name": "elastic", "strain_producer_name": "strain", "K": 166.67, "G": 76.92},
+      )"} + state + "]}")(ctx, {});
+    auto const &derivative{ctx.derivative<tensor2>("state", "equivalent_strain", "strain", "strain")};
+    tensor2 direction;
+    direction(0, 0) = 1, direction(1, 1) = -0.3, direction(0, 1) = direction(1, 0) = 0.4, direction(0, 2) = direction(2, 0) = -0.2;
+    for (T const load : {0.004, 0.01, -0.006}) {
+      dynamic_cast<nm::external_strain_source<policy> *>(ctx.find("strain"))->bind(tensor2{}, tensor2{load * direction});
+      ctx.update();
+      auto const &expected{ctx.get<tensor2>("state", "d_equivalent_strain")};
+      EXPECT_LE(tmech::norm(tensor2{derivative - expected}), 1e-12 * tmech::norm(expected)) << state << " " << load;
+      ctx.commit();
+    }
+  }
 }
 
 }  // namespace

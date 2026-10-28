@@ -38,7 +38,9 @@ public:
         m_tangent(base::template add_input<tensor4>(
             m_tangent_source, "tangent", EdgeKind::Global))
   {
-    base::add_callback(&strain_energy_state_function::compute, m_eps_eq, m_deps_eq).reads(m_strain, m_tangent);
+    base::add_callback(&strain_energy_state_function::compute, m_eps_eq, m_deps_eq)
+        .reads(m_strain, m_tangent)
+        .partials(m_eps_eq, m_strain, m_tangent);
   }
 
   static input_parameter_controller parameters() {
@@ -63,6 +65,16 @@ public:
     } else {
       m_deps_eq = tensor2{};
     }
+    if (base::want_partials()) // d eps_eq / d C = eps (x) eps / (2 E eps_eq)
+      update_partials(eps);
+  }
+
+  void update_partials(tensor2 const &eps) {
+    base::partial(m_eps_eq, m_strain) = m_deps_eq;
+    if (m_eps_eq > value_type{1e-30})
+      base::partial(m_eps_eq, m_tangent) = tmech::otimes(eps, eps) / (2 * m_E * m_eps_eq);
+    else
+      base::partial(m_eps_eq, m_tangent) = tensor4{};
   }
 
 private:

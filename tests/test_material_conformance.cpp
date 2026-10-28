@@ -1,10 +1,12 @@
 #include <gtest/gtest.h>
 #include <filesystem>
 #include <nlohmann/json.hpp>
+#include <algorithm>
 #include <fstream>
 #include <regex>
 #include <set>
 #include <string>
+#include <vector>
 #include "numsim-materials/core/partial_check.h"
 #include "numsim-materials/default_materials.h"
 #include "numsim-materials/io/json_material_factory.h"
@@ -156,18 +158,30 @@ TEST(MaterialConformance, MissingRequiredParametersThrow) {
 }
 
 /// Materials whose callbacks declare partials (.partials()), checked by finite differences below.
-const std::set<std::string> kPartialsChecked = {"linear_elasticity", "thermal_eigenstrain"};
+const std::set<std::string> kPartialsChecked = {
+    "exponential_damage_law", "incremental_linear_elasticity", "isotropic_damage", "isotropic_moduli",
+    "isotropic_tangent", "linear_damage_law", "linear_elasticity", "linear_stress", "peerlings_damage_law",
+    "power_damage_law", "saturation_damage_law", "strain_energy_state_function", "strain_threshold_yield",
+    "thermal_eigenstrain", "vector_strain_state_function", "von_mises_state_function"};
 
-/// Header stems under materials/ and solvers/ that declare partials.
+/// Header stems under materials/ and solvers/ that declare partials, themselves or through a detail/ base they include.
 std::set<std::string> headers_declaring_partials() {
   namespace fs = std::filesystem;
+  auto const source{[](fs::path const& file) {
+    std::ifstream in(file);
+    return std::string{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+  }};
+  std::vector<std::string> bases;
+  for (const auto& e : fs::directory_iterator(fs::path{NUMSIM_MATERIALS_INCLUDE_DIR} / "detail"))
+    if (e.path().extension() == ".h" && source(e.path()).find(".partials(") != std::string::npos)
+      bases.push_back("detail/" + e.path().filename().string());
   std::set<std::string> out;
   for (const char* directory : {NUMSIM_MATERIALS_INCLUDE_DIR, NUMSIM_SOLVERS_INCLUDE_DIR})
     for (const auto& e : fs::directory_iterator(fs::path{directory})) {
       if (e.path().extension() != ".h") continue;
-      std::ifstream in(e.path());
-      const std::string src{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
-      if (src.find(".partials(") != std::string::npos)
+      const std::string src{source(e.path())};
+      if (src.find(".partials(") != std::string::npos ||
+          std::ranges::any_of(bases, [&](auto const& base) { return src.contains(base); }))
         out.insert(e.path().stem().string());
     }
   return out;
@@ -189,17 +203,35 @@ TEST(MaterialConformance, DeclaredPartialsMatchFiniteDifferences) {
     else
       ctx.create<nm::external_scalar_source<policy>>(p);
   }
+  // strains of 1e-1 keep the differences of the nonlinear state functions accurate; the damage chain yields below
+  // every cap; the moduli skip the isotropy check, which a perturbed tangent fails
   for (const auto* document : {
            R"({"type": "constant_scalar", "name": "alpha", "value": 1.2e-5})",
+           R"({"type": "constant_scalar", "name": "K", "value": 150.0})",
+           R"({"type": "constant_scalar", "name": "G", "value": 70.0})",
            R"({"type": "thermal_eigenstrain", "name": "thermal_eigenstrain", "alpha_source": "alpha::value", "reference_temperature": 20.0})",
-           R"({"type": "linear_elasticity", "name": "linear_elasticity", "strain_producer_name": "strain", "eigenstrain_source": "thermal_eigenstrain", "K": 150.0, "G": 70.0})"}) {
+           R"({"type": "linear_elasticity", "name": "linear_elasticity", "strain_producer_name": "strain", "eigenstrain_source": "thermal_eigenstrain", "K": 150.0, "G": 70.0})",
+           R"({"type": "isotropic_tangent", "name": "isotropic_tangent", "K_source": "K", "G_source": "G"})",
+           R"({"type": "isotropic_moduli", "name": "isotropic_moduli", "tangent_source": "isotropic_tangent", "tolerance": 0.0})",
+           R"({"type": "linear_stress", "name": "linear_stress", "tangent_source": "isotropic_tangent", "strain_source": "strain"})",
+           R"({"type": "incremental_linear_elasticity", "name": "incremental_linear_elasticity", "strain_source": "strain", "tangent_source": "isotropic_tangent"})",
+           R"({"type": "von_mises_state_function", "name": "von_mises_state_function", "strain_source": "strain"})",
+           R"({"type": "strain_energy_state_function", "name": "strain_energy_state_function", "strain_source": "strain", "tangent_source": "isotropic_tangent", "youngs_modulus": 180.0})",
+           R"({"type": "vector_strain_state_function", "name": "vector_strain_state_function", "strain_source": "strain", "m_direction": [0], "n_direction": [1]})",
+           R"({"type": "strain_threshold_yield", "name": "strain_threshold_yield", "state_source": "von_mises_state_function", "kappa_critical": 0.02})",
+           R"({"type": "exponential_damage_law", "name": "exponential_damage_law", "yield_source": "strain_threshold_yield", "kappa_0": 0.02, "beta": 10.0})",
+           R"({"type": "linear_damage_law", "name": "linear_damage_law", "yield_source": "strain_threshold_yield", "kappa_0": 0.02, "kappa_f": 0.5})",
+           R"({"type": "power_damage_law", "name": "power_damage_law", "yield_source": "strain_threshold_yield", "K": 5.0, "m": 1.5, "kappa_0": 0.02})",
+           R"({"type": "saturation_damage_law", "name": "saturation_damage_law", "yield_source": "strain_threshold_yield", "K": 0.9, "m": 20.0, "kappa_0": 0.02})",
+           R"({"type": "peerlings_damage_law", "name": "peerlings_damage_law", "yield_source": "strain_threshold_yield", "kappa_0": 0.02, "alpha": 0.95, "beta": 10.0})",
+           R"({"type": "isotropic_damage", "name": "isotropic_damage", "elastic_source": "linear_elasticity", "damage_source": "exponential_damage_law", "state_source": "von_mises_state_function", "yield_source": "strain_threshold_yield"})"}) {
     const nlohmann::json j = nlohmann::json::parse(document);
     nm::create_from_json<policy>(ctx, j);
   }
   ctx.finalize();
   tmech::tensor<double, 3, 2> strain;
-  strain(0, 0) = 1e-3, strain(1, 1) = -4e-4, strain(2, 2) = 2e-4;
-  strain(0, 1) = strain(1, 0) = 3e-4, strain(0, 2) = strain(2, 0) = -1e-4, strain(1, 2) = strain(2, 1) = 5e-4;
+  strain(0, 0) = 0.1, strain(1, 1) = -0.04, strain(2, 2) = 0.02;
+  strain(0, 1) = strain(1, 0) = 0.03, strain(0, 2) = strain(2, 0) = -0.01, strain(1, 2) = strain(2, 1) = 0.05;
   dynamic_cast<nm::external_strain_source<policy>*>(ctx.find("strain"))->bind({}, strain);
   dynamic_cast<nm::external_scalar_source<policy>*>(ctx.find("temperature"))->bind(20, 75);
   ctx.update();
