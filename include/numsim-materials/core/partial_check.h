@@ -38,10 +38,14 @@ std::vector<std::string> check_partials(material_context<Traits>& ctx, std::stri
     mat->request_partials(callback, true);
     run();
     mat->request_partials(callback, requested);
-    for (auto const& p : partials | std::views::filter([callback](auto const& q) { return q.callback == callback; })) {
+    auto of_callback{partials | std::views::filter([callback](auto const& q) { return q.callback == callback; })};
+    // packed before any perturbed rerun overwrites them
+    std::vector<std::vector<T>> packed;
+    for (auto const& p : of_callback)
+      p.block->pack(packed.emplace_back(p.block->rows() * p.block->cols()).data());
+    for (auto const& [p, analytic] : std::views::zip(of_callback, packed)) {
       auto const& block{*p.block};
-      std::vector<T> analytic(block.rows() * block.cols()), plus(block.rows()), minus(block.rows());
-      block.pack(analytic.data());
+      std::vector<T> plus(block.rows()), minus(block.rows());
       auto* source{p.input ? ctx.find_property(p.input->source_owner(), p.input->source_name())
                            : ctx.find_property(material, p.own->traits().id.name)};
       auto const read{source->traits().id.owner + "::" + source->traits().id.name};

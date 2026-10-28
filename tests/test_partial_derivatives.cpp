@@ -225,6 +225,38 @@ private:
   nm::input_property<tensor2, nm::property_traits> const &m_b;
 };
 
+/// y = (a::y : a::y) b::y: the partial with respect to b depends on a.
+template <typename Traits>
+class product_node final : public nm::material_base<product_node<Traits>, Traits> {
+public:
+  using base = nm::material_base<product_node<Traits>, Traits>;
+  using input_parameter_controller = typename base::input_parameter_controller;
+
+  template <typename... Args>
+  explicit product_node(Args &&...args)
+      : base(std::forward<Args>(args)...), m_y(base::template add_output<tensor2>("y")),
+        m_a(base::template add_input<tensor2>("a", "y", nm::EdgeKind::Global)),
+        m_b(base::template add_input<tensor2>("b", "y", nm::EdgeKind::Global)) {
+    base::add_callback(&product_node::compute, m_y).reads(m_a, m_b).partials(m_y, m_a, m_b);
+  }
+
+  static input_parameter_controller parameters() { return input_parameter_controller{base::parameters()}; }
+
+  void compute() {
+    auto const aa{tmech::dcontract(m_a.get(), m_a.get())};
+    m_y = aa * m_b.get();
+    if (base::want_partials()) {
+      base::partial(m_y, m_a) = tensor4{T{2} * tmech::otimes(m_b.get(), m_a.get())};
+      base::partial(m_y, m_b) = tensor4{aa * Is};
+    }
+  }
+
+private:
+  tensor2 &m_y;
+  nm::input_property<tensor2, nm::property_traits> const &m_a;
+  nm::input_property<tensor2, nm::property_traits> const &m_b;
+};
+
 /// A context with the sources "strain" and "temperature" and law nodes added by node().
 struct chain {
   std::unique_ptr<ctx_type> owner{std::make_unique<ctx_type>()};
@@ -467,6 +499,20 @@ TEST(PartialDerivatives, TheFiniteDifferenceCheckPassesCorrectPartials) {
   c.load(x0, s0);
   for (auto const *name : {"n", "s", "sb", "a", "p", "d", "e"})
     EXPECT_TRUE(nm::check_partials(c.ctx, name).empty()) << name;
+}
+
+TEST(PartialDerivatives, TheFiniteDifferenceCheckComparesWithThePartialsAtTheState) {
+  chain c;
+  c.node<map_a>("a", "strain::strain");
+  c.node<scale_b>("b", "temperature::state");
+  param_type p;
+  p.insert<std::string>("name", "q");
+  c.ctx.create<product_node<policy>>(p);
+  c.ctx.finalize();
+  c.ctx.derivative<tensor4>("q", "y", "strain", "strain"); // keeps the partials of q requested
+  c.load(x0, s0);
+  auto const mismatches{nm::check_partials(c.ctx, "q")};
+  EXPECT_TRUE(mismatches.empty()) << mismatches.front();
 }
 
 TEST(PartialDerivatives, TheFiniteDifferenceCheckNamesAWrongPartial) {
