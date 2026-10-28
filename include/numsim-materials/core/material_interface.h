@@ -28,6 +28,7 @@
 #include "numsim-materials/core/property_registry_interface.h"
 #include "numsim-materials/core/material_ref.h"
 #include "numsim-materials/core/traits.h"
+#include "numsim-materials/core/unknown_spec.h"
 
 namespace numsim::materials {
 
@@ -76,6 +77,12 @@ bool is_finite(T const& a) {
 /// A rerun constant compared with its stored value.
 enum class verdict { same, changed, not_finite };
 } // namespace detail
+
+/// What the engine reports back to a residual system (solvers/system.h).
+struct system_report {
+  int iterations{0};                                            ///< updates of the unknowns in the last solve
+  std::vector<std::pair<std::size_t, std::size_t>> zero_blocks; ///< (row, column) without a path, from finalize()
+};
 
 /// Virtual base for all materials: property registration, typed input wiring and material references;
 /// work happens in the callbacks bound to properties, there is no virtual update() to override.
@@ -231,15 +238,19 @@ public:
   };
   const std::vector<read_declaration>& declared_reads() const noexcept { return m_declared_reads; }
 
-  /// An output the engine iterates to (material_base::converges): the callbacks between a local edge and it rerun
-  /// in update() until |*value| <= *tolerance, at most *max_passes times.
-  struct convergence_declaration {
-    property_base_type const* residual;
-    value_type const* value;
+  /// A residual system update() solves (solvers/system.h): the unknowns, outputs of this material, until the
+  /// residuals reach |R|_inf <= *tolerance. converges() declares one without unknowns.
+  struct system_declaration {
+    system_method method;
+    std::vector<property_base_type const*> unknowns; ///< in column order
+    std::vector<value_type> seeds;                   ///< start values of the scalar unknowns
+    std::vector<input_wire_base const*> residuals;   ///< row i is solved for unknown i
+    property_base_type const* own_residual;          ///< converges(): the output iterated to, max_iter counts passes
     value_type const* tolerance;
-    int const* max_passes;
+    int const* max_iter;
+    system_report* report; ///< null for converges()
   };
-  const std::vector<convergence_declaration>& converging_outputs() const noexcept { return m_converging; }
+  const std::vector<system_declaration>& systems() const noexcept { return m_systems; }
 
   /// The names of the materials this one reaches through material_ref.
   auto material_ref_targets() const {
@@ -489,9 +500,21 @@ protected:
   /// `residual` is the value add_property() returned; `tolerance` and `max_passes` are read on every update.
   void declare_converges(value_type const& residual, value_type const& tolerance, int const& max_passes) {
     auto const& entry{output_entry_of("converges", &residual)};
-    if (std::ranges::contains(m_converging, entry.property, &convergence_declaration::residual))
+    if (std::ranges::contains(m_systems, entry.property, &system_declaration::own_residual))
       throw std::logic_error("converges(): '" + key_of(entry) + "' is declared twice");
-    m_converging.push_back({entry.property, &residual, &tolerance, &max_passes});
+    m_systems.push_back({system_method::picard, {}, {}, {}, entry.property, &tolerance, &max_passes, nullptr});
+  }
+
+  /// `unknowns` are values add_property() or add_history() returned, `residuals` inputs of this material.
+  void declare_system(system_method method, std::vector<void const*> const& unknowns, std::vector<value_type> seeds,
+                      std::vector<input_wire_base const*> residuals, value_type const& tolerance, int const& max_iter,
+                      system_report& report) {
+    if (!std::ranges::all_of(residuals, [this](auto const* r) { return std::ranges::contains(m_typed_inputs, r, &std::unique_ptr<input_wire_base>::get); }))
+      throw std::logic_error("system(): material '" + m_name + "' names a residual that is not one of its inputs");
+    std::vector<property_base_type const*> properties;
+    for (auto const* unknown : unknowns)
+      properties.push_back(output_entry_of("system", unknown).property);
+    m_systems.push_back({method, std::move(properties), std::move(seeds), std::move(residuals), nullptr, &tolerance, &max_iter, &report});
   }
 
   void declare_written_by(void const* output, void const* writer) {
@@ -547,7 +570,7 @@ private:
   std::vector<property_base_type const*> m_read_declared; ///< callbacks with declared reads
   std::vector<read_declaration> m_declared_reads;
   std::vector<property_base_type const*> m_stateful;      ///< outputs never constant
-  std::vector<convergence_declaration> m_converging;
+  std::vector<system_declaration> m_systems;
   std::vector<std::pair<property_base_type const*, property_base_type const*>> m_written_by, m_callback_order;
 
   /// The entry of an output of this material; declarations end at finalize(), when the engine reads them.

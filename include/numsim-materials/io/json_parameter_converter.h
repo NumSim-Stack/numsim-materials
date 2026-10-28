@@ -201,6 +201,38 @@ json_reader_registry<JsonType> make_default_json_registry() {
         return result;
       });
 
+  // the unknowns of a residual system (solvers/system.h): "seed" is a number or "history"
+  reg.template add<std::vector<system_unknown>>([](const JsonType& j, const std::string& key) -> std::any {
+    std::vector<system_unknown> result;
+    for (const auto& elem : j) {
+      auto& u = result.emplace_back();
+      u.name = adapter::template get<std::string>(adapter::at(elem, "name"));
+      const auto kind = adapter::template get<std::string>(adapter::at(elem, "kind"));
+      if (kind == "sym_tensor")
+        u.kind = unknown_kind::sym_tensor;
+      else if (kind != "scalar")
+        throw std::runtime_error(key + ": unknown '" + u.name + "' has the kind '" + kind + "' (scalar or sym_tensor)");
+      if (!adapter::contains(elem, "seed"))
+        continue;
+      const JsonType seed = adapter::at(elem, "seed");
+      if (adapter::is_number(seed))
+        u.seed = adapter::template get<double>(seed);
+      else if (adapter::is_string(seed) && adapter::template get<std::string>(seed) == "history")
+        u.history = true;
+      else
+        throw std::runtime_error(key + ": the seed of '" + u.name + "' is a number or \"history\"");
+    }
+    return result;
+  });
+  // its equations: {"residual": "material::property", "for": unknown}, without "for" when it has no unknowns
+  reg.template add<std::vector<system_equation>>([](const JsonType& j, const std::string&) -> std::any {
+    std::vector<system_equation> result;
+    for (const auto& elem : j)
+      result.push_back({adapter::template get<std::string>(adapter::at(elem, "residual")),
+                        adapter::contains(elem, "for") ? adapter::template get<std::string>(adapter::at(elem, "for")) : std::string{}});
+    return result;
+  });
+
   // a vector of string pairs, shared by "zero_blocks" and "terms": the message names the key it was given
   // and says what an entry must be in that parameter's words
   const auto string_pairs = [](const JsonType& j, const std::string& key, const char* entry) -> std::any {

@@ -29,6 +29,24 @@ struct unknown_spec {
 /// Used to declare structurally-zero blocks, which are then never wired.
 using block_ref = std::pair<std::string, std::string>;
 
+/// How a residual system (solvers/system.h) updates its unknowns.
+enum class system_method { newton, newton_fd, picard };
+
+/// An unknown of a residual system: it starts from `seed` (a tensor from zero) or, with `history`, from its
+/// value at the end of the last step, kept per point.
+struct system_unknown {
+  std::string name;
+  unknown_kind kind{unknown_kind::scalar};
+  double seed{0};
+  bool history{false};
+};
+
+/// One equation of a residual system: the residual "material::property" and the unknown it is solved for.
+struct system_equation {
+  std::string residual;
+  std::string unknown;
+};
+
 } // namespace numsim::materials
 
 #endif // UNKNOWN_SPEC_H
