@@ -13,6 +13,7 @@
 #include "numsim-materials/materials/drucker_prager_yield_function.h"
 #include "numsim-materials/materials/plasticity_utils.h"
 #include "numsim-materials/solvers/local_newton.h"
+#include "numsim-materials/umat/errors.h"
 
 namespace numsim::materials {
 
@@ -104,7 +105,7 @@ public:
     // the material, not about roundoff. Clamping it leaves the stress outside
     // the cone with no plastic flow and no error.
     if (smooth.converged && smooth.x < value_type{0})
-      throw std::runtime_error(
+      throw umat::cutback_error(
           "drucker_prager_plasticity: the return map produced a negative "
           "plastic multiplier, which means the hardening modulus is at or "
           "below -(G + K*eta*beta). The softening branch is unstable and this "
@@ -132,7 +133,7 @@ public:
         m_yf.needs_apex_return(m_G, dlambda, ts.eval.sig_eq)) {
       // The apex is the remaining branch, and its own Newton can fail too.
       if (!do_apex_return(ts.eval.sig, C_e, kappa_n))
-        throw std::runtime_error(
+        throw umat::cutback_error(
             "drucker_prager_plasticity: both smooth and apex Newton failed");
       return;
     }

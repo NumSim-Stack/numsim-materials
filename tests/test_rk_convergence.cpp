@@ -9,6 +9,7 @@
 #include "numsim-materials/materials/linear_isotropic_hardening.h"
 #include "numsim-materials/materials/tensor_component_stepper.h"
 #include "numsim-materials/solvers/rk_integrator.h"
+#include "numsim-materials/umat/errors.h"
 
 namespace {
 
@@ -204,7 +205,7 @@ TEST(RkConvergence, AJ2RkPlasticStepConvergesWithEnoughIterations) {
 
 // the stage used to keep the previous call's flow direction and report nothing; the other return maps throw
 TEST(RkConvergence, AJ2RkStageThatRunsOutOfIterationsThrows) {
-  EXPECT_THROW(run_j2_rk(1, "implicit_euler"), std::runtime_error);
+  EXPECT_THROW(run_j2_rk(1, "implicit_euler"), nm::umat::cutback_error);
 }
 
 TEST(RkConvergence, TheJ2RkFailureNamesTheMaterialAndTheStage) {
@@ -224,7 +225,7 @@ TEST(RkConvergence, TheJ2RkFailureNamesTheMaterialAndTheStage) {
 TEST(RkConvergence, AFailedStageDoesNotInfluenceTheNextCall) {
   ctx_type failed_first, fresh;
   build_j2_rk(failed_first, 1, "implicit_euler");
-  EXPECT_THROW(failed_first.update(), std::runtime_error);
+  EXPECT_THROW(failed_first.update(), nm::umat::cutback_error);
   failed_first.revert(); // the host rejects the failed step (#187)
   dynamic_cast<nm::j2_rk_plasticity<policy>*>(failed_first.find("j2"))->template set_parameter<int>("max_iter", 50);
   failed_first.update(); // the stepper is at its second increment now
