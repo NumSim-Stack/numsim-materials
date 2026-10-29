@@ -61,7 +61,7 @@ struct graph_node {
   bool callback{false}; ///< has a callback of its own
 };
 
-/// The finalized graph: nodes in execution order, edges sorted by key.
+/// The finalized graph: nodes in execution order; edges are the sorted global ones, then the sorted local ones.
 struct property_graph {
   std::vector<graph_node> nodes;
   std::vector<graph_edge> edges;
@@ -937,7 +937,7 @@ private:
   std::vector<property_base*> m_property_execution_order;
   std::unordered_map<std::string, property_base*> m_key_to_prop;  // for string-based find
   std::unordered_map<property_base*, std::vector<property_base*>> m_reverse_edges;  // pointer-based
-  std::vector<graph_edge> m_edges;                                               ///< every edge with its kind, local ones too
+  std::vector<graph_edge> m_edges;                                               ///< global edges sorted by key, then local ones sorted by key
   mutable std::unordered_map<const property_base*, std::unordered_set<property_base*>> m_upstream; ///< upstream_of() cache
   std::unordered_set<const property_base*> m_stateful;                           ///< outputs declared stateful()
   std::vector<property_base*> m_history_properties;

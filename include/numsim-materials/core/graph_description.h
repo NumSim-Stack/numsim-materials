@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <format>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -48,6 +49,17 @@ namespace detail {
 
 inline std::string graph_key(property_base const *p) { return p->traits().id.owner + "::" + p->traits().id.name; }
 
+/// A name inside a DOT "...": backslash and quote escaped, a newline written as \n.
+inline std::string dot_escape(std::string_view name) {
+  std::string out;
+  for (char const c : name) {
+    if (c == '\\' || c == '"') out += '\\';
+    if (c == '\n') out += "\\n";
+    else out += c;
+  }
+  return out;
+}
+
 inline std::string dot_style(graph_node const &n) {
   std::string style;
   if (n.constant) style += ", style=filled, fillcolor=lightgrey";
@@ -65,15 +77,17 @@ std::string to_dot(material_context<Traits> const &ctx) {
   auto const g{ctx.graph()};
   std::string out{"digraph materials {\n  rankdir=LR;\n  node [shape=box];\n"};
   for (auto const *mat : ctx.materials()) {
-    out += std::format("  subgraph \"cluster_{0}\" {{\n    label=\"{0}\";\n", mat->name());
+    out += std::format("  subgraph \"cluster_{0}\" {{\n    label=\"{0}\";\n", detail::dot_escape(mat->name()));
     for (auto const &n : g.nodes)
       if (n.property->traits().id.owner == mat->name())
-        out += std::format("    \"{}\" [label=\"{}\"{}];\n", detail::graph_key(n.property), n.property->traits().id.name,
+        out += std::format("    \"{}\" [label=\"{}\"{}];\n", detail::dot_escape(detail::graph_key(n.property)),
+                           detail::dot_escape(n.property->traits().id.name),
                            detail::dot_style(n));
     out += "  }\n";
   }
   for (auto const &e : g.edges)
-    out += std::format("  \"{}\" -> \"{}\" [{}label=\"{}\"];\n", detail::graph_key(e.from), detail::graph_key(e.to),
+    out += std::format("  \"{}\" -> \"{}\" [{}label=\"{}\"];\n", detail::dot_escape(detail::graph_key(e.from)),
+                       detail::dot_escape(detail::graph_key(e.to)),
                        e.kind == edge_kind::local ? "style=dashed, " : "", to_string(e.kind));
   return out + "}\n";
 }
@@ -94,7 +108,7 @@ std::string to_json(material_context<Traits> const &ctx) {
   for (auto const &e : g.edges)
     edges.push_back({{"from", detail::graph_key(e.from)}, {"to", detail::graph_key(e.to)}, {"kind", std::string{to_string(e.kind)}}});
   nlohmann::json const doc = {{"nodes", nodes}, {"edges", edges}};
-  return doc.dump(2);
+  return doc.dump(2, ' ', false, nlohmann::json::error_handler_t::replace); // an odd name must not throw
 }
 
 } // namespace numsim::materials

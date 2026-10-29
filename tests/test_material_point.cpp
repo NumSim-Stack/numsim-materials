@@ -10,7 +10,7 @@
 #include "numsim-materials/core/parameter_helpers.h"
 #include "numsim-materials/driver/material_point.h"
 #include "numsim-materials/materials/constant_scalar.h"
-#include "numsim-materials/umat/external_state_source.h"
+#include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/umat/statev_map.h"
 #include "test_fixture_materials.h"
 

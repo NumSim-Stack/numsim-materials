@@ -9,7 +9,7 @@
 #include "numsim-materials/materials/isotropic_tangent.h"
 #include "numsim-materials/materials/thermal_eigenstrain.h"
 #include "numsim-materials/driver/deformation_gradient_driver.h"
-#include "numsim-materials/umat/external_state_source.h"
+#include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/umat/json_model.h"
 #include "numsim-materials/umat/material_point_evaluator.h"
 

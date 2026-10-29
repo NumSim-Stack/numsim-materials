@@ -10,7 +10,7 @@
 #include "numsim-materials/driver/material_point.h"
 #include "numsim-materials/materials/j2_plasticity.h"
 #include "numsim-materials/solvers/local_newton.h"
-#include "numsim-materials/umat/external_state_source.h"
+#include "numsim-materials/driver/external_state_source.h"
 
 // The proving case of the engine / integrator / driver split (#184, phase 1): temperature-dependent J2
 // plasticity driven step by step, against the contract a material library owes its host:

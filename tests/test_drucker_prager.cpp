@@ -13,6 +13,7 @@
 #include "numsim-materials/solvers/local_newton.h"
 #include "numsim-materials/solvers/butcher_tableau.h"
 #include "numsim-materials/postprocessing/numerical_diff_checker.h"
+#include "numsim-materials/umat/errors.h"
 
 namespace {
 
@@ -96,7 +97,7 @@ struct dp_graph {
   static constexpr T eta{0.1};
   static constexpr T beta{0.05};
 
-  dp_graph(std::vector<double> direction, T increment, T H_mod) {
+  dp_graph(std::vector<double> direction, T increment, T H_mod, T tolerance = T{1e-10}) {
     param_type p;
     p.insert<std::string>("name", "stepper");
     p.insert<T>("increment", increment);
@@ -105,6 +106,7 @@ struct dp_graph {
 
     p.clear();
     p.insert<std::string>("name", "solver");
+    p.insert<T>("tolerance", tolerance);
     ctx.create<numsim::materials::local_newton<policy>>(p);
 
     p.clear();
@@ -718,3 +720,28 @@ TEST(DPBranch, StressIsContinuousAcrossTheBranchBoundary) {
 }
 
 } // namespace
+
+namespace {
+template <typename Fn>
+void expect_cutback(Fn&& fn) {
+  EXPECT_THROW(
+      {
+        for (int i = 0; i < 20; ++i) {
+          fn();
+        }
+      },
+      numsim::materials::umat::cutback_error);
+}
+}  // namespace
+
+// Softening past -(G + K eta beta): no admissible multiplier, but a smaller step is worth a retry.
+TEST(DruckerPragerErrors, ANegativeMultiplierAsksForASmallerStep) {
+  dp_graph g({1.0, 0.0, 0.0, 0.0}, T{0.05}, T{-300.0});
+  expect_cutback([&] { g.ctx.update(); g.ctx.commit(); });
+}
+
+// A zero tolerance fails both the smooth and the apex Newton.
+TEST(DruckerPragerErrors, WhenBothNewtonsFailTheStepIsRetryable) {
+  dp_graph g({1.0, 0.0, 0.0, 0.0}, T{0.05}, T{500.0}, T{0});
+  expect_cutback([&] { g.ctx.update(); g.ctx.commit(); });
+}

@@ -10,7 +10,7 @@
 #include "numsim-materials/materials/exponential_isotropic_hardening.h"
 #include "numsim-materials/materials/j2_plasticity.h"
 #include "numsim-materials/solvers/local_newton.h"
-#include "numsim-materials/umat/external_state_source.h"
+#include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/driver/material_point_driver.h"
 
 namespace {
