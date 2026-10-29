@@ -1,5 +1,5 @@
-#ifndef NUMSIM_MATERIALS_ERRORS_H
-#define NUMSIM_MATERIALS_ERRORS_H
+#ifndef NUMSIM_MATERIALS_CORE_ERRORS_H
+#define NUMSIM_MATERIALS_CORE_ERRORS_H
 
 #include <stdexcept>
 
@@ -38,4 +38,4 @@ public:
 
 } // namespace numsim::materials
 
-#endif // NUMSIM_MATERIALS_ERRORS_H
+#endif // NUMSIM_MATERIALS_CORE_ERRORS_H

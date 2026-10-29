@@ -5,6 +5,8 @@
 #include "numsim-materials/core/traits.h"
 #include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/umat/errors.h"
+#include "numsim-materials/umat/external_state_source.h"
+#include "numsim-materials/umat/tensor_conversion.h"
 
 namespace {
 
@@ -19,6 +21,10 @@ static_assert(std::is_same_v<nm::umat::cutback_error, nm::cutback_error>);
 template <typename Source>
 concept binds_raw_buffers = requires(Source &s, T const *p) { s.bind(p, p); };
 static_assert(!binds_raw_buffers<strain_source>);
+// the supported bind (two tensors) stays callable
+template <typename Source>
+concept binds_tensors = requires(Source &s, strain_source::tensor2 const &t) { s.bind(t, t); };
+static_assert(binds_tensors<strain_source>);
 
 TEST(HostNeutralHeaders, ErrorsAreRuntimeErrors) {
   EXPECT_THROW(throw nm::cutback_error("x"), std::runtime_error);
