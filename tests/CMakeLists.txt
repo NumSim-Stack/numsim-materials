@@ -1,20 +1,27 @@
 find_package(Threads REQUIRED)
 
 # Without a build type the tests would compile at -O0, where the uninlined expression templates make every
-# test binary ~5x larger and slower; an explicit CMAKE_BUILD_TYPE or an empty value turns this off.
+# test binary ~5x larger and slower. "auto" is resolved on every configure: -O1 only if CMAKE_BUILD_TYPE is empty,
+# the generator is single-config and CMAKE_CXX_FLAGS has no -O option. Any other value is used verbatim, empty is off.
+set(NUMSIM_MATERIALS_TEST_OPT_FLAGS auto CACHE STRING
+    "Optimisation flags for the test executables (plain and sanitizer builds): auto, a flag list, or empty for none")
 get_property(_numsim_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
-if(NOT CMAKE_BUILD_TYPE AND NOT _numsim_multi_config)
-  set(_numsim_test_opt_default -O1)
+if(NUMSIM_MATERIALS_TEST_OPT_FLAGS STREQUAL "auto")
+  set(_numsim_test_opt "")
+  if(NOT CMAKE_BUILD_TYPE AND NOT _numsim_multi_config
+     AND NOT CMAKE_CXX_FLAGS MATCHES "(^| )-O[0-9sgz]*( |$)")
+    set(_numsim_test_opt -O1)
+  endif()
+else()
+  separate_arguments(_numsim_test_opt UNIX_COMMAND "${NUMSIM_MATERIALS_TEST_OPT_FLAGS}")
 endif()
-set(NUMSIM_MATERIALS_TEST_OPT_FLAGS "${_numsim_test_opt_default}" CACHE STRING
-    "Optimisation flags for the test executables (plain and sanitizer builds)")
 
 macro(add_numsim_test TARGET_NAME)
   numsim_add_test(${TARGET_NAME} SOURCES ${ARGN}
     LINK numsim-materials::numsim-materials Threads::Threads)
   foreach(_target IN ITEMS ${TARGET_NAME} ${TARGET_NAME}_asan ${TARGET_NAME}_tsan)
     if(TARGET ${_target})
-      target_compile_options(${_target} PRIVATE ${NUMSIM_MATERIALS_TEST_OPT_FLAGS})
+      target_compile_options(${_target} PRIVATE ${_numsim_test_opt})
     endif()
   endforeach()
 endmacro()
