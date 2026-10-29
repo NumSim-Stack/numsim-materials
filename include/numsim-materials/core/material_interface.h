@@ -62,6 +62,22 @@ bool same_value(T const& a, T const& b) {
   }
 }
 
+/// How far `b` is from `a` relative to the larger of the two: 0 when equal, infinite when they differ and one is not finite.
+template <verifiable T>
+double relative_deviation(T const& a, T const& b) {
+  double distance, size;
+  if constexpr (std::is_arithmetic_v<T>) {
+    distance = std::abs(static_cast<double>(a) - static_cast<double>(b));
+    size = std::max(std::abs(static_cast<double>(a)), std::abs(static_cast<double>(b)));
+  } else if constexpr (requires { tmech::norm(a - b); }) {
+    distance = static_cast<double>(tmech::norm(a - b));
+    size = static_cast<double>(std::max(tmech::norm(a), tmech::norm(b)));
+  } else {
+    return a == b ? 0 : 1;
+  }
+  return distance == 0 ? 0 : std::isfinite(distance) && std::isfinite(size) ? distance / size : std::numeric_limits<double>::infinity();
+}
+
 /// Whether a value is finite; types without a norm are.
 template <verifiable T>
 bool is_finite(T const& a) {
@@ -210,6 +226,7 @@ public:
   using property_base_type = numsim_core::property_base<property_traits>;
   /// Copies a value; the returned check compares it with the current one. Empty for types never constant.
   using snapshot = std::function<std::function<detail::verdict()>()>;
+  using deviation_probe = std::function<std::function<double()>()>;
 
   /// An output declared a function of the parameters, of `reads` (all inputs when unset) and of the outputs
   /// `own_reads` of this material (material_base::constant_output, callback_handle::reads).
@@ -282,13 +299,40 @@ public:
   };
   const std::vector<partial_declaration>& partials() const noexcept { return m_partials; }
 
-  /// A read whose partials are declared zero (callback_handle::independent_of()), as in partial_declaration.
+  /// A read whose partials are declared zero (callback_handle::independent_of()), as in partial_declaration;
+  /// `probe` perturbs the read for check_partials(), empty for a read that is not a scalar or tensor.
   struct independent_declaration {
     property_base_type const* callback;
     input_wire_base const* input;
     property_base_type const* own;
+    std::unique_ptr<derivatives::read_probe<value_type>> probe;
   };
   const std::vector<independent_declaration>& independent_reads() const noexcept { return m_independent; }
+
+  /// The worst relative deviation of an output of a callback from a copy taken earlier.
+  struct output_deviation {
+    property_base_type const* output{nullptr};
+    double relative{0};
+  };
+  /// Copies the outputs of the callback filling `callback` (with declared reads); the returned function reports the
+  /// largest relative deviation of any from its copy. Outputs of types without a comparison are not watched.
+  std::function<output_deviation()> watch_outputs(property_base_type const* callback) const {
+    auto const it{std::ranges::find(m_declared_reads, callback, &read_declaration::callback)};
+    if (it == m_declared_reads.end())
+      throw std::logic_error("watch_outputs(): the callback has no declared reads");
+    std::vector<std::pair<property_base_type const*, std::function<double()>>> watched;
+    for (auto const* output : it->outputs)
+      for (auto const& [address, entry] : m_outputs)
+        if (entry.property == output && entry.deviation)
+          watched.emplace_back(output, entry.deviation());
+    return [watched = std::move(watched)] {
+      output_deviation worst;
+      for (auto const& [output, deviation] : watched)
+        if (auto const relative{deviation()}; relative > worst.relative || !worst.output)
+          worst = {output, relative};
+      return worst;
+    };
+  }
 
   /// Whether `callback` fills its partials when it runs: the engine sets it for the callbacks on a requested derivative.
   void request_partials(property_base_type const* callback, bool on) {
@@ -347,7 +391,8 @@ protected:
                           std::make_unique<derivatives::typed_partial<value_type, Traits::Dim, Out, In>>(output)});
   }
 
-  /// The outputs of the callback filling `callback` do not depend on `read`: its partials are zero.
+  /// The outputs of the callback filling `callback` do not depend on `read`: its partials are zero. It holds for every
+  /// output of the callback, and check_partials() perturbs the read to verify it.
   template <typename In>
   void declare_independent(void const* callback, In const& read) {
     auto const& [d, entry]{declared_read_of("independent_of", callback)};
@@ -355,7 +400,10 @@ protected:
     if (is_independent(d->callback, input, own) ||
         std::ranges::any_of(m_partials, [&](auto const& p) { return p.callback == d->callback && p.input == input && p.own == own; }))
       throw std::logic_error("independent_of(): '" + key_of(entry) + "' declares a read twice or also in partials()");
-    m_independent.push_back({d->callback, input, own});
+    std::unique_ptr<derivatives::read_probe<value_type>> probe;
+    if constexpr (derivatives::node_value<derivatives::value_of_t<In>, value_type, Traits::Dim>)
+      probe = std::make_unique<derivatives::typed_read<value_type, Traits::Dim, derivatives::value_of_t<In>>>();
+    m_independent.push_back({d->callback, input, own, std::move(probe)});
   }
 
   template <typename T>
@@ -369,14 +417,22 @@ protected:
           return !detail::is_finite(value) ? not_finite : detail::same_value(copy, value) ? same : changed;
         }};
       };
-    m_outputs[&value] = {*m_property_handler.find(name(), property_name), std::move(take)};
+    deviation_probe deviation;
+    if constexpr (detail::verifiable<T>)
+      deviation = [&value] { return std::function<double()>{[&value, copy = value] { return detail::relative_deviation(copy, value); }}; };
+    m_outputs[&value] = {*m_property_handler.find(name(), property_name), std::move(take), std::move(deviation)};
     return value;
   }
 
   template <typename T>
   history_property<T>& add_history(std::string const& property_name, T&& data = T()) {
     auto& value{m_property_handler.template add_history<T>(name(), property_name, std::forward<T>(data))};
-    m_outputs[&value] = {*m_property_handler.find(name(), property_name), {}}; // never constant
+    deviation_probe deviation;
+    if constexpr (detail::verifiable<T>)
+      deviation = [&value] {
+        return std::function<double()>{[&value, copy = value.new_value()] { return detail::relative_deviation(copy, value.new_value()); }};
+      };
+    m_outputs[&value] = {*m_property_handler.find(name(), property_name), {}, std::move(deviation)}; // never constant
     return value;
   }
 
@@ -523,6 +579,7 @@ private:
   struct output_entry {
     property_base_type const* property;
     snapshot take;
+    deviation_probe deviation; ///< copies the value; the returned function gives its relative deviation from the copy
   };
   std::unordered_map<void const*, output_entry> m_outputs; ///< value address -> property
   std::vector<constant_declaration> m_constant_outputs;

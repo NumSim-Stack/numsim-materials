@@ -103,6 +103,7 @@ public:
       for (auto* prop : m_active)
         prop->traits().update();
       retire([](property_base*) { return true; });
+      m_evaluated = true;
     });
   }
 
@@ -240,22 +241,26 @@ public:
 
   /// d target / d seed as R (rank(target) + rank(seed), a scalar for two scalars), filled by differentiate().
   /// Resolved once: a path from the seed to the target through a callback without the partial it needs throws.
+  /// On an evaluated context the callbacks on the path run once more and fill the result at once.
   template <typename R>
+    requires derivatives::derivative_value<R, typename Traits::value_type, Traits::Dim>
   const R& derivative(const property_base* target, const property_base* seed) {
     using slot_type = derivatives::derivative_slot<value_type, Traits::Dim, R>;
-    auto const what{"derivative(): d '" + prop_key(target->traits().id) + "' / d '" + prop_key(seed->traits().id) + "'"};
+    auto const what{[&] { return "derivative(): d '" + prop_key(target->traits().id) + "' / d '" + prop_key(seed->traits().id) + "'"; }};
+    if (m_running)
+      throw std::logic_error(what() + ": called from a callback");
     if (auto const it{std::ranges::find_if(m_plans, [&](auto const& p) { return p.target == target && p.seed == seed; })};
         it != m_plans.end()) {
       if (auto* slot{dynamic_cast<slot_type*>(it->slot.get())})
         return slot->value;
-      throw std::logic_error(what + " is requested as another type already");
+      throw std::logic_error(what() + " is requested as another type already");
     }
     auto const target_rank{derivatives::property_rank<value_type, Traits::Dim>(*target)};
     auto const seed_rank{derivatives::property_rank<value_type, Traits::Dim>(*seed)};
     if (!target_rank || !seed_rank)
-      throw std::logic_error(what + ": both must be scalars or symmetric tensors of rank 2 or 4");
+      throw std::logic_error(what() + ": both must be scalars or symmetric tensors of rank 2 or 4");
     if (*target_rank + *seed_rank != derivatives::rank_of<R>())
-      throw std::logic_error(std::format("{} has rank {}, the requested type rank {}", what, *target_rank + *seed_rank,
+      throw std::logic_error(std::format("{} has rank {}, the requested type rank {}", what(), *target_rank + *seed_rank,
                                          derivatives::rank_of<R>()));
     auto plan{plan_derivative(target, seed, *seed_rank)};
     auto slot{std::make_unique<slot_type>(*target_rank)};
@@ -267,7 +272,15 @@ public:
       step.material->request_partials(step.callback, true);
     m_plans.push_back(std::move(plan));
     reactivate(); // a constant callback fills its partials once more
+    if (m_evaluated)
+      fill_now(m_plans.back());
     return value;
+  }
+
+  /// Whether `seed` is upstream of `target` (or the target itself): a derivative of one by the other can be non-zero.
+  /// Without a path derivative() stays zero.
+  bool has_path(const property_base* target, const property_base* seed) const {
+    return upstream_of(target).contains(const_cast<property_base*>(seed));
   }
 
   /// Accumulates the requested derivatives from the partials the last update filled: D[out] += P * D[in].
@@ -276,15 +289,8 @@ public:
       return;
     for (auto& [block, packed] : m_blocks)
       block->pack(packed.data());
-    for (auto& plan : m_plans) {
-      plan.D.front().setIdentity();
-      for (auto& d : plan.D | std::views::drop(1))
-        d.setZero();
-      for (auto const& step : plan.steps)
-        plan.D[step.out].noalias() += m_blocks[step.block].second * plan.D[step.in];
-      if (plan.target_node)
-        plan.slot->unpack(plan.D[*plan.target_node].data());
-    }
+    for (auto& plan : m_plans)
+      accumulate(plan);
   }
 
   void dump() const {
@@ -630,6 +636,7 @@ private:
     } catch (...) {
       m_running = false;
       m_failed = true;
+      m_evaluated = false;
       throw;
     }
     m_running = false;
@@ -776,6 +783,34 @@ private:
     std::unique_ptr<derivatives::derivative_slot_base<value_type>> slot;
   };
 
+  /// D[out] += P * D[in] over the steps of one plan, from the packed blocks.
+  void accumulate(derivative_plan& plan) {
+    plan.D.front().setIdentity();
+    for (auto& d : plan.D | std::views::drop(1))
+      d.setZero();
+    for (auto const& step : plan.steps)
+      plan.D[step.out].noalias() += m_blocks[step.block].second * plan.D[step.in];
+    if (plan.target_node)
+      plan.slot->unpack(plan.D[*plan.target_node].data());
+  }
+
+  /// Reruns the callbacks of a new plan at the values held and accumulates it. A stateful callback is not rerun: its
+  /// partials come with the next update().
+  void fill_now(derivative_plan& plan) {
+    auto const on_plan{[&](auto const* prop) {
+      return std::ranges::any_of(plan.steps, [&](auto const& step) { return step.callback == prop; });
+    }};
+    if (std::ranges::any_of(m_callbacks, [&](auto const* prop) { return on_plan(prop) && m_stateful.contains(prop); }))
+      return;
+    guarded("derivative", [&] {
+      for (auto* prop : m_callbacks | std::views::filter(on_plan))
+        prop->traits().update();
+    });
+    for (auto& [block, packed] : m_blocks)
+      block->pack(packed.data());
+    accumulate(plan);
+  }
+
   /// Indexes the declared reads by output and runs every callback declaring partials with want_partials() as requested.
   void index_partials(const std::vector<material_interface_type*>& interfaces) {
     m_plans.clear();
@@ -919,6 +954,7 @@ private:
   bool m_verify{NUMSIM_MATERIALS_DEBUG_CHECKS != 0};
   bool m_fold{true};
   bool m_running{false}; ///< an update is in progress
+  bool m_evaluated{false}; ///< an update() ran to its end since the last failure
   bool m_failed{false};  ///< the last update threw
   std::unique_ptr<bool> m_check_reads{std::make_unique<bool>(true)}; ///< stable address for the wrapped callbacks
 };

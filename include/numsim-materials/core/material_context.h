@@ -91,7 +91,9 @@ public:
 
   /// d material::property / d seed_material::seed_property as R (rank of both added, a scalar for two scalars),
   /// filled by every update() after the values. A requested path through a callback without its partial throws.
+  /// R is the value type or a tensor of rank 2 to 8 of the context's dimension.
   template <typename R>
+    requires derivatives::derivative_value<R, typename Traits::value_type, Traits::Dim>
   const R& derivative(const std::string& material, const std::string& property, const std::string& seed_material,
                       const std::string& seed_property) {
     check_finalized("derivative");
@@ -101,6 +103,18 @@ public:
       throw std::runtime_error("derivative(): property '" + (target ? seed_material + "::" + seed_property : material + "::" + property) +
                                "' not found");
     return m_engine.template derivative<R>(target, seed);
+  }
+
+  /// Whether the seed is upstream of the property: otherwise derivative() is zero. Throws on an unknown name.
+  bool has_path(const std::string& material, const std::string& property, const std::string& seed_material,
+                const std::string& seed_property) {
+    check_finalized("has_path");
+    auto const* target{find_property(material, property)};
+    auto const* seed{find_property(seed_material, seed_property)};
+    if (!target || !seed)
+      throw std::runtime_error("has_path(): property '" + (target ? seed_material + "::" + seed_property : material + "::" + property) +
+                               "' not found");
+    return m_engine.has_path(target, seed);
   }
 
   void update_property(const std::string& material, const std::string& property,
