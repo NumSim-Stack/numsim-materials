@@ -8,7 +8,7 @@
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/materials/poisson_ratio_from_moduli.h"
 #include "numsim-materials/materials/tensor_component_stepper.h"
-#include "numsim-materials/umat/external_state_source.h"
+#include "numsim-materials/driver/external_state_source.h"
 
 // The shipped materials declare what each callback reads (#168): constness follows from the reads, and a
 // constant from the parameters alone is recomputed after set_parameter().

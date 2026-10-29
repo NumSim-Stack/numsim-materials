@@ -13,7 +13,7 @@
 #include "numsim-materials/materials/isotropic_moduli.h"
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/materials/poisson_ratio_from_moduli.h"
-#include "numsim-materials/umat/external_state_source.h"
+#include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/umat/json_model.h"
 
 namespace {

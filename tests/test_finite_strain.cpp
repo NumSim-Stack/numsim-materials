@@ -13,7 +13,7 @@
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/materials/neo_hooke.h"
 #include "numsim-materials/materials/saint_venant_kirchhoff.h"
-#include "numsim-materials/umat/external_state_source.h"
+#include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/io/json_material_factory.h"
 #include "numsim-materials/umat/json_model.h"
 #include "numsim-materials/umat/material_point_evaluator.h"
