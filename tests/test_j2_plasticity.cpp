@@ -12,6 +12,7 @@
 #include "numsim-materials/solvers/local_newton.h"
 #include "numsim-materials/solvers/butcher_tableau.h"
 #include "numsim-materials/postprocessing/numerical_diff_checker.h"
+#include "numsim-materials/umat/errors.h"
 
 namespace {
 
@@ -20,6 +21,7 @@ using T = policy::value_type;
 using ctx_type = numsim::materials::material_context<policy>;
 using param_type = policy::ParameterHandler;
 using tensor2 = tmech::tensor<T, 3, 2>;
+using numsim::materials::umat::cutback_error;
 
 class J2PlasticityTest : public ::testing::Test {
 protected:
@@ -247,7 +249,7 @@ TEST_F(J2TangentTest, ConsistentTangentAllSteps) {
 /// Moderate softening, -3G < H' < 0, still has a positive root and must keep
 /// working.
 namespace {
-ctx_type* build_softening(ctx_type& ctx, T hardening) {
+ctx_type* build_softening(ctx_type& ctx, T hardening, T tolerance = T{1e-10}) {
   constexpr T G{76.92};
   param_type p;
   p.insert<std::string>("name", "stepper");
@@ -257,6 +259,7 @@ ctx_type* build_softening(ctx_type& ctx, T hardening) {
 
   p.clear();
   p.insert<std::string>("name", "solver");
+  p.insert<T>("tolerance", tolerance);
   ctx.create<numsim::materials::local_newton<policy>>(p);
 
   p.clear();
@@ -289,7 +292,21 @@ TEST(J2Softening, UnstableSofteningIsRejectedRatherThanClamped) {
           ctx.commit();
         }
       },
-      std::runtime_error);
+      cutback_error);
+}
+
+// A zero tolerance cannot be met, so the return map fails to converge.
+TEST(J2Softening, ANonConvergedReturnMapAsksForASmallerStep) {
+  ctx_type ctx;
+  build_softening(ctx, T{1000.0}, T{0});
+  EXPECT_THROW(
+      {
+        for (int i = 0; i < 10; ++i) {
+          ctx.update();
+          ctx.commit();
+        }
+      },
+      cutback_error);
 }
 
 TEST(J2Softening, ModerateSofteningStillYields) {

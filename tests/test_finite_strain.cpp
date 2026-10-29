@@ -100,6 +100,16 @@ TEST(SaintVenantKirchhoff, TangentMatchesFiniteDifferences) {
   expect_tangent_matches_finite_differences<nm::saint_venant_kirchhoff<policy>>(ctx, src);
 }
 
+// An inverted element is the classic reason for a smaller step.
+TEST(NeoHooke, ANonPositiveDeterminantAsksForASmallerStep) {
+  ctx_type ctx;
+  auto& src = add_model<nm::neo_hooke<policy>>(ctx);
+  tensor2 F{tmech::eye<T, 3, 2>()};
+  F(0, 0) = -1;
+  src.bind(F, F);
+  EXPECT_THROW(ctx.update(), u::cutback_error);
+}
+
 TEST(NeoHooke, TangentMatchesFiniteDifferences) {
   ctx_type ctx;
   auto& src = add_model<nm::neo_hooke<policy>>(ctx);

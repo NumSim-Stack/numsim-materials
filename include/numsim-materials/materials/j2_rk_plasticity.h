@@ -10,6 +10,7 @@
 #include "numsim-materials/materials/yield_functions.h"
 #include "numsim-materials/materials/plasticity_utils.h"
 #include "numsim-materials/solvers/butcher_tableau.h"
+#include "numsim-materials/umat/errors.h"
 
 namespace numsim::materials {
 
@@ -187,7 +188,7 @@ public:
         // m_N_stage[i] is written on the converged path only; an unconverged stage would otherwise reuse the
         // previous call's flow direction. Throw, as the other return maps do.
         if (!stage_converged)
-          throw std::runtime_error(std::format("j2_rk_plasticity ('{}'): implicit stage {} of {} failed to converge in {} iterations (tolerance {:g})",
+          throw umat::cutback_error(std::format("j2_rk_plasticity ('{}'): implicit stage {} of {} failed to converge in {} iterations (tolerance {:g})",
                                                this->name(), i, s, m_max_iter, m_tol));
       }
     }
