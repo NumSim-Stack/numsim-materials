@@ -10,7 +10,7 @@
 #include "numsim-materials/core/parameter_helpers.h"
 #include "numsim-materials/materials/plasticity_utils.h"
 #include "numsim-materials/solvers/vector_newton.h"
-#include "numsim-materials/umat/errors.h"
+#include "numsim-materials/core/errors.h"
 
 namespace numsim::materials {
 
@@ -190,7 +190,7 @@ public:
 
     solver.solve();
     if (!solver.converged())
-      throw umat::cutback_error("j2_kinematic_plasticity '" +
+      throw cutback_error("j2_kinematic_plasticity '" +
                                 std::string(base::name()) +
                                 "': the coupled return map did not converge");
 
@@ -199,7 +199,7 @@ public:
     // F_tr > 0, so a negative multiplier means the hardening is at or below
     // -(3G + C) and the local problem has no admissible solution.
     if (dl < value_type{0})
-      throw umat::cutback_error(
+      throw cutback_error(
           "j2_kinematic_plasticity '" + std::string(base::name()) +
           "': the return map produced a negative plastic multiplier: the "
           "hardening softens faster than 3G + C can absorb (for gamma = 0 that "
