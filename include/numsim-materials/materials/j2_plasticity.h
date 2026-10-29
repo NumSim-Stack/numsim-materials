@@ -11,6 +11,7 @@
 #include "numsim-materials/core/material_ref.h"
 #include "numsim-materials/materials/plasticity_utils.h"
 #include "numsim-materials/solvers/local_newton.h"
+#include "numsim-materials/umat/errors.h"
 
 namespace numsim::materials {
 
@@ -148,7 +149,7 @@ public:
     };
     const auto sol = m_solver.get().solve(eval);
     if (!sol.converged)
-      throw std::runtime_error(
+      throw umat::cutback_error(
           "j2_plasticity: return-mapping Newton failed to converge");
     // A negative multiplier is not a rounding artefact to be clamped away.
     // The return map is only entered with F_trial > 0, and the root is
@@ -162,7 +163,7 @@ public:
     // Moderate softening, -G_eff < H' < 0, still gives a positive root and is
     // untouched.
     if (sol.x < value_type{0})
-      throw std::runtime_error(
+      throw umat::cutback_error(
           "j2_plasticity: the return map produced a negative plastic "
           "multiplier, which means the hardening modulus is at or below "
           "-3G. The softening branch is unstable and this local return map "

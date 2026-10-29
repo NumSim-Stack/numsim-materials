@@ -4,6 +4,7 @@
 #include <cmath>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_base.h"
+#include "numsim-materials/umat/errors.h"
 
 namespace numsim::materials {
 
@@ -46,7 +47,7 @@ public:
     const auto& Finv{m_F_inv.get()};
     const value_type J{m_J.get()};
     if (!(J > value_type(0)))
-      throw std::domain_error("neo_hooke: det F must be positive");
+      throw umat::cutback_error("neo_hooke: det F must be positive");
     const value_type lambda{m_K - value_type(2) / value_type(3) * m_G};
     const value_type lnJ{std::log(J)};
     const auto FinvT{tmech::trans(Finv)};
