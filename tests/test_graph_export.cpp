@@ -60,6 +60,112 @@ void add(ctx_type &ctx, std::string const &name, std::string const &from = {}, s
   ctx.create<node<policy>>(p);
 }
 
+/// Outputs named by parameters, so a test can give them awkward names; "self_order" makes it run after itself.
+template <typename Traits>
+class odd final : public nm::material_base<odd<Traits>, Traits> {
+public:
+  using base = nm::material_base<odd<Traits>, Traits>;
+  using input_parameter_controller = typename base::input_parameter_controller;
+
+  template <typename... Args>
+  explicit odd(Args &&...args)
+      : base(std::forward<Args>(args)...), m_value(base::template add_output<T>(base::template get_parameter<std::string>("prop"))) {
+    base::add_callback(&odd::compute, m_value).reads();
+    if (base::template get_parameter<bool>("self_order")) {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations" // the only way to order a callback behind itself
+      base::runs_after(m_value, m_value);
+#pragma GCC diagnostic pop
+    }
+  }
+
+  static input_parameter_controller parameters() {
+    input_parameter_controller para{base::parameters()};
+    nm::optional<std::string>(para, "prop", std::string{"value"});
+    nm::optional<bool>(para, "self_order", false);
+    return para;
+  }
+
+  void compute() { m_value = T{1}; }
+
+private:
+  T &m_value;
+};
+
+/// "first" and "second" from one callback: "second" is routed to its writer.
+template <typename Traits>
+class pair final : public nm::material_base<pair<Traits>, Traits> {
+public:
+  using base = nm::material_base<pair<Traits>, Traits>;
+  using input_parameter_controller = typename base::input_parameter_controller;
+
+  template <typename... Args>
+  explicit pair(Args &&...args)
+      : base(std::forward<Args>(args)...), m_first(base::template add_output<T>("first")), m_second(base::template add_output<T>("second")) {
+    base::add_callback(&pair::compute, m_first, m_second).reads();
+  }
+
+  static input_parameter_controller parameters() { return input_parameter_controller{base::parameters()}; }
+
+  void compute() { m_first = m_second = T{1}; }
+
+private:
+  T &m_first;
+  T &m_second;
+};
+
+/// Adds to its last value: never constant.
+template <typename Traits>
+class ticker final : public nm::material_base<ticker<Traits>, Traits> {
+public:
+  using base = nm::material_base<ticker<Traits>, Traits>;
+  using input_parameter_controller = typename base::input_parameter_controller;
+
+  template <typename... Args>
+  explicit ticker(Args &&...args) : base(std::forward<Args>(args)...), m_value(base::template add_output<T>("value")) {
+    base::add_callback(&ticker::compute, m_value).reads().stateful();
+  }
+
+  static input_parameter_controller parameters() { return input_parameter_controller{base::parameters()}; }
+
+  void compute() { m_value += T{1}; }
+
+private:
+  T &m_value;
+};
+
+template <template <typename> class Material>
+void create(ctx_type &ctx, std::string const &name) {
+  param_type p;
+  p.insert<std::string>("name", name);
+  ctx.create<Material<policy>>(p);
+}
+
+void add_odd(ctx_type &ctx, std::string const &name, std::string const &prop) {
+  param_type p;
+  p.insert<std::string>("name", name);
+  p.insert<std::string>("prop", prop);
+  ctx.create<odd<policy>>(p);
+}
+
+/// True when every quoted string closes, escapes only \\ \" \n and holds no raw newline.
+bool dot_strings_are_valid(std::string const &dot) {
+  bool in_string{false};
+  for (std::size_t i{0}; i < dot.size(); ++i) {
+    char const c{dot[i]};
+    if (!in_string) {
+      in_string = c == '"';
+    } else if (c == '\\') {
+      if (++i == dot.size() || std::string{"\\\"n"}.find(dot[i]) == std::string::npos) return false;
+    } else if (c == '"') {
+      in_string = false;
+    } else if (c == '\n') {
+      return false;
+    }
+  }
+  return !in_string;
+}
+
 std::string key(nm::property_base const *p) { return p->traits().id.owner + "::" + p->traits().id.name; }
 
 std::vector<std::string> edge_list(ctx_type const &ctx) {
@@ -168,6 +274,80 @@ TEST(GraphExport, JsonListsNodesAndEdges) {
   EXPECT_EQ(j.at("edges")[0].at("from"), "a::value");
   EXPECT_EQ(j.at("edges")[0].at("to"), "b::value");
   EXPECT_EQ(j.at("edges")[0].at("kind"), "declared read");
+}
+
+TEST(GraphExport, SelfLoopCycleIsNamed) {
+  ctx_type ctx;
+  param_type p;
+  p.insert<std::string>("name", "a");
+  p.insert<std::string>("prop", "value");
+  p.insert<bool>("self_order", true);
+  ctx.create<odd<policy>>(p);
+  try {
+    ctx.finalize();
+    FAIL() << "a self-loop must throw";
+  } catch (std::runtime_error const &e) {
+    std::string const what{e.what()};
+    EXPECT_NE(what.find("Circular dependency"), std::string::npos) << what;
+    EXPECT_NE(what.find("a::value -[callback order]-> a::value"), std::string::npos) << what;
+  }
+}
+
+TEST(GraphExport, UpstreamSurvivesASecondFinalize) {
+  ctx_type ctx;
+  add(ctx, "a");
+  add(ctx, "b", "a");
+  ctx.finalize();
+  auto const before{nm::to_json(ctx)};
+  EXPECT_NO_THROW(ctx.update_property("b", "value"));
+  ctx.finalize(); // already finalized: a no-op that must leave the graph and its upstream cache intact
+  EXPECT_NO_THROW(ctx.update_property("b", "value"));
+  EXPECT_EQ(nm::to_json(ctx), before);
+  EXPECT_EQ(ctx.get<T>("b", "value"), T{2});
+}
+
+TEST(GraphExport, StatefulNodeIsFlagged) {
+  ctx_type ctx;
+  create<ticker>(ctx, "t");
+  add(ctx, "a");
+  ctx.finalize();
+  for (auto const &n : ctx.graph().nodes) {
+    EXPECT_EQ(n.stateful, key(n.property) == "t::value") << key(n.property);
+    EXPECT_EQ(n.constant, key(n.property) == "a::value") << key(n.property);
+  }
+}
+
+TEST(GraphExport, RoutedNodeHasNoCallbackOfItsOwn) {
+  ctx_type ctx;
+  create<pair>(ctx, "p");
+  ctx.finalize();
+  auto const &nodes{ctx.graph().nodes};
+  ASSERT_EQ(nodes.size(), 2u);
+  for (auto const &n : nodes) {
+    bool const second{key(n.property) == "p::second"};
+    EXPECT_EQ(n.routed, second) << key(n.property);
+    EXPECT_EQ(n.callback, !second) << key(n.property);
+  }
+}
+
+TEST(GraphExport, DotEscapesQuotesBackslashesAndNewlines) {
+  ctx_type ctx;
+  add_odd(ctx, "m\"x\\y\nz", "p\"q\\r\ns");
+  ctx.finalize();
+  auto const dot{nm::to_dot(ctx)};
+  EXPECT_TRUE(dot_strings_are_valid(dot)) << dot;
+  EXPECT_NE(dot.find("label=\"m\\\"x\\\\y\\nz\""), std::string::npos) << dot;
+  EXPECT_NE(dot.find("label=\"p\\\"q\\\\r\\ns\""), std::string::npos) << dot;
+}
+
+TEST(GraphExport, JsonSurvivesInvalidUtf8) {
+  ctx_type ctx;
+  add_odd(ctx, "m", "bad\xff" "name");
+  ctx.finalize();
+  std::string json;
+  ASSERT_NO_THROW(json = nm::to_json(ctx));
+  auto const j = nlohmann::json::parse(json);
+  EXPECT_NE(j.at("nodes")[0].at("key").get<std::string>().find("\xEF\xBF\xBD" "name"), std::string::npos) << json;
 }
 
 } // namespace
