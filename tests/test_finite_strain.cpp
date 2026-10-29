@@ -13,7 +13,7 @@
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/materials/neo_hooke.h"
 #include "numsim-materials/materials/saint_venant_kirchhoff.h"
-#include "numsim-materials/umat/external_state_source.h"
+#include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/io/json_material_factory.h"
 #include "numsim-materials/umat/json_model.h"
 #include "numsim-materials/umat/material_point_evaluator.h"
@@ -98,6 +98,16 @@ TEST(SaintVenantKirchhoff, TangentMatchesFiniteDifferences) {
   ctx_type ctx;
   auto& src = add_model<nm::saint_venant_kirchhoff<policy>>(ctx);
   expect_tangent_matches_finite_differences<nm::saint_venant_kirchhoff<policy>>(ctx, src);
+}
+
+// An inverted element is the classic reason for a smaller step.
+TEST(NeoHooke, ANonPositiveDeterminantAsksForASmallerStep) {
+  ctx_type ctx;
+  auto& src = add_model<nm::neo_hooke<policy>>(ctx);
+  tensor2 F{tmech::eye<T, 3, 2>()};
+  F(0, 0) = -1;
+  src.bind(F, F);
+  EXPECT_THROW(ctx.update(), u::cutback_error);
 }
 
 TEST(NeoHooke, TangentMatchesFiniteDifferences) {

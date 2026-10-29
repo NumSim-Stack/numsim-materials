@@ -4,7 +4,7 @@
 #include <vector>
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/postprocessing/property_console_logger.h"
-#include "numsim-materials/umat/external_state_source.h"
+#include "numsim-materials/driver/external_state_source.h"
 
 // The console logger prints its inputs as a table on every update.
 

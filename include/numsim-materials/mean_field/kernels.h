@@ -18,6 +18,7 @@
 #include "numsim-materials/core/tensor_identities.h"
 #include "numsim-materials/mean_field/kernel.h"
 #include "numsim-materials/mean_field/shapes.h"
+#include "numsim-materials/core/errors.h"
 
 namespace numsim::materials::mean_field {
 
@@ -217,7 +218,7 @@ public:
       }
       C = (1 - m_relaxation) * C + m_relaxation * C_new;
     }
-    throw std::runtime_error(std::format("self_consistent: no convergence in {} iterations (residual {:g}, tolerance {:g})",
+    throw cutback_error(std::format("self_consistent: no convergence in {} iterations (residual {:g}, tolerance {:g})",
                                          m_max_iterations, residual, m_tolerance));
   }
 

@@ -13,7 +13,7 @@
 #include "numsim-materials/materials/mean_field_composite_global.h"
 #include "numsim-materials/materials/phase.h"
 #include "numsim-materials/materials/short_fibre_composite.h"
-#include "numsim-materials/umat/external_state_source.h"
+#include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/umat/json_model.h"
 
 namespace {

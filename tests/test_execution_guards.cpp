@@ -4,7 +4,7 @@
 #include "numsim-materials/core/material_base.h"
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/core/parameter_helpers.h"
-#include "numsim-materials/umat/external_state_source.h"
+#include "numsim-materials/driver/external_state_source.h"
 
 // Rules of execution (#187): no update() from inside a callback, a nested update_property() leaves the running
 // update intact, and a context whose update threw is partly updated until revert().
