@@ -20,6 +20,7 @@
 #include <vector>
 #include <tmech/tmech.h>
 
+#include "numsim-materials/core/derivatives.h"
 #include "numsim-materials/core/property_traits.h"
 #include "numsim-materials/core/property.h"
 #include "numsim-materials/core/history_property.h"
@@ -59,6 +60,22 @@ bool same_value(T const& a, T const& b) {
   } else {
     return a == b;
   }
+}
+
+/// How far `b` is from `a` relative to the larger of the two: 0 when equal, infinite when they differ and one is not finite.
+template <verifiable T>
+double relative_deviation(T const& a, T const& b) {
+  double distance, size;
+  if constexpr (std::is_arithmetic_v<T>) {
+    distance = std::abs(static_cast<double>(a) - static_cast<double>(b));
+    size = std::max(std::abs(static_cast<double>(a)), std::abs(static_cast<double>(b)));
+  } else if constexpr (requires { tmech::norm(a - b); }) {
+    distance = static_cast<double>(tmech::norm(a - b));
+    size = static_cast<double>(std::max(tmech::norm(a), tmech::norm(b)));
+  } else {
+    return a == b ? 0 : 1;
+  }
+  return distance == 0 ? 0 : std::isfinite(distance) && std::isfinite(size) ? distance / size : std::numeric_limits<double>::infinity();
 }
 
 /// Whether a value is finite; types without a norm are.
@@ -209,6 +226,7 @@ public:
   using property_base_type = numsim_core::property_base<property_traits>;
   /// Copies a value; the returned check compares it with the current one. Empty for types never constant.
   using snapshot = std::function<std::function<detail::verdict()>()>;
+  using deviation_probe = std::function<std::function<double()>()>;
 
   /// An output declared a function of the parameters, of `reads` (all inputs when unset) and of the outputs
   /// `own_reads` of this material (material_base::constant_output, callback_handle::reads).
@@ -226,6 +244,7 @@ public:
     std::vector<input_wire_base const*> inputs;
     std::vector<property_base_type const*> outputs;
     std::vector<input_wire_base const*> drives; ///< local inputs whose source callbacks it reruns
+    std::vector<property_base_type const*> own_reads; ///< outputs of this material it reads
   };
   const std::vector<read_declaration>& declared_reads() const noexcept { return m_declared_reads; }
 
@@ -267,7 +286,126 @@ public:
   /// The engine's revision counter, bumped by set_parameter(); bound at finalize().
   void bind_revision(std::size_t* revision) noexcept { m_revision = revision; }
 
+  /// d output / d read declared by a callback (callback_handle::partials()); the read is an input or an output of
+  /// this material, the block holds what partial() returns.
+  struct partial_declaration {
+    property_base_type const* callback;
+    property_base_type const* output;
+    input_wire_base const* input;  ///< the read when it is an input ...
+    property_base_type const* own; ///< ... else the output of this material it is
+    void const* output_value;      ///< the addresses partial() is called with
+    void const* read_value;
+    std::unique_ptr<derivatives::partial_block<value_type>> block;
+  };
+  const std::vector<partial_declaration>& partials() const noexcept { return m_partials; }
+
+  /// A read whose partials are declared zero (callback_handle::independent_of()), as in partial_declaration;
+  /// `probe` perturbs the read for check_partials(), empty for a read that is not a scalar or tensor.
+  struct independent_declaration {
+    property_base_type const* callback;
+    input_wire_base const* input;
+    property_base_type const* own;
+    std::unique_ptr<derivatives::read_probe<value_type>> probe;
+  };
+  const std::vector<independent_declaration>& independent_reads() const noexcept { return m_independent; }
+
+  /// The worst relative deviation of an output of a callback from a copy taken earlier.
+  struct output_deviation {
+    property_base_type const* output{nullptr};
+    double relative{0};
+  };
+  /// Copies the outputs of the callback filling `callback` (with declared reads); the returned function reports the
+  /// largest relative deviation of any from its copy. Outputs of types without a comparison are not watched.
+  std::function<output_deviation()> watch_outputs(property_base_type const* callback) const {
+    auto const it{std::ranges::find(m_declared_reads, callback, &read_declaration::callback)};
+    if (it == m_declared_reads.end())
+      throw std::logic_error("watch_outputs(): the callback has no declared reads");
+    std::vector<std::pair<property_base_type const*, std::function<double()>>> watched;
+    for (auto const* output : it->outputs)
+      for (auto const& [address, entry] : m_outputs)
+        if (entry.property == output && entry.deviation)
+          watched.emplace_back(output, entry.deviation());
+    return [watched = std::move(watched)] {
+      output_deviation worst;
+      for (auto const& [output, deviation] : watched)
+        if (auto const relative{deviation()}; relative > worst.relative || !worst.output)
+          worst = {output, relative};
+      return worst;
+    };
+  }
+
+  /// Whether `callback` fills its partials when it runs: the engine sets it for the callbacks on a requested derivative.
+  void request_partials(property_base_type const* callback, bool on) {
+    std::erase(m_partials_requested, callback);
+    if (on)
+      m_partials_requested.push_back(callback);
+  }
+  bool partials_requested(property_base_type const* callback) const noexcept {
+    return std::ranges::contains(m_partials_requested, callback);
+  }
+
+  /// Runs `run`, the update of `callback`, with want_partials() as requested for it; the engine wraps those callbacks.
+  template <typename Run>
+  void run_callback(property_base_type const* callback, Run const& run) {
+    struct restore {
+      bool& flag;
+      bool outer;
+      ~restore() { flag = outer; }
+    } const guard{m_want_partials, std::exchange(m_want_partials, partials_requested(callback))};
+    run();
+  }
+
 protected:
+  /// True while the running callback is to fill its declared partials: a requested derivative passes through it.
+  bool want_partials() const noexcept { return m_want_partials; }
+
+  /// The partial d output / d read the callback fills, declared by partials(): rank(output) + rank(read).
+  template <typename Out, typename In>
+  auto& partial(Out const& output, In const& read) {
+    using block_type = derivatives::typed_partial<value_type, Traits::Dim, Out, In>;
+    auto const it{std::ranges::find_if(m_partials, [&](auto const& p) {
+      return p.output_value == static_cast<void const*>(&output) && p.read_value == static_cast<void const*>(&read);
+    })};
+    auto* block{it != m_partials.end() ? dynamic_cast<block_type*>(it->block.get()) : nullptr};
+    if (!block)
+      throw std::logic_error("partial(): material '" + m_name + "' fills a partial its callback did not declare in partials()");
+    return block->value;
+  }
+
+  /// The callback filling `callback` (after its reads()) fills d output / d read through partial().
+  template <typename Out, typename In>
+  void declare_partial(void const* callback, Out const& output, In const& read) {
+    static_assert(derivatives::node_value<derivatives::value_of_t<Out>, value_type, Traits::Dim> &&
+                      derivatives::node_value<derivatives::value_of_t<In>, value_type, Traits::Dim>,
+                  "partials(): outputs and reads are scalars or symmetric tensors of rank 2 or 4");
+    auto const& [d, entry]{declared_read_of("partials", callback)};
+    auto const& out{output_entry_of("partials", &output)};
+    if (!std::ranges::contains(d->outputs, out.property))
+      throw std::logic_error("partials(): '" + key_of(out) + "' is not an output of the callback of '" + key_of(entry) + "'");
+    auto const [input, own]{read_of<In>("partials", *d, entry, read)};
+    if (std::ranges::any_of(m_partials, [&](auto const& p) { return p.output == out.property && p.input == input && p.own == own; }))
+      throw std::logic_error("partials(): '" + key_of(out) + "' declares a partial twice");
+    if (is_independent(d->callback, input, own))
+      throw std::logic_error("partials(): '" + key_of(entry) + "' declares a read both in partials() and independent_of()");
+    m_partials.push_back({d->callback, out.property, input, own, &output, &read,
+                          std::make_unique<derivatives::typed_partial<value_type, Traits::Dim, Out, In>>(output)});
+  }
+
+  /// The outputs of the callback filling `callback` do not depend on `read`: its partials are zero. It holds for every
+  /// output of the callback, and check_partials() perturbs the read to verify it.
+  template <typename In>
+  void declare_independent(void const* callback, In const& read) {
+    auto const& [d, entry]{declared_read_of("independent_of", callback)};
+    auto const [input, own]{read_of<In>("independent_of", *d, entry, read)};
+    if (is_independent(d->callback, input, own) ||
+        std::ranges::any_of(m_partials, [&](auto const& p) { return p.callback == d->callback && p.input == input && p.own == own; }))
+      throw std::logic_error("independent_of(): '" + key_of(entry) + "' declares a read twice or also in partials()");
+    std::unique_ptr<derivatives::read_probe<value_type>> probe;
+    if constexpr (derivatives::node_value<derivatives::value_of_t<In>, value_type, Traits::Dim>)
+      probe = std::make_unique<derivatives::typed_read<value_type, Traits::Dim, derivatives::value_of_t<In>>>();
+    m_independent.push_back({d->callback, input, own, std::move(probe)});
+  }
+
   template <typename T>
   T& add_property(std::string const& property_name, T&& data = T()) {
     T& value{m_property_handler.template add_property<T>(name(), property_name, std::forward<T>(data))};
@@ -279,14 +417,22 @@ protected:
           return !detail::is_finite(value) ? not_finite : detail::same_value(copy, value) ? same : changed;
         }};
       };
-    m_outputs[&value] = {*m_property_handler.find(name(), property_name), std::move(take)};
+    deviation_probe deviation;
+    if constexpr (detail::verifiable<T>)
+      deviation = [&value] { return std::function<double()>{[&value, copy = value] { return detail::relative_deviation(copy, value); }}; };
+    m_outputs[&value] = {*m_property_handler.find(name(), property_name), std::move(take), std::move(deviation)};
     return value;
   }
 
   template <typename T>
   history_property<T>& add_history(std::string const& property_name, T&& data = T()) {
     auto& value{m_property_handler.template add_history<T>(name(), property_name, std::forward<T>(data))};
-    m_outputs[&value] = {*m_property_handler.find(name(), property_name), {}}; // never constant
+    deviation_probe deviation;
+    if constexpr (detail::verifiable<T>)
+      deviation = [&value] {
+        return std::function<double()>{[&value, copy = value.new_value()] { return detail::relative_deviation(copy, value.new_value()); }};
+      };
+    m_outputs[&value] = {*m_property_handler.find(name(), property_name), {}, std::move(deviation)}; // never constant
     return value;
   }
 
@@ -350,7 +496,8 @@ protected:
     auto const entries{outputs | std::views::transform([this](void const* output) { return &output_entry_of("reads", output); }) |
                        std::ranges::to<std::vector>()};
     m_declared_reads.push_back({callback.property, inputs,
-                                entries | std::views::transform(&output_entry::property) | std::ranges::to<std::vector>(), {}});
+                                entries | std::views::transform(&output_entry::property) | std::ranges::to<std::vector>(), {},
+                                own_reads});
     if (verifiable && std::ranges::none_of(entries, [this](auto const* entry) {
           return entry->property->is_history() || std::ranges::contains(m_stateful, entry->property);
         }))
@@ -432,6 +579,7 @@ private:
   struct output_entry {
     property_base_type const* property;
     snapshot take;
+    deviation_probe deviation; ///< copies the value; the returned function gives its relative deviation from the copy
   };
   std::unordered_map<void const*, output_entry> m_outputs; ///< value address -> property
   std::vector<constant_declaration> m_constant_outputs;
@@ -466,6 +614,35 @@ private:
   bool has_writer(output_entry const& entry) const {
     return std::ranges::contains(m_written_by, entry.property, &decltype(m_written_by)::value_type::first);
   }
+  /// The read declaration of the callback filling `callback`, which partials() and independent_of() follow.
+  std::pair<read_declaration*, output_entry const&> declared_read_of(char const* what, void const* callback) {
+    auto const& entry{output_entry_of(what, callback)};
+    auto const it{std::ranges::find(m_declared_reads, entry.property, &read_declaration::callback)};
+    if (it == m_declared_reads.end())
+      throw std::logic_error(std::string{what} + "(): '" + key_of(entry) + "' declares partials before its reads");
+    return {&*it, entry};
+  }
+  /// A read of `d` as (input, own output); throws when the callback does not read it.
+  template <typename In>
+  std::pair<input_wire_base const*, property_base_type const*> read_of(char const* what, read_declaration const& d,
+                                                                      output_entry const& entry, In const& read) const {
+    if constexpr (std::derived_from<In, input_wire_base>) {
+      if (std::ranges::contains(d.inputs, static_cast<input_wire_base const*>(&read)))
+        return {&read, nullptr};
+    } else if (auto const it{m_outputs.find(&read)};
+               it != m_outputs.end() && std::ranges::contains(d.own_reads, it->second.property)) {
+      return {nullptr, it->second.property};
+    }
+    throw std::logic_error(std::string{what} + "(): '" + key_of(entry) + "' names a read its callback does not declare in reads()");
+  }
+  bool is_independent(property_base_type const* callback, input_wire_base const* input, property_base_type const* own) const {
+    return std::ranges::any_of(m_independent, [&](auto const& i) { return i.callback == callback && i.input == input && i.own == own; });
+  }
+
+  std::vector<partial_declaration> m_partials;
+  std::vector<independent_declaration> m_independent;
+  std::vector<property_base_type const*> m_partials_requested; ///< callbacks filling their partials
+  bool m_want_partials{false};
   std::size_t* m_revision{nullptr};
   std::vector<property_base_type const*> m_reads_all; ///< callbacks reading every input (declare_reads_all)
 };
