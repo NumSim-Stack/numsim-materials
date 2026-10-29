@@ -142,7 +142,8 @@ public:
       hp->revert();
   }
 
-  /// The history now, both values: restore() returns to it after any number of commits.
+  /// The history now, both values: restore() returns to it after any number of commits. Only history properties are
+  /// saved; state a material keeps outside them across calls is not restored.
   history_checkpoint<Traits> checkpoint() const {
     if (m_failed)
       throw std::logic_error("checkpoint(): the last update threw, the context is partly updated: revert() first");
@@ -161,6 +162,9 @@ public:
   void restore(history_checkpoint<Traits> const& cp) {
     if (cp.m_owner != this)
       throw std::logic_error("restore(): the checkpoint was taken from another context");
+    if (cp.m_bytes.size() != m_history_properties.size())
+      throw std::logic_error("restore(): the checkpoint holds a different number of history properties");
+    m_failed = true; // a throw while deserializing leaves the history partly restored
     for (auto const& [hp, bytes] : std::views::zip(m_history_properties, cp.m_bytes)) {
       std::istringstream in{bytes};
       hp->deserialize(in);

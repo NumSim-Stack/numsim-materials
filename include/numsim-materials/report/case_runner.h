@@ -62,12 +62,15 @@ bool record_step(Driver &driver, typename Driver::step_result const &res, load_s
 }
 
 /// Step `s` of the case in 2^cut substeps, every one but the last accepted. A substep that does not converge or
-/// throws a cutback_error returns to the start of the step and halves again, up to the case's max_cutbacks; at the
-/// last level it is recorded (or rethrown) as without cutbacks.
+/// throws a runtime_error (a cutback_error, a return map) returns to the start of the step and halves again, up to
+/// the case's max_cutbacks (0 ... 20); at the last level it is recorded (or rethrown) as without cutbacks. A
+/// fatal_error or a logic_error is never retried.
 template <typename Traits, typename Driver, typename Sink, typename Values, typename Solve>
 bool cut_step(Driver &driver, load_case<typename Traits::value_type> const &c, load_step<typename Traits::value_type> const &s,
               Solve const &solve, Sink &sink, Values const &values) {
   using T = typename Traits::value_type;
+  if (c.max_cutbacks < 0 || c.max_cutbacks > 20)
+    throw std::invalid_argument("max_cutbacks must be in 0 ... 20");
   if (c.max_cutbacks == 0)
     return record_step<Traits>(driver, solve(s), s, c.tangent_every, sink, values);
   auto const start{driver.point().checkpoint()};
@@ -85,7 +88,9 @@ bool cut_step(Driver &driver, load_case<typename Traits::value_type> const &c, l
           return record_step<Traits>(driver, res, s, c.tangent_every, sink, values, cut, std::move(summaries));
         driver.accept();
       }
-    } catch (umat::cutback_error const &) {
+    } catch (umat::fatal_error const &) {
+      throw;
+    } catch (std::runtime_error const &) {
       if (last_level)
         throw;
     }
