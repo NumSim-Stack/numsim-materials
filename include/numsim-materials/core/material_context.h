@@ -219,6 +219,9 @@ public:
 
   void dump() const { m_engine.dump(); }
 
+  /// Every produced property with its flags and every edge with its kind (after finalize()).
+  property_graph graph() const { return m_engine.graph(); }
+
   /// Rerun the constant callbacks on every update and throw when an output changes; on with NUMSIM_MATERIALS_DEBUG_CHECKS.
   void verify_constants(bool on) noexcept { m_engine.verify_constants(on); }
 
