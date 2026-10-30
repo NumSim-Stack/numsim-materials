@@ -1,8 +1,28 @@
 find_package(Threads REQUIRED)
 
+option(NUMSIM_MATERIALS_BATCH_TESTS "Compile single-file tests several to a translation unit" ON)
+set(NUMSIM_MATERIALS_TEST_BATCH_SIZE 6 CACHE STRING "Test files per batch")
+# Tests that need their own flags or check what a lone translation unit includes.
+set(_numsim_standalone_tests test_material_conformance test_host_neutral_includes)
+set(_numsim_batched_sources)
+set(_numsim_test_targets)
+
 macro(add_numsim_test TARGET_NAME)
-  numsim_add_test(${TARGET_NAME} SOURCES ${ARGN}
-    LINK numsim-materials::numsim-materials Threads::Threads)
+  set(_srcs ${ARGN})
+  list(LENGTH _srcs _nsrcs)
+  set(_c_symbols)
+  if(_nsrcs EQUAL 1)
+    # C entry points ignore the batch namespaces and would be defined twice.
+    file(STRINGS "${_srcs}" _c_symbols REGEX "NUMSIM_MATERIALS_DEFINE_|extern \"C\"")
+  endif()
+  if(NUMSIM_MATERIALS_BATCH_TESTS AND _nsrcs EQUAL 1 AND NOT _c_symbols
+     AND NOT "${TARGET_NAME}" IN_LIST _numsim_standalone_tests)
+    list(APPEND _numsim_batched_sources "${CMAKE_CURRENT_SOURCE_DIR}/${_srcs}")
+  else()
+    numsim_add_test(${TARGET_NAME} SOURCES ${ARGN}
+      LINK numsim-materials::numsim-materials Threads::Threads)
+    list(APPEND _numsim_test_targets ${TARGET_NAME})
+  endif()
 endmacro()
 
 add_numsim_test(test_property_graph test_property_graph.cpp)
@@ -88,6 +108,39 @@ add_numsim_test(test_uvwmaterial_cards test_uvwmaterial_cards.cpp)
 add_numsim_test(test_voigt_composite test_voigt_composite.cpp)
 add_numsim_test(test_hencky_elasticity test_hencky_elasticity.cpp)
 add_numsim_test(test_material_point test_material_point.cpp)
+
+# One executable per batch: shared templates are instantiated and compiled once per batch, not once per file.
+list(LENGTH _numsim_batched_sources _nbatched)
+set(_first 0)
+set(_batch 0)
+while(_first LESS _nbatched)
+  list(SUBLIST _numsim_batched_sources ${_first} ${NUMSIM_MATERIALS_TEST_BATCH_SIZE} _srcs)
+  string(REPLACE ";" "|" _arg "${_srcs}")
+  set(_name test_batch_${_batch})
+  set(_out "${CMAKE_CURRENT_BINARY_DIR}/${_name}.cpp")
+  add_custom_command(OUTPUT "${_out}"
+    COMMAND ${CMAKE_COMMAND} "-DOUT=${_out}" "-DSOURCES=${_arg}" -P "${CMAKE_CURRENT_SOURCE_DIR}/batch_tests.cmake"
+    DEPENDS ${_srcs} "${CMAKE_CURRENT_SOURCE_DIR}/batch_tests.cmake" VERBATIM)
+  add_custom_target(${_name}_source DEPENDS "${_out}")
+  numsim_add_test(${_name} SOURCES "${_out}" INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}"
+    LINK numsim-materials::numsim-materials Threads::Threads)
+  list(APPEND _numsim_test_targets ${_name})
+  foreach(_t ${_name} ${_name}_asan ${_name}_tsan)
+    if(TARGET ${_t})
+      add_dependencies(${_t} ${_name}_source)
+    endif()
+  endforeach()
+  math(EXPR _first "${_first} + ${NUMSIM_MATERIALS_TEST_BATCH_SIZE}")
+  math(EXPR _batch "${_batch} + 1")
+endwhile()
+
+# Builds only the sanitizer executables (the CI sanitizer job).
+add_custom_target(numsim_materials_asan_tests)
+foreach(_t IN LISTS _numsim_test_targets)
+  if(TARGET ${_t}_asan)
+    add_dependencies(numsim_materials_asan_tests ${_t}_asan)
+  endif()
+endforeach()
 
 # Data dumper for plotting (not a test — standalone executable)
 add_executable(plot_data plot_data.cpp)
