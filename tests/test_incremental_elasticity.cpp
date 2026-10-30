@@ -73,6 +73,22 @@ TEST(IncrementalElasticity, EqualsTheTotalFormAlongAPathAndClosesACycle) {
 
 // Under stress control the stress passes exactly through zero at the reversal; the round-off
 // of the incremental sum must still count as converged (the driver scales with |C| |d eps|).
+// d stress / d strain accumulated from the incremental update is the tangent it integrates with
+TEST(IncrementalElasticity, AccumulatedTangentIsTheTangent) {
+  auto ctx{build()};
+  auto d{driver_for(*ctx)};
+  auto const &derivative{d.point().derivative<tensor4>("inc::stress", "strain")};
+  tensor2 eps;
+  for (int n{1}; n <= 8; ++n) {
+    eps(0, 0) = (n <= 4 ? n : 8 - n) * 1e-3;
+    eps(0, 1) = eps(1, 0) = 5e-4 * n;
+    auto const res{d.step(eps, tensor2{}, nm::load_control<T>::strain(), n - 1, 1)};
+    ASSERT_TRUE(res.converged);
+    EXPECT_LE(tmech::norm(tensor4{derivative - res.tangent}), 1e-12 * tmech::norm(res.tangent)) << n;
+    d.accept();
+  }
+}
+
 TEST(IncrementalElasticity, UniaxialStressCycleThroughZeroConverges) {
   auto ctx{build()};
   auto d{driver_for(*ctx)};

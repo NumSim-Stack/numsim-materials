@@ -36,7 +36,7 @@ public:
         m_strain(base::template add_input<tensor2>(
             m_strain_source, base::template get_parameter<std::string>("strain_property"), EdgeKind::Global))
   {
-    base::add_callback(&von_mises_state_function::compute, m_eps_eq, m_deps_eq).reads(m_strain);
+    base::add_callback(&von_mises_state_function::compute, m_eps_eq, m_deps_eq).reads(m_strain).partials(m_eps_eq, m_strain);
   }
 
   static input_parameter_controller parameters() {
@@ -60,6 +60,8 @@ public:
     } else {
       m_deps_eq = tensor2{};
     }
+    if (base::want_partials())
+      base::partial(m_eps_eq, m_strain) = m_deps_eq;
   }
 
 private:

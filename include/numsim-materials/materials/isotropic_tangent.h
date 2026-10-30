@@ -41,7 +41,7 @@ public:
             base::template get_parameter<std::string>("G_source"),
             base::template get_parameter<std::string>("G_property"),
             EdgeKind::Global)) {
-    base::add_callback(&isotropic_tangent::update_tangent, m_C).reads(m_K, m_G);
+    base::add_callback(&isotropic_tangent::update_tangent, m_C).reads(m_K, m_G).partials(m_C, m_K, m_G);
   }
 
   static input_parameter_controller parameters() {
@@ -63,6 +63,10 @@ public:
     const auto IIvol{tmech::otimes(I, I) / Dim};
     m_C = 3 * m_K.get() * IIvol +
           2 * m_G.get() * dev_projector<value_type, Dim>();
+    if (base::want_partials()) {
+      base::partial(m_C, m_K) = 3 * IIvol;
+      base::partial(m_C, m_G) = 2 * dev_projector<value_type, Dim>();
+    }
   }
 
 private:

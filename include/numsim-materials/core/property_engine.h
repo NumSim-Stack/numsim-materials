@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <format>
 #include <functional>
 #include <iterator>
 #include <memory>
@@ -19,6 +20,8 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include <Eigen/Core>
+#include "numsim-materials/core/derivatives.h"
 #include "numsim-materials/core/property_traits.h"
 #include "numsim-materials/core/property.h"
 #include "numsim-materials/core/history_property.h"
@@ -88,6 +91,7 @@ public:
     if constexpr (NUMSIM_MATERIALS_DEBUG_CHECKS)
       track_reads(interfaces);
     route_to_writers(interfaces);
+    index_partials(interfaces);
   }
 
   /// Run the callbacks still to run, in topological order: a constant one only until it has run.
@@ -99,6 +103,7 @@ public:
       for (auto* prop : m_active)
         prop->traits().update();
       retire([](property_base*) { return true; });
+      m_evaluated = true;
     });
   }
 
@@ -232,6 +237,60 @@ public:
       g.nodes.push_back({prop, prop->is_history(), is_constant(prop), m_stateful.contains(prop), m_routed.contains(prop),
                          has_callback(prop) && !m_routed.contains(prop)});
     return g;
+  }
+
+  /// d target / d seed as R (rank(target) + rank(seed), a scalar for two scalars), filled by differentiate().
+  /// Resolved once: a path from the seed to the target through a callback without the partial it needs throws.
+  /// On an evaluated context the callbacks on the path run once more and fill the result at once.
+  template <typename R>
+    requires derivatives::derivative_value<R, typename Traits::value_type, Traits::Dim>
+  const R& derivative(const property_base* target, const property_base* seed) {
+    using slot_type = derivatives::derivative_slot<value_type, Traits::Dim, R>;
+    auto const what{[&] { return "derivative(): d '" + prop_key(target->traits().id) + "' / d '" + prop_key(seed->traits().id) + "'"; }};
+    if (m_running)
+      throw std::logic_error(what() + ": called from a callback");
+    if (auto const it{std::ranges::find_if(m_plans, [&](auto const& p) { return p.target == target && p.seed == seed; })};
+        it != m_plans.end()) {
+      if (auto* slot{dynamic_cast<slot_type*>(it->slot.get())})
+        return slot->value;
+      throw std::logic_error(what() + " is requested as another type already");
+    }
+    auto const target_rank{derivatives::property_rank<value_type, Traits::Dim>(*target)};
+    auto const seed_rank{derivatives::property_rank<value_type, Traits::Dim>(*seed)};
+    if (!target_rank || !seed_rank)
+      throw std::logic_error(what() + ": both must be scalars or symmetric tensors of rank 2 or 4");
+    if (*target_rank + *seed_rank != derivatives::rank_of<R>())
+      throw std::logic_error(std::format("{} has rank {}, the requested type rank {}", what(), *target_rank + *seed_rank,
+                                         derivatives::rank_of<R>()));
+    auto plan{plan_derivative(target, seed, *seed_rank)};
+    auto slot{std::make_unique<slot_type>(*target_rank)};
+    std::vector<value_type> const zero(derivatives::width<Traits::Dim>(*target_rank) * derivatives::width<Traits::Dim>(*seed_rank));
+    slot->unpack(zero.data());
+    auto& value{slot->value};
+    plan.slot = std::move(slot);
+    for (auto const& step : plan.steps)
+      step.material->request_partials(step.callback, true);
+    m_plans.push_back(std::move(plan));
+    reactivate(); // a constant callback fills its partials once more
+    if (m_evaluated)
+      fill_now(m_plans.back());
+    return value;
+  }
+
+  /// Whether `seed` is upstream of `target` (or the target itself): a derivative of one by the other can be non-zero.
+  /// Without a path derivative() stays zero.
+  bool has_path(const property_base* target, const property_base* seed) const {
+    return upstream_of(target).contains(const_cast<property_base*>(seed));
+  }
+
+  /// Accumulates the requested derivatives from the partials the last update filled: D[out] += P * D[in].
+  void differentiate() {
+    if (m_plans.empty())
+      return;
+    for (auto& [block, packed] : m_blocks)
+      block->pack(packed.data());
+    for (auto& plan : m_plans)
+      accumulate(plan);
   }
 
   void dump() const {
@@ -577,6 +636,7 @@ private:
     } catch (...) {
       m_running = false;
       m_failed = true;
+      m_evaluated = false;
       throw;
     }
     m_running = false;
@@ -702,6 +762,177 @@ private:
     return result;
   }
 
+  // --- derivatives (#217) ---
+  using value_type = typename Traits::value_type;
+  using matrix = Eigen::Matrix<value_type, Eigen::Dynamic, Eigen::Dynamic>;
+  using read_declaration = typename material_interface_type::read_declaration;
+
+  struct derivative_step {
+    std::size_t out, in; ///< nodes of the plan
+    std::size_t block;   ///< in m_blocks
+    material_interface_type* material;
+    const property_base* callback;
+  };
+  /// One requested derivative: the nodes between seed and target that carry one, in topological order.
+  struct derivative_plan {
+    const property_base* target;
+    const property_base* seed;
+    std::vector<matrix> D;              ///< d node / d seed; node 0 is the seed
+    std::vector<derivative_step> steps; ///< in topological order of their outputs
+    std::optional<std::size_t> target_node;
+    std::unique_ptr<derivatives::derivative_slot_base<value_type>> slot;
+  };
+
+  /// D[out] += P * D[in] over the steps of one plan, from the packed blocks.
+  void accumulate(derivative_plan& plan) {
+    plan.D.front().setIdentity();
+    for (auto& d : plan.D | std::views::drop(1))
+      d.setZero();
+    for (auto const& step : plan.steps)
+      plan.D[step.out].noalias() += m_blocks[step.block].second * plan.D[step.in];
+    if (plan.target_node)
+      plan.slot->unpack(plan.D[*plan.target_node].data());
+  }
+
+  /// Reruns the callbacks of a new plan at the values held and accumulates it. A stateful callback is not rerun: its
+  /// partials come with the next update().
+  void fill_now(derivative_plan& plan) {
+    auto const on_plan{[&](auto const* prop) {
+      return std::ranges::any_of(plan.steps, [&](auto const& step) { return step.callback == prop; });
+    }};
+    if (std::ranges::any_of(m_callbacks, [&](auto const* prop) { return on_plan(prop) && m_stateful.contains(prop); }))
+      return;
+    guarded("derivative", [&] {
+      for (auto* prop : m_callbacks | std::views::filter(on_plan))
+        prop->traits().update();
+    });
+    for (auto& [block, packed] : m_blocks)
+      block->pack(packed.data());
+    accumulate(plan);
+  }
+
+  /// Indexes the declared reads by output and runs every callback declaring partials with want_partials() as requested.
+  void index_partials(const std::vector<material_interface_type*>& interfaces) {
+    m_plans.clear();
+    m_blocks.clear();
+    m_read_declarations.clear();
+    for (auto* mat : interfaces) {
+      for (auto const& d : mat->declared_reads())
+        for (auto const* out : d.outputs)
+          m_read_declarations.emplace(out, std::pair{mat, &d});
+      for (auto const& p : mat->partials())
+        if (auto* prop{find_in_graph(mat->name(), p.callback->traits().id.name)}; m_partials_wrapped.insert(prop).second) {
+          auto& update{prop->traits().update};
+          update = [inner = std::move(update), mat, callback = p.callback] { mat->run_callback(callback, inner); };
+        }
+    }
+  }
+
+  /// The steps of d target / d seed over the target's upstream: every node a derivative reaches needs the partial
+  /// of each read that carries one, declared or declared zero (independent_of()).
+  derivative_plan plan_derivative(const property_base* target, const property_base* seed, std::size_t seed_rank) {
+    auto const seed_width{static_cast<Eigen::Index>(derivatives::width<Traits::Dim>(seed_rank))};
+    derivative_plan plan{target, seed, {}, {}, std::nullopt, nullptr};
+    plan.D.emplace_back(seed_width, seed_width);
+    std::unordered_map<const property_base*, std::size_t> node{{seed, 0}};
+    std::unordered_map<const property_base*, const property_base*> via; ///< the read each node is first reached over
+    auto const& up{upstream_of(target)};
+    if (!up.contains(const_cast<property_base*>(seed)))
+      return plan;
+    for (auto const* prop : m_property_execution_order | std::views::filter([&](auto* p) { return p != seed && up.contains(p); })) {
+      std::vector<const property_base*> reached;
+      if (auto const edges{m_reverse_edges.find(const_cast<property_base*>(prop))}; edges != m_reverse_edges.end())
+        std::ranges::copy_if(edges->second, std::back_inserter(reached), [&](auto const* src) { return node.contains(src); });
+      if (reached.empty())
+        continue;
+      auto const declared{m_read_declarations.find(prop)};
+      if (declared == m_read_declarations.end())
+        throw missing_partial(target, seed, reached.front(), prop, via, "its callback declares no reads");
+      auto* mat{declared->second.first};
+      auto const& d{*declared->second.second};
+      std::vector<derivative_step> steps;
+      std::vector<const property_base*> sources;
+      Eigen::Index width{0};
+      auto const take{[&](input_wire_base const* input, const property_base* own, const property_base* src) {
+        sources.push_back(src);
+        if (!node.contains(src))
+          return;
+        auto const same_read{[&](auto const& p) { return p.input == input && p.own == own; }};
+        auto const& partials{mat->partials()};
+        if (auto const p{std::ranges::find_if(partials, [&](auto const& q) { return q.output == prop && same_read(q); })};
+            p != partials.end()) {
+          steps.push_back({0, node.at(src), block_of(*p->block), mat, p->callback});
+          width = static_cast<Eigen::Index>(p->block->rows());
+          via.try_emplace(prop, src);
+        } else if (!std::ranges::any_of(mat->independent_reads(), [&](auto const& i) { return i.callback == d.callback && same_read(i); })) {
+          throw missing_partial(target, seed, src, prop, via, "its callback declares neither partials() nor independent_of() for that read");
+        }
+      }};
+      for (auto const* input : d.inputs)
+        if (input->edge_kind() == EdgeKind::Global)
+          if (auto const* src{find_in_graph(input->source_owner(), input->source_name())})
+            take(input, nullptr, src);
+      for (auto const* own : d.own_reads)
+        take(nullptr, own, own);
+      for (auto const* src : reached)
+        if (!std::ranges::contains(sources, src) && !std::ranges::contains(d.outputs, src))
+          throw missing_partial(target, seed, src, prop, via, "it is reached over a '" + std::string{to_string(kind_of(src, prop))} +
+                                                              "' edge, not a declared read, which carries no partials");
+      if (steps.empty())
+        continue;
+      auto const index{plan.D.size()};
+      plan.D.emplace_back(width, seed_width);
+      for (auto const& step : steps)
+        plan.steps.push_back({index, step.in, step.block, step.material, step.callback});
+      node.emplace(prop, index);
+    }
+    if (auto const it{node.find(target)}; it != node.end())
+      plan.target_node = it->second;
+    return plan;
+  }
+
+  /// The packed block of a partial, shared by every plan through it.
+  std::size_t block_of(const derivatives::partial_block<value_type>& block) {
+    if (auto const it{std::ranges::find(m_blocks, &block, &std::pair<const derivatives::partial_block<value_type>*, matrix>::first)};
+        it != m_blocks.end())
+      return static_cast<std::size_t>(it - m_blocks.begin());
+    m_blocks.emplace_back(&block, matrix(static_cast<Eigen::Index>(block.rows()), static_cast<Eigen::Index>(block.cols())));
+    return m_blocks.size() - 1;
+  }
+
+  edge_kind kind_of(const property_base* from, const property_base* to) const {
+    auto const it{std::ranges::find_if(m_edges, [&](auto const& e) { return e.from == from && e.to == to; })};
+    return it != m_edges.end() ? it->kind : edge_kind::dependency;
+  }
+
+  /// Names the path seed -> ... -> from -> at -> ... -> target in the error.
+  std::logic_error missing_partial(const property_base* target, const property_base* seed, const property_base* from,
+                                   const property_base* at, const std::unordered_map<const property_base*, const property_base*>& via,
+                                   const std::string& why) const {
+    std::vector<const property_base*> path{from, at};
+    for (auto it{via.find(from)}; it != via.end() && path.front() != seed; it = via.find(it->second))
+      path.insert(path.begin(), it->second);
+    auto const& up{upstream_of(target)};
+    for (auto const* p{at}; p != target;) { // any edge into the target's upstream leads on to the target
+      auto const next{std::ranges::find_if(m_edges, [&](auto const& e) {
+        return e.from == p && e.kind != edge_kind::local && up.contains(const_cast<property_base*>(e.to));
+      })};
+      if (next == m_edges.end())
+        break;
+      path.push_back(p = next->to);
+    }
+    std::string text;
+    for (auto const* p : path)
+      text += (text.empty() ? "" : " -> ") + prop_key(p->traits().id);
+    return std::logic_error("derivative(): d '" + prop_key(target->traits().id) + "' / d '" + prop_key(seed->traits().id) + "' passes '" +
+                            prop_key(at->traits().id) + "' from '" + prop_key(from->traits().id) + "', but " + why + "; path " + text);
+  }
+
+  std::vector<derivative_plan> m_plans;
+  std::vector<std::pair<const derivatives::partial_block<value_type>*, matrix>> m_blocks; ///< packed once per differentiate()
+  std::unordered_map<const property_base*, std::pair<material_interface_type*, const read_declaration*>> m_read_declarations;
+  std::unordered_set<const property_base*> m_partials_wrapped; ///< callbacks wrapped by index_partials()
+
   std::vector<material_interface_type*> m_execution_order;
   std::vector<property_base*> m_property_execution_order;
   std::unordered_map<std::string, property_base*> m_key_to_prop;  // for string-based find
@@ -723,6 +954,7 @@ private:
   bool m_verify{NUMSIM_MATERIALS_DEBUG_CHECKS != 0};
   bool m_fold{true};
   bool m_running{false}; ///< an update is in progress
+  bool m_evaluated{false}; ///< an update() ran to its end since the last failure
   bool m_failed{false};  ///< the last update threw
   std::unique_ptr<bool> m_check_reads{std::make_unique<bool>(true)}; ///< stable address for the wrapped callbacks
 };

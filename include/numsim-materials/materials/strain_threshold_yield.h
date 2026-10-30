@@ -38,7 +38,7 @@ public:
   {
     m_kappa.old_value() = m_kappa_critical;
     m_kappa.new_value() = m_kappa_critical;
-    base::add_callback(&strain_threshold_yield::compute, m_kappa, m_is_yielding).reads(m_eps_eq);
+    base::add_callback(&strain_threshold_yield::compute, m_kappa, m_is_yielding).reads(m_eps_eq).partials(m_kappa, m_eps_eq);
   }
 
   static input_parameter_controller parameters() {
@@ -52,6 +52,9 @@ public:
     const auto threshold{std::max(m_kappa.old_value(), m_kappa_critical)};
     m_kappa.new_value() = std::max(m_eps_eq.get(), threshold);
     m_is_yielding = (m_eps_eq.get() > threshold) ? 1 : 0;
+    // kappa follows eps_eq only above the threshold; at eps_eq == kappa the partial is the left derivative, zero
+    if (base::want_partials())
+      base::partial(m_kappa, m_eps_eq) = value_type(m_is_yielding);
   }
 
 private:

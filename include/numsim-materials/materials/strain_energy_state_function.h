@@ -11,7 +11,7 @@ namespace numsim::materials {
 /// Strain energy based equivalent strain.
 ///
 ///   eps_eq = sqrt(eps : C : eps / E)
-///   d(eps_eq)/d(eps) = (C : eps) / (E * eps_eq)
+///   d(eps_eq)/d(eps) = (C + C^T) : eps / (2 E eps_eq)   (C^T: major transpose)
 ///
 /// Requires tangent from an elastic material as input.
 template <typename Traits>
@@ -38,7 +38,9 @@ public:
         m_tangent(base::template add_input<tensor4>(
             m_tangent_source, "tangent", EdgeKind::Global))
   {
-    base::add_callback(&strain_energy_state_function::compute, m_eps_eq, m_deps_eq).reads(m_strain, m_tangent);
+    base::add_callback(&strain_energy_state_function::compute, m_eps_eq, m_deps_eq)
+        .reads(m_strain, m_tangent)
+        .partials(m_eps_eq, m_strain, m_tangent);
   }
 
   static input_parameter_controller parameters() {
@@ -53,16 +55,25 @@ public:
   void compute() {
     const auto& eps = m_strain.get();
     const auto& C = m_tangent.get();
-    const auto C_eps = tmech::dcontract(C, eps);
-    const auto energy = tmech::dcontract(eps, C_eps);
+    const auto energy = tmech::dcontract(eps, tmech::dcontract(C, eps));
 
     m_eps_eq = std::sqrt(energy / m_E);
 
     if (m_eps_eq > value_type{1e-30}) {
-      m_deps_eq = C_eps / (m_E * m_eps_eq);
+      m_deps_eq = tmech::dcontract(tmech::trans(C) + C, eps) / (2 * m_E * m_eps_eq);
     } else {
       m_deps_eq = tensor2{};
     }
+    if (base::want_partials()) // d eps_eq / d C = eps (x) eps / (2 E eps_eq)
+      update_partials(eps);
+  }
+
+  void update_partials(tensor2 const &eps) {
+    base::partial(m_eps_eq, m_strain) = m_deps_eq;
+    if (m_eps_eq > value_type{1e-30})
+      base::partial(m_eps_eq, m_tangent) = tmech::otimes(eps, eps) / (2 * m_E * m_eps_eq);
+    else
+      base::partial(m_eps_eq, m_tangent) = tensor4{};
   }
 
 private:

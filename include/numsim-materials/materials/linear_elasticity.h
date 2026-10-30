@@ -42,7 +42,9 @@ public:
   {
     update_tangent(); // readable before the first update
     base::add_callback(&linear_elasticity::update_tangent, m_C).reads();
-    base::add_callback(&linear_elasticity::update_stress, m_sig).reads(m_C, m_eps, m_eigenstrain);
+    base::add_callback(&linear_elasticity::update_stress, m_sig)
+        .reads(m_C, m_eps, m_eigenstrain)
+        .partials(m_sig, m_C, m_eps, m_eigenstrain);
   }
 
   /**
@@ -69,6 +71,19 @@ public:
       m_sig = tmech::dcontract(m_C, tensor2{m_eps.get() - m_eigenstrain->get()});
     else
       m_sig = tmech::dcontract(m_C, m_eps.get());
+    if (base::want_partials())
+      update_partials();
+  }
+
+  /// d sigma / d eps = C, d sigma / d eps_eig = -C, d sigma / d C = Isym (x) (eps - eps_eig).
+  void update_partials() {
+    base::partial(m_sig, m_eps) = m_C;
+    if (m_eigenstrain) {
+      base::partial(m_sig, *m_eigenstrain) = value_type{-1} * m_C;
+      base::partial(m_sig, m_C) = tmech::otimes(sym_identity<value_type, Dim>(), tensor2{m_eps.get() - m_eigenstrain->get()});
+    } else {
+      base::partial(m_sig, m_C) = tmech::otimes(sym_identity<value_type, Dim>(), m_eps.get());
+    }
   }
 
   void update_tangent(){
