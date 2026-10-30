@@ -17,7 +17,7 @@
 #include "numsim-materials/core/parameter_helpers.h"
 #include "numsim-materials/core/property_value.h"
 #include "numsim-materials/materials/props_scalar.h"
-#include "numsim-materials/umat/errors.h"
+#include "numsim-materials/core/errors.h"
 #include "numsim-materials/umat/statev_map.h"
 
 /// One material point over a finalized material_context: input variables, output variables and history
@@ -57,10 +57,10 @@ public:
         m_tolerance(m_parameters.template get<value_type>("residual_tolerance")),
         m_max_passes(m_parameters.template get<int>("max_passes")) {
     if (!m_ctx.is_finalized())
-      throw umat::fatal_error("material_point: the context must be finalized first");
+      throw fatal_error("material_point: the context must be finalized first");
     for (auto const &name : m_inputs) {
       if (!m_ctx.find(name))
-        throw umat::fatal_error("material_point: input '" + name + "' is not a material in this context");
+        throw fatal_error("material_point: input '" + name + "' is not a material in this context");
       for (auto const *prop : m_ctx.property_execution_order())
         if (prop->is_history() && prop->traits().id.owner == name)
           m_exclusions.emplace_back(name, prop->traits().id.name);
@@ -70,7 +70,7 @@ public:
       m_exclusions.emplace_back(src.material, src.property);
     }
     if (!(m_tolerance >= 0) || m_max_passes < 1)
-      throw umat::fatal_error("material_point: residual_tolerance must be >= 0 and max_passes >= 1");
+      throw fatal_error("material_point: residual_tolerance must be >= 0 and max_passes >= 1");
     if (auto const &source{m_parameters.template get<std::string>("residual_source")}; !source.empty())
       m_residual = &output<value_type>(source);
     for (auto *material : m_ctx.materials())
@@ -89,10 +89,10 @@ public:
   template <typename Source>
   Source &input(std::string const &name) const {
     if (!std::ranges::contains(m_inputs, name))
-      throw umat::fatal_error("material_point: '" + name + "' is not an input of this material point");
+      throw fatal_error("material_point: '" + name + "' is not an input of this material point");
     auto *source = dynamic_cast<Source *>(m_ctx.find(name));
     if (!source)
-      throw umat::fatal_error("material_point: input '" + name + "' is another kind of source");
+      throw fatal_error("material_point: input '" + name + "' is another kind of source");
     return *source;
   }
 
@@ -101,7 +101,7 @@ public:
     if (m_props_readers.empty())
       return;
     if (props.size() < m_props_needed)
-      throw umat::fatal_error("material_point: the model reads " + std::to_string(m_props_needed) +
+      throw fatal_error("material_point: the model reads " + std::to_string(m_props_needed) +
                               " host constants but this call supplied " + std::to_string(props.size()) +
                               " — check *USER MATERIAL, CONSTANTS=");
     for (auto *reader : m_props_readers)
@@ -121,7 +121,7 @@ public:
   T const &output(std::string const &material, std::string const &property) const {
     if (auto const *value = property_value<T>(find(material, property)))
       return *value;
-    throw umat::fatal_error("material_point: property '" + material + "::" + property + "' has an unexpected type");
+    throw fatal_error("material_point: property '" + material + "::" + property + "' has an unexpected type");
   }
 
   /// output() of "material::property".
@@ -136,7 +136,7 @@ public:
   history_property<T> const &history(std::string const &material, std::string const &property) const {
     if (auto const *hist = dynamic_cast<history_property<T> const *>(find(material, property)))
       return *hist;
-    throw umat::fatal_error("material_point: property '" + material + "::" + property +
+    throw fatal_error("material_point: property '" + material + "::" + property +
                             "' is not a history property of this type");
   }
 
@@ -145,7 +145,7 @@ public:
   /// One graph update, repeated to the fixed point when a residual is configured.
   void evaluate() {
     if (!m_props_readers.empty() && !m_props_bound)
-      throw umat::fatal_error("material_point: this model reads its material constants per call — call bind_props() "
+      throw fatal_error("material_point: this model reads its material constants per call — call bind_props() "
                               "before evaluating");
     m_ctx.update();
     if (!m_residual)
@@ -153,7 +153,7 @@ public:
     // the negated test also keeps a NaN residual unconverged
     for (int pass{1}; !(std::abs(*m_residual) <= m_tolerance); ++pass) {
       if (pass >= m_max_passes || std::isnan(*m_residual))
-        throw umat::cutback_error(std::format("material_point: '{}' did not reach {:g} in {} passes (last {:g})",
+        throw cutback_error(std::format("material_point: '{}' did not reach {:g} in {} passes (last {:g})",
                                               m_parameters.template get<std::string>("residual_source"), m_tolerance,
                                               m_max_passes,
                                               *m_residual));
@@ -201,13 +201,13 @@ private:
   property_base *find(std::string const &material, std::string const &property) const {
     if (auto *prop = m_ctx.find_property(material, property))
       return prop;
-    throw umat::fatal_error("material_point: property '" + material + "::" + property + "' not found");
+    throw fatal_error("material_point: property '" + material + "::" + property + "' not found");
   }
 
   template <typename Span>
   Span checked(Span buffer) const {
     if (buffer.size() < history_width())
-      throw umat::fatal_error(std::format("material_point: the host buffer holds {} values, the history needs {}",
+      throw fatal_error(std::format("material_point: the host buffer holds {} values, the history needs {}",
                                           buffer.size(), history_width()));
     return buffer;
   }

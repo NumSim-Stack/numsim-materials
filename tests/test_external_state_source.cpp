@@ -7,7 +7,8 @@
 #include "numsim-materials/materials/scalar_stepper.h"
 #include "numsim-materials/materials/tensor_component_stepper.h"
 #include "numsim-materials/solvers/backward_euler.h"
-#include "numsim-materials/umat/external_state_source.h"
+#include "numsim-materials/driver/external_state_source.h"
+#include "numsim-materials/umat/tensor_conversion.h"
 #include "numsim-materials/solvers/local_newton.h"
 #include "numsim-materials/materials/j2_plasticity.h"
 
@@ -222,7 +223,7 @@ TEST(ExternalStrainSource, BindsFromCanonicalBuffersWithEngineeringShear) {
   const T dstran[6] = {0.0005, 0.0, 0.0, 0.002, 0.0, 0.0};
   for (std::size_t i = 0; i < 6; ++i) total[i] = stran[i] + dstran[i];
 
-  src.bind(stran, total);
+  src.bind(u::strain_from_buffer<T>(stran), u::strain_from_buffer<T>(total));
 
   const auto& old_eps = src.strain().old_value();
   const auto& new_eps = src.strain().new_value();

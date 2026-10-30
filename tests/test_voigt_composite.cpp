@@ -12,7 +12,7 @@
 #include "numsim-materials/materials/mean_field_composite_global.h"
 #include "numsim-materials/materials/weighted_sum.h"
 #include "numsim-materials/solvers/local_newton.h"
-#include "numsim-materials/umat/external_state_source.h"
+#include "numsim-materials/driver/external_state_source.h"
 
 /// The nonlinear Voigt rule of mixtures (equal strain in every phase) is a wiring, not a material:
 /// every phase reads the composite strain and weighted_sum adds c_i sigma_i and c_i C_i.
