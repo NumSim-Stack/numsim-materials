@@ -146,8 +146,15 @@ public:
       if (m_verify)
         for (auto* prop : m_retired | std::views::filter(runs))
           verify(prop);
-      for (auto* prop : m_active | std::views::filter(runs))
-        prop->traits().update();
+      for (auto const& s : m_stages) {
+        if (!s.system || s.system->unknowns.empty()) { // a converges() group runs once, as a member asked for directly
+          for (auto* prop : s.callbacks | std::views::filter(runs))
+            prop->traits().update();
+        } else if (std::ranges::any_of(s.callbacks, runs) || std::ranges::any_of(s.system->unknowns, runs)) {
+          auto const members{s.callbacks | std::views::filter([&](auto* prop) { return !exclude.contains(prop); }) | std::ranges::to<std::vector>()};
+          solve(*s.system, members);
+        }
+      }
       retire(runs);
     });
   }
@@ -773,15 +780,14 @@ private:
     check_settings(s);
     start(s);
     for (int it{0};; ++it) {
+      if (d.report)
+        d.report->iterations = it;
       scatter(s, s.x);
       run(callbacks);
       gather(s, s.R);
       auto const norm{s.R.hasNaN() ? std::numeric_limits<value_type>::quiet_NaN() : s.R.template lpNorm<Eigen::Infinity>()};
-      if (std::isfinite(norm) && norm <= *d.tolerance) {
-        if (d.report)
-          d.report->iterations = it;
+      if (std::isfinite(norm) && norm <= *d.tolerance)
         return;
-      }
       if (it >= limit || !s.R.allFinite())
         throw cutback_error(d.own_residual ? std::format("'{}' did not reach {:g} in {} pass{} (last {:g})", s.name, *d.tolerance, it + 1,
                                                          it == 0 ? "" : "es", norm)
@@ -820,19 +826,28 @@ private:
         s.J.middleRows(s.rows[i], plan.D[*node].rows()) = plan.D[*node];
   }
 
-  /// J by forward differences, one Mandel component of x at a time.
+  /// J by forward differences, one Mandel component of x at a time, with a step relative to the size of x (1 when
+  /// x is zero); the unknowns are back at x afterwards, also when a member throws.
   void jacobian_by_differences(system_stage& s, std::vector<property_base*> const& callbacks) {
     s.J.resize(s.height, s.width);
     column_vector x{s.x}, R(s.height);
-    for (Eigen::Index j{0}; j < s.width; ++j) {
-      auto const h{std::sqrt(std::numeric_limits<value_type>::epsilon()) * std::max(value_type{1}, std::abs(s.x[j]))};
-      x[j] = s.x[j] + h;
-      scatter(s, x);
-      run(callbacks);
-      gather(s, R);
-      s.J.col(j) = (R - s.R) / (x[j] - s.x[j]);
-      x[j] = s.x[j];
+    auto const norm{s.x.template lpNorm<Eigen::Infinity>()};
+    auto const scale{norm > 0 ? norm : value_type{1}};
+    try {
+      for (Eigen::Index j{0}; j < s.width; ++j) {
+        auto const h{std::sqrt(std::numeric_limits<value_type>::epsilon()) * std::max(std::abs(s.x[j]), scale)};
+        x[j] = s.x[j] + h;
+        scatter(s, x);
+        run(callbacks);
+        gather(s, R);
+        s.J.col(j) = (R - s.R) / (x[j] - s.x[j]);
+        x[j] = s.x[j];
+      }
+    } catch (...) {
+      scatter(s, s.x);
+      throw;
     }
+    scatter(s, s.x);
   }
 
   /// x from the seeds, a history unknown from its value at the end of the last step.
@@ -1030,6 +1045,7 @@ private:
                                                                               "downstream of its consumer and upstream of the residual)"}
                                                                 : "iterates no loop outside the group of '" + (*owners.begin())->name +
                                                                       "': one residual per group"));
+      s.members.assign(members.begin(), members.end());
       for (auto* prop : members)
         member_of.emplace(prop, &s);
       for (auto const* unknown : s.unknowns)
@@ -1134,6 +1150,8 @@ private:
     system_stage* system;
     Eigen::Index column;
     std::size_t first_target;
+    matrix J, B, dx_dp; ///< reused by every fold of the plan
+    Eigen::PartialPivLU<matrix> lu;
   };
   /// D = d node / d seeds over the nodes between the seeds and the targets that carry one, in topological order.
   struct derivative_plan {
@@ -1155,6 +1173,7 @@ private:
     const system_declaration* declared{nullptr};
     std::string name; ///< the system's, or the residual's for converges()
     std::vector<property_base*> unknowns, residuals;
+    std::vector<const property_base*> members; ///< the callbacks it reruns, from finalize()
     std::vector<std::size_t> ranks, residual_ranks;
     std::vector<Eigen::Index> columns, rows;
     Eigen::Index width{0}, height{0};
@@ -1214,6 +1233,7 @@ private:
       auto& s{*owned};
       if (auto* report{s.declared->report}) {
         report->zero_blocks.clear();
+        report->planned = true;
         for (std::size_t i{0}; i < s.residuals.size(); ++i)
           for (std::size_t j{0}; j < s.unknowns.size(); ++j)
             if (!upstream_of(s.residuals[i]).contains(s.unknowns[j]))
@@ -1256,13 +1276,18 @@ private:
       passed.clear();
     auto const stage_index{[this](system_stage* s) { return std::ranges::find(m_stages, s, &stage::system) - m_stages.begin(); }};
     std::ranges::sort(passed, {}, stage_index);
+    for (auto const* s : passed)
+      if (std::ranges::contains(s->members, seed) ||
+          std::ranges::any_of(m_edges, [&](auto const& e) { return e.kind == edge_kind::written_by && e.to == seed && std::ranges::contains(s->members, e.from); }))
+        throw std::logic_error(what + ": '" + prop_key(seed->traits().id) + "' is rerun by " + describe(*s) +
+                               " and solved again; seed an input of the system or its unknown instead");
 
     std::vector<const property_base*> targets{target};
     std::vector<std::pair<const property_base*, Eigen::Index>> seeds{{seed, seed_width}};
     std::vector<system_fold> folds;
     auto column{seed_width};
     for (auto* s : passed) {
-      folds.push_back({s, column, targets.size()});
+      folds.push_back({s, column, targets.size(), matrix::Zero(s->height, s->width), matrix::Zero(s->height, seed_width), {}, {}});
       for (std::size_t j{0}; j < s->unknowns.size(); ++j)
         seeds.emplace_back(s->unknowns[j], static_cast<Eigen::Index>(derivatives::width<Traits::Dim>(s->ranks[j])));
       column += s->width;
@@ -1360,21 +1385,25 @@ private:
   }
 
   /// Per system passed, at its converged point R(x, p) = 0: dx/dp = -J^-1 B with J = dR/dx and B = dR/dp taken
-  /// with the unknowns as seeds, then every node's D_p += D_x dx/dp.
+  /// with the unknowns as seeds, then every node's D_p += D_x dx/dp. A singular J throws a cutback_error.
   static void fold(derivative_plan& plan) {
     auto const p{plan.seed_width};
-    for (auto const& f : plan.folds) {
+    for (auto& f : plan.folds) {
       auto const& s{*f.system};
-      matrix J{matrix::Zero(s.height, s.width)}, B{matrix::Zero(s.height, p)};
+      f.J.setZero();
+      f.B.setZero();
       for (std::size_t i{0}; i < s.residuals.size(); ++i)
         if (auto const node{plan.target_nodes[f.first_target + i]}) {
           auto const& d{plan.D[*node]};
-          J.middleRows(s.rows[i], d.rows()) = d.middleCols(f.column, s.width);
-          B.middleRows(s.rows[i], d.rows()) = d.leftCols(p);
+          f.J.middleRows(s.rows[i], d.rows()) = d.middleCols(f.column, s.width);
+          f.B.middleRows(s.rows[i], d.rows()) = d.leftCols(p);
         }
-      matrix const dx_dp{-J.partialPivLu().solve(B)};
+      f.lu.compute(f.J);
+      f.dx_dp = -f.lu.solve(f.B);
+      if (!f.dx_dp.allFinite())
+        throw cutback_error(std::format("derivative(): system '{}' has a singular Jacobian at its converged point", s.name));
       for (auto& d : plan.D)
-        d.leftCols(p).noalias() += d.middleCols(f.column, s.width) * dx_dp;
+        d.leftCols(p).noalias() += d.middleCols(f.column, s.width) * f.dx_dp;
     }
   }
 

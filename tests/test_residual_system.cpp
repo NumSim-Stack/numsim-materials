@@ -1,5 +1,6 @@
 // Residual systems set up at run time: unknowns and equations from any nodes (#218).
 #include <cmath>
+#include <limits>
 #include <memory>
 #include <numbers>
 #include <stdexcept>
@@ -265,6 +266,120 @@ private:
   bool const &m_picard;
   nm::input_property<T, nm::property_traits> const &m_x;
   nm::input_property<T, nm::property_traits> const &m_load;
+};
+
+/// r = x^2 - load::state for the unknown x of "solver": a double root, and a singular Jacobian, at load 0.
+class square_row final : public nm::material_base<square_row, policy> {
+public:
+  using base = nm::material_base<square_row, policy>;
+
+  template <typename... Args>
+  explicit square_row(Args &&...args)
+      : base(std::forward<Args>(args)...), m_r(base::add_output<T>("r")), m_x(base::add_input<T>("solver", "x")),
+        m_load(base::add_input<T>("load", "state")) {
+    base::add_callback(&square_row::compute, m_r).reads(m_x, m_load).partials(m_r, m_x, m_load);
+  }
+
+  static input_parameter_controller parameters() { return input_parameter_controller{base::parameters()}; }
+
+  void compute() {
+    m_r = m_x.get() * m_x.get() - m_load.get();
+    if (base::want_partials()) {
+      base::partial(m_r, m_x) = 2 * m_x.get();
+      base::partial(m_r, m_load) = T{-1};
+    }
+  }
+
+private:
+  T &m_r;
+  nm::input_property<T, nm::property_traits> const &m_x;
+  nm::input_property<T, nm::property_traits> const &m_load;
+};
+
+/// r = t^3 + t - 2 with t = x / scale for the unknown x of "solver": the root x = scale, whatever the scale.
+class scaled_row final : public nm::material_base<scaled_row, policy> {
+public:
+  using base = nm::material_base<scaled_row, policy>;
+
+  template <typename... Args>
+  explicit scaled_row(Args &&...args)
+      : base(std::forward<Args>(args)...), m_r(base::add_output<T>("r")), m_scale(base::get_parameter<T>("scale")),
+        m_x(base::add_input<T>("solver", "x")) {
+    base::add_callback(&scaled_row::compute, m_r).reads(m_x).partials(m_r, m_x);
+  }
+
+  static input_parameter_controller parameters() {
+    input_parameter_controller para{base::parameters()};
+    nm::optional<T>(para, "scale", T{1});
+    return para;
+  }
+
+  void compute() {
+    T const t{m_x.get() / m_scale};
+    m_r = t * t * t + t - 2;
+    if (base::want_partials())
+      base::partial(m_r, m_x) = (3 * t * t + 1) / m_scale;
+  }
+
+private:
+  T &m_r;
+  T const &m_scale;
+  nm::input_property<T, nm::property_traits> const &m_x;
+};
+
+/// r = "value" whatever x is: a residual that is NaN or infinite.
+class poison_row final : public nm::material_base<poison_row, policy> {
+public:
+  using base = nm::material_base<poison_row, policy>;
+
+  template <typename... Args>
+  explicit poison_row(Args &&...args)
+      : base(std::forward<Args>(args)...), m_r(base::add_output<T>("r")), m_value(base::get_parameter<T>("value")),
+        m_x(base::add_input<T>("solver", "x")) {
+    base::add_callback(&poison_row::compute, m_r).reads(m_x);
+  }
+
+  static input_parameter_controller parameters() {
+    input_parameter_controller para{base::parameters()};
+    nm::optional<T>(para, "value", T{0});
+    return para;
+  }
+
+  void compute() { m_r = m_value + (m_x.get() - m_x.get()); }
+
+private:
+  T &m_r;
+  T const &m_value;
+  nm::input_property<T, nm::property_traits> const &m_x;
+};
+
+/// r = y^3 + y - solver::x for the unknown y of "second": a system reading the unknown of another.
+class chain_row final : public nm::material_base<chain_row, policy> {
+public:
+  using base = nm::material_base<chain_row, policy>;
+
+  template <typename... Args>
+  explicit chain_row(Args &&...args)
+      : base(std::forward<Args>(args)...), m_r(base::add_output<T>("r")), m_y(base::add_input<T>("second", "y")),
+        m_x(base::add_input<T>("solver", "x")) {
+    base::add_callback(&chain_row::compute, m_r).reads(m_y, m_x).partials(m_r, m_y, m_x);
+  }
+
+  static input_parameter_controller parameters() { return input_parameter_controller{base::parameters()}; }
+
+  void compute() {
+    T const y{m_y.get()};
+    m_r = y * y * y + y - m_x.get();
+    if (base::want_partials()) {
+      base::partial(m_r, m_y) = 3 * y * y + 1;
+      base::partial(m_r, m_x) = T{-1};
+    }
+  }
+
+private:
+  T &m_r;
+  nm::input_property<T, nm::property_traits> const &m_y;
+  nm::input_property<T, nm::property_traits> const &m_x;
 };
 
 /// A residual system "solver" over `unknowns` and `equations`.
@@ -656,6 +771,7 @@ TEST(ResidualSystemValidation, RejectsInconsistentUnknownsAndEquations) {
            bad{xy(), {{"a::r", "x"}}, "newton", "'y'"},
            bad{xy(), {{"a::r", "x"}, {"a::s", "z"}}, "newton", "'z'"},
            bad{xy(), {{"a::r", "x"}, {"a::s", "x"}}, "newton", "'x'"},
+           bad{xy(), {{"a::r", "x"}, {"a::r", "y"}}, "newton", "'a::r'"},
            bad{xy(), {{"a::r", "x"}, {"a_s", "y"}}, "newton", "a_s"},
            bad{xy(), {{"a::r", "x"}, {"a::s", "y"}}, "gauss_seidel", "gauss_seidel"},
            bad{{}, {{"a::r", "x"}}, "picard", "'x'"},
@@ -775,6 +891,160 @@ TEST(ResidualSystemHistorySeed, TwoPointsAlternatelyTakeTheIterationsOfEachAlone
   EXPECT_LT(warm, cold) << "each step starts from the last converged x";
 }
 
+// --- review of the residual systems ---
+
+/// A "solver" over the scalar x (seed `seed`) whose residual "f::r" is the row `Row`, and a "load" source.
+template <typename Row>
+struct row_rig {
+  std::unique_ptr<ctx_type> owner{std::make_unique<ctx_type>()};
+  ctx_type &ctx{*owner};
+  system_type *system{nullptr};
+  nm::external_scalar_source<policy> *load{nullptr};
+
+  row_rig(std::string const &method, int max_iter, T tolerance, T seed, param_type row = {}) {
+    param_type p;
+    p.insert<std::string>("name", "load");
+    load = &ctx.create<nm::external_scalar_source<policy>>(p);
+    system = &make_system(ctx, {{"x", nm::unknown_kind::scalar, static_cast<double>(seed)}}, {{"f::r", "x"}}, method, max_iter, tolerance);
+    row.insert<std::string>("name", "f");
+    ctx.create<Row>(row);
+    ctx.finalize();
+  }
+
+  T x() { return ctx.get<T>("solver", "x"); }
+};
+
+TEST(ResidualSystemReview, TheIterationsAreReportedWhenTheSolveThrows) {
+  auto const ref{vector_newton_on(system_mode::nonlinear, 3, 5)};
+  ASSERT_GT(ref.iterations, 1);
+  scalar_rig rig{system_mode::nonlinear, 3, 5, ref.iterations - 1};
+  EXPECT_THROW(rig.ctx.update(), nm::cutback_error);
+  EXPECT_EQ(rig.system->iterations(), ref.iterations - 1) << "the updates taken before the throw";
+}
+
+TEST(ResidualSystemReview, ZeroBlocksBeforeFinalizeThrows) {
+  ctx_type ctx;
+  auto &system{make_system(ctx, xy(), {{"fx::rx", "x"}, {"fy::ry", "y"}})};
+  auto const message{thrown<std::logic_error>([&] { (void)system.zero_blocks(); })};
+  EXPECT_TRUE(message.contains("'solver'") && message.contains("finalize")) << message;
+}
+
+TEST(ResidualSystemReview, NewtonFdLeavesTheUnknownsAtTheIterateWhenTheJacobianIsSingular) {
+  scalar_rig rig{system_mode::singular, 4, 7, 50, false, "newton_fd"};
+  EXPECT_THROW(rig.ctx.update(), nm::cutback_error);
+  EXPECT_EQ(rig.x(), 0) << "not x + h";
+  EXPECT_EQ(rig.y(), 0);
+}
+
+TEST(ResidualSystemReview, ANonFiniteResidualNeverConverges) {
+  T const inf{std::numeric_limits<T>::infinity()};
+  for (T const value : {std::numeric_limits<T>::quiet_NaN(), inf, -inf})
+    for (T const tolerance : {T{1e-10}, inf})
+      for (std::string const method : {"picard", "newton_fd"}) {
+        param_type row;
+        row.insert<T>("value", value);
+        row_rig<poison_row> rig{method, 5, tolerance, 0, row};
+        auto const message{thrown<nm::cutback_error>([&] { rig.ctx.update(); })};
+        EXPECT_TRUE(message.contains("'solver'")) << value << ", tolerance " << tolerance << ", " << method << ": " << message;
+      }
+}
+
+TEST(ResidualSystemReview, AConvergedSeedNeedsNoUpdateWithToleranceAndMaxIterZero) {
+  for (std::string const method : {"newton", "newton_fd", "picard"}) {
+    row_rig<square_row> rig{method, 0, 0, 1};
+    rig.load->bind(1, 1); // x = 1 solves x^2 = 1 exactly
+    EXPECT_NO_THROW(rig.ctx.update()) << method;
+    EXPECT_EQ(rig.system->iterations(), 0) << method;
+    EXPECT_EQ(rig.x(), 1);
+    row_rig<square_row> off{method, 0, 0, 1};
+    off.load->bind(1, 2);
+    EXPECT_THROW(off.ctx.update(), nm::cutback_error) << method << ": not converged, and no update allowed";
+  }
+}
+
+TEST(ResidualSystemReview, NewtonFdConvergesAsFastAsNewtonOnSmallUnknowns) {
+  for (T const scale : {T{1e-9}, T{1}, T{1e6}}) {
+    param_type row;
+    row.insert<T>("scale", scale);
+    row_rig<scaled_row> newton{"newton", 50, 1e-10, 0.5 * scale, row};
+    newton.ctx.update();
+    EXPECT_NEAR(newton.x() / scale, 1, 1e-9);
+    row_rig<scaled_row> fd{"newton_fd", 50, 1e-10, 0.5 * scale, row};
+    EXPECT_NO_THROW(fd.ctx.update()) << "scale " << scale;
+    EXPECT_NEAR(fd.x() / scale, 1, 1e-9) << "scale " << scale;
+    EXPECT_LE(fd.system->iterations(), newton.system->iterations() + 1) << "scale " << scale;
+  }
+}
+
+TEST(ResidualSystemTangent, NewtonFdAndPicardGiveTheImplicitFunctionTangent) {
+  row_rig<cubic_row> fd{"newton_fd", 50, 1e-12, 0};
+  auto const &dx_fd{fd.ctx.derivative<T>("solver", "x", "load", "state")};
+  fd.load->bind(0, 2);
+  fd.ctx.update();
+  EXPECT_NEAR(fd.x(), 1, 1e-10);
+  EXPECT_NEAR(dx_fd, 1 / (3 * fd.x() * fd.x() + 1), 1e-10);
+
+  param_type row;
+  row.insert<bool>("picard", true);
+  row_rig<cubic_row> picard{"picard", 500, 1e-13, 0, row};
+  auto const &dx{picard.ctx.derivative<T>("solver", "x", "load", "state")};
+  auto const at{[&](T load) {
+    picard.load->bind(0, load);
+    picard.ctx.update();
+    return picard.x();
+  }};
+  T const load{0.3}, h{1e-5};
+  T const plus{at(load + h)}, minus{at(load - h)};
+  T const x{at(load)};
+  T const s{std::sin(load + x)};
+  EXPECT_NEAR(dx, -(s / 2) / (1 + s / 2), 1e-10);
+  EXPECT_NEAR(dx, (plus - minus) / (2 * h), 1e-7);
+}
+
+TEST(ResidualSystemTangent, TwoCoupledSystemsMatchCentralDifferences) {
+  ctx_type ctx;
+  param_type p;
+  p.insert<std::string>("name", "load");
+  auto &load{ctx.create<nm::external_scalar_source<policy>>(p)};
+  make_system(ctx, {{"x", nm::unknown_kind::scalar}}, {{"f::r", "x"}}, "newton", 50, 1e-13);
+  make_system(ctx, {{"y", nm::unknown_kind::scalar}}, {{"g::r", "y"}}, "newton", 50, 1e-13, "second");
+  p.clear();
+  p.insert<std::string>("name", "f");
+  ctx.create<cubic_row>(p);
+  p.clear();
+  p.insert<std::string>("name", "g");
+  ctx.create<chain_row>(p);
+  ctx.finalize();
+  auto const &dx{ctx.derivative<T>("solver", "x", "load", "state")};
+  auto const &dy{ctx.derivative<T>("second", "y", "load", "state")};
+  auto const at{[&](T value) {
+    load.bind(0, value);
+    ctx.update();
+    return std::pair{ctx.get<T>("solver", "x"), ctx.get<T>("second", "y")};
+  }};
+  T const value{3}, h{1e-5};
+  auto const [xp, yp]{at(value + h)};
+  auto const [xm, ym]{at(value - h)};
+  auto const [x, y]{at(value)};
+  EXPECT_NEAR(dx, (xp - xm) / (2 * h), 1e-7);
+  EXPECT_NEAR(dy, (yp - ym) / (2 * h), 1e-7) << "the second system reads the unknown of the first";
+  EXPECT_NEAR(dy, 1 / (3 * y * y + 1) / (3 * x * x + 1), 1e-10);
+}
+
+TEST(ResidualSystemTangent, ASingularJacobianAtTheConvergedPointThrowsACutbackNamingTheSystem) {
+  row_rig<square_row> rig{"newton", 50, 1e-10, 0};
+  rig.ctx.derivative<T>("solver", "x", "load", "state");
+  rig.load->bind(0, 0); // x = 0 is a double root, and the seed already solves it
+  auto const message{thrown<nm::cutback_error>([&] { rig.ctx.update(); })};
+  EXPECT_TRUE(message.contains("'solver'")) << message;
+}
+
+TEST(ResidualSystemTangent, ASeedThatIsAMemberOutputOfAPassedSystemThrows) {
+  strain_rig rig;
+  auto const message{thrown<std::logic_error>([&] { rig.ctx.derivative<T>("solver", "g", "sys", "rg"); })};
+  EXPECT_TRUE(message.contains("sys::rg") && message.contains("'solver'")) << message;
+}
+
 #ifdef NUMSIM_HAVE_JSON
 TEST(ResidualSystemJson, ADocumentBuildsTheSystem) {
   nm::register_default_materials<policy>();
@@ -803,6 +1073,26 @@ TEST(ResidualSystemJson, RejectsAnUnknownSeedOrKind) {
     ctx_type ctx;
     auto const message{thrown<std::exception>([&] { nm::create_from_json(ctx, doc); })};
     EXPECT_TRUE(message.contains("unknowns") && message.contains("'x'")) << unknown << ": " << message;
+  }
+}
+
+TEST(ResidualSystemJson, TheReadersRequireListsAndRejectUnknownKeys) {
+  nm::register_default_materials<policy>();
+  struct bad {
+    char const *unknowns, *equations, *says;
+  };
+  for (auto const &[unknowns, equations, says] : {
+           bad{R"({"name": "x", "kind": "scalar"})", R"([{"residual": "sys::rx", "for": "x"}])", "unknowns"},
+           bad{R"(["x"])", R"([{"residual": "sys::rx", "for": "x"}])", "unknowns"},
+           bad{R"([{"name": "x", "kind": "scalar", "seeed": 1}])", R"([{"residual": "sys::rx", "for": "x"}])", "seeed"},
+           bad{R"([{"name": "x", "kind": "scalar"}])", R"({"residual": "sys::rx", "for": "x"})", "equations"},
+           bad{R"([{"name": "x", "kind": "scalar"}])", R"([{"residual": "sys::rx", "forr": "x"}])", "forr"},
+       }) {
+    auto const doc = nlohmann::json::parse(std::string{R"({"type": "system", "name": "solver", "unknowns": )"} + unknowns +
+                                           R"(, "equations": )" + equations + "}");
+    ctx_type ctx;
+    auto const message{thrown<std::exception>([&] { nm::create_from_json(ctx, doc); })};
+    EXPECT_TRUE(message.contains(says)) << unknowns << " / " << equations << ": " << message;
   }
 }
 #endif

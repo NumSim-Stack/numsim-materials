@@ -201,9 +201,23 @@ json_reader_registry<JsonType> make_default_json_registry() {
         return result;
       });
 
+  // a list of objects whose keys are among `allowed`: the message names the parameter and the key
+  const auto require_list = [](const JsonType& j, const std::string& key, std::initializer_list<const char*> allowed) {
+    if (!adapter::is_array(j))
+      throw std::runtime_error(key + " is a list of objects");
+    for (const auto& elem : j) {
+      if (!adapter::is_object(elem))
+        throw std::runtime_error(key + " is a list of objects");
+      adapter::for_each_key(elem, [&](const std::string& name) {
+        if (std::ranges::none_of(allowed, [&](const char* a) { return name == a; }))
+          throw std::runtime_error(key + ": unknown key '" + name + "'");
+      });
+    }
+  };
   // the unknowns of a residual system (solvers/system.h): "seed" is a number or "history"
-  reg.template add<std::vector<system_unknown>>([](const JsonType& j, const std::string& key) -> std::any {
+  reg.template add<std::vector<system_unknown>>([require_list](const JsonType& j, const std::string& key) -> std::any {
     std::vector<system_unknown> result;
+    require_list(j, key, {"name", "kind", "seed"});
     for (const auto& elem : j) {
       auto& u = result.emplace_back();
       u.name = adapter::template get<std::string>(adapter::at(elem, "name"));
@@ -225,8 +239,9 @@ json_reader_registry<JsonType> make_default_json_registry() {
     return result;
   });
   // its equations: {"residual": "material::property", "for": unknown}, without "for" when it has no unknowns
-  reg.template add<std::vector<system_equation>>([](const JsonType& j, const std::string&) -> std::any {
+  reg.template add<std::vector<system_equation>>([require_list](const JsonType& j, const std::string& key) -> std::any {
     std::vector<system_equation> result;
+    require_list(j, key, {"residual", "for"});
     for (const auto& elem : j)
       result.push_back({adapter::template get<std::string>(adapter::at(elem, "residual")),
                         adapter::contains(elem, "for") ? adapter::template get<std::string>(adapter::at(elem, "for")) : std::string{}});

@@ -67,6 +67,8 @@ public:
   /// The Jacobian blocks (row unknown, column unknown) without a path from the column unknown to the residual
   /// of the row: structurally zero (after finalize()).
   std::vector<block_ref> zero_blocks() const {
+    if (!m_report.planned)
+      throw std::logic_error("system '" + base::name() + "': zero_blocks() is known after finalize()");
     return m_report.zero_blocks |
            std::views::transform([this](auto const& b) { return block_ref{m_names[b.first], m_names[b.second]}; }) |
            std::ranges::to<std::vector>();
@@ -105,7 +107,10 @@ private:
       fail("'equations' is empty");
     if (!(m_tolerance >= 0) || m_max_iter < 0)
       fail("needs a tolerance >= 0 and max_iter >= 0");
-    for (auto const& e : equations) {
+    for (auto it{equations.begin()}; it != equations.end(); ++it) {
+      auto const& e{*it};
+      if (std::ranges::contains(equations.begin(), it, e.residual, &system_equation::residual))
+        fail("residual '" + e.residual + "' is used by more than one equation: one residual per unknown");
       auto const split{e.residual.find("::")};
       if (split == std::string::npos || split == 0 || split + 2 >= e.residual.size())
         fail("residual '" + e.residual + "' is not \"material::property\"");

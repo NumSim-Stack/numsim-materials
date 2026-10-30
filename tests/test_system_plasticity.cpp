@@ -275,4 +275,43 @@ TEST(SystemPlasticity, NoZeroBlocksAndThePartialsMatchFiniteDifferences) {
       ADD_FAILURE() << mismatch;
 }
 
+TEST(SystemPlasticity, UpdatePropertySolvesTheSystemLikeUpdate) {
+  for (T const gamma : {0.0, 40.0}) {
+    as_system full{gamma}, single{gamma};
+    full.step(strain_a());
+    single.src->bind(strain_a(), strain_a());
+    single.ctx.update_property("kin", "stress");
+    EXPECT_GT(tmech::norm(full.back_stress()), 0) << "the path yields";
+    EXPECT_LT(relative(single.stress(), full.stress()), 1e-14) << "gamma " << gamma;
+    EXPECT_LT(relative(single.back_stress(), full.back_stress()), 1e-14) << "gamma " << gamma;
+  }
+}
+
+TEST(SystemPlasticity, TheTangentMatchesCentralDifferencesOfTheStress) {
+  for (T const gamma : {0.0, 40.0}) {
+    as_system sys{gamma};
+    sys.step(t2{0.1 * strain_a()});
+    sys.ctx.commit();
+    sys.step(strain_a());
+    ASSERT_GT(tmech::norm(sys.back_stress()), 0) << "the step yields";
+    t4 const tangent{*sys.tangent};
+    constexpr T h{1e-6};
+    for (int i{0}; i < 3; ++i)
+      for (int j{i}; j < 3; ++j) {
+        t2 E;
+        E.fill(T{0});
+        E(i, j) = E(j, i) = i == j ? T{1} : T{0.5};
+        auto const stress_at{[&](T step) {
+          sys.ctx.revert();
+          sys.step(t2{strain_a() + step * E});
+          return t2{sys.stress()};
+        }};
+        t2 const plus{stress_at(h)}, minus{stress_at(-h)};
+        t2 const fd{(T{1} / (2 * h)) * (plus - minus)};
+        t2 const analytic{tmech::dcontract(tangent, E)};
+        EXPECT_LT(relative(fd, analytic), 1e-5) << "gamma " << gamma << ", component " << i << j;
+      }
+  }
+}
+
 } // namespace

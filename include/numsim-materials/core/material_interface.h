@@ -98,6 +98,7 @@ enum class verdict { same, changed, not_finite };
 struct system_report {
   int iterations{0};                                            ///< updates of the unknowns in the last solve
   std::vector<std::pair<std::size_t, std::size_t>> zero_blocks; ///< (row, column) without a path, from finalize()
+  bool planned{false};                                          ///< finalize() has filled zero_blocks
 };
 
 /// Virtual base for all materials: property registration, typed input wiring and material references;
