@@ -11,7 +11,7 @@
 #include "numsim-materials/materials/scalar_identity_weight.h"
 #include "numsim-materials/materials/scalar_stepper.h"
 #include "numsim-materials/materials/weighted_sum.h"
-#include "numsim-materials/umat/external_state_source.h"
+#include "numsim-materials/driver/external_state_source.h"
 
 namespace {
 
