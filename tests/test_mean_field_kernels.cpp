@@ -16,6 +16,7 @@
 #include "numsim-materials/io/json_parameter_converter.h"
 #include "numsim-materials/io/object_readers.h"
 #include "numsim-materials/mean_field/kernel_registry.h"
+#include "numsim-materials/umat/errors.h"
 
 namespace {
 
@@ -140,7 +141,7 @@ TEST(MeanFieldKernels, SelfConsistentThrowsWhenItDoesNotConverge) {
   PH p{self_consistent_parameters()};
   p.insert<int>("max_iterations", 2);
   auto k{make("self_consistent", p)};
-  EXPECT_THROW(concentrations(*k, ph), std::runtime_error);
+  EXPECT_THROW(concentrations(*k, ph), nm::umat::cutback_error);
 }
 
 TEST(MeanFieldKernels, SelfConsistentNeedsAShapePerPhase) {
