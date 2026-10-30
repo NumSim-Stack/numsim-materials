@@ -156,6 +156,24 @@ Without `.stateful()`, a stepper that reads nothing would run once. A recorder o
   The engine then runs the solver after everything the driven callbacks read globally (the time step, the temperature), whatever order the deck creates them in. Reads of the solver's own outputs (a function reading the current unknown) add no edge: the solver fills those itself.
 - **What a driven callback must be:** a repeatable trial evaluation. Every call computes from the same committed history and its current inputs, and writes outputs only. It must not commit, count or record, because the solver calls it once per iteration.
 - **Driving any output of a group:** an output filled by another output's callback reruns that callback through `update_source()`.
+- **A fixed point over a local edge:** a node that reads another over a local edge sees the previous pass. A material that measures how far two passes disagree declares that output with `converges()`, with the tolerance and the pass limit as parameters:
+
+  ```cpp
+  base::converges(m_residual, base::template get_parameter<value_type>("tolerance"), base::template get_parameter<int>("max_passes"));
+  ```
+
+  At `finalize()` the engine forms an iteration group: the callbacks downstream of the consumer of a local edge and upstream of the residual. `update()` runs:
+  - first, the callbacks the group reads, once;
+  - then the group, until |residual| ≤ tolerance (a NaN never converges);
+  - last, the rest, once. A recorder or a plot therefore writes one row per update.
+
+  After `max_passes` passes, `update()` throws `cutback_error` and names the residual. `update_property()` on a member runs its upstream once, without iterating. These rules throw at `finalize()` and name the node:
+  - `converges()` with no local edge behind the residual;
+  - a `.stateful()` callback inside a group;
+  - a second residual over the callbacks of a group;
+  - a tolerance below zero or `max_passes` below one.
+
+  `mean_field_composite_local_nonlinear` declares its `residual` this way.
 - **`material_ref`:** a material reached through `material_ref` (a `local_newton` solver object) is not an input. The engine:
   - treats what the target reads as reads of every callback of the referencing material;
   - keeps those callbacks varying unless every output of the target is constant (a target with history, state or a bare output never is);

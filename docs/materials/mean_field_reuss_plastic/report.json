@@ -3,7 +3,7 @@
   "include": [
     "../standard_small_strain.json"
   ],
-  "notes": "Equal stress in series through the local pair: the concentrations A_r = C_r^-1 : C_R are formed with the algorithmic tangents of the previous pass, the matrix phase reads its tangent over a local edge, and the point repeats the pass until the residual is small. With a hardening phase the phase stresses agree to first order in the step (checked loosely here at 50 steps; see test_mean_field_damage for the refinement). The published tangent is first order in the step too, so the finite-difference check is off.",
+  "notes": "Equal stress in series through the local pair: the concentrations A_r = C_r^-1 : C_R are formed with the algorithmic tangents of the previous pass, the matrix phase reads its tangent over a local edge, and update() repeats the pass until the residual is below the composite's tolerance. With a hardening phase the phase stresses agree to first order in the step (checked loosely here at 50 steps; see test_mean_field_damage for the refinement). The published tangent is first order in the step too, so the finite-difference check is off.",
   "parameters": {
     "Km": 3333.33,
     "Gm": 1153.85,
@@ -121,6 +121,8 @@
       {
         "type": "mean_field_composite_local_nonlinear",
         "name": "mt",
+        "tolerance": 1e-10,
+        "max_passes": 200,
         "phases": [
           {
             "concentration": "mt_strain::concentration_matrix",
@@ -141,10 +143,7 @@
   },
   "point": {
     "strain_source": "strain",
-    "stress_source": "mt",
-    "residual_source": "mt::residual",
-    "residual_tolerance": 1e-10,
-    "max_passes": 200
+    "stress_source": "mt"
   },
   "record": {
     "eps_m": "mt_strain::strain_matrix",

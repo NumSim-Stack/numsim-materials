@@ -6,6 +6,7 @@
 #include "numsim-materials/solvers/backward_euler.h"
 #include "numsim-materials/solvers/local_newton.h"
 #include "numsim-materials/solvers/rk_integrator.h"
+#include "numsim-materials/solvers/system.h"
 #include "numsim-materials/solvers/vector_newton.h"
 #include "numsim-materials/materials/scalar_stepper.h"
 #include "numsim-materials/materials/constant_scalar.h"
@@ -194,6 +195,8 @@ void register_default_materials() {
   // A single registered type covers every unknown combination — the layout is
   // dispatched from the "unknowns" parameter, not baked into the template.
   factory.template register_type<vector_newton<Traits>>("vector_newton");
+  // unknowns and equations from any nodes, solved by the engine (#218)
+  factory.template register_type<residual_system<Traits>>("system");
   // Unregistered until now, so the whole Runge-Kutta family -- every explicit
   // and implicit tableau -- was unreachable from a document. Nothing caught it
   // because the conformance scan looked only at materials/, not solvers/.

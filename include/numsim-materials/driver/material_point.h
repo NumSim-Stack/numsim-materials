@@ -44,7 +44,8 @@ public:
     optional<std::vector<std::string>>(para, "inputs", {});
     // further "material::property" history kept out of load_history() / store_history()
     optional<std::vector<std::string>>(para, "host_owned", {});
-    // "material::property": evaluate() updates again until its magnitude is at most the tolerance
+    // deprecated, removed later: "material::property" evaluate() updates again until its magnitude is at most the
+    // tolerance; a material declaring converges() is converged after the one update
     optional<std::string>(para, "residual_source", std::string{});
     optional<value_type>(para, "residual_tolerance", value_type{1e-10});
     optional<int>(para, "max_passes", 100);
@@ -131,6 +132,28 @@ public:
     return output<T>(src.material, src.property);
   }
 
+  /// d output / d input, filled by evaluate(): output "material::property", input an input of this point (its history
+  /// output: the strain, the temperature) or "material::property". T is a scalar for two scalars, else a tensor of
+  /// the summed rank (stress by strain: rank 4).
+  template <typename T>
+    requires derivatives::derivative_value<T, typename Traits::value_type, Traits::Dim>
+  T const &derivative(std::string const &output, std::string const &input) const {
+    auto const out{connection_source::parse(output)};
+    find(out.material, out.property);
+    auto const seed{seed_of(input)};
+    find(seed.material, seed.property);
+    return m_ctx.template derivative<T>(out.material, out.property, seed.material, seed.property);
+  }
+
+  /// Whether the input (as in derivative()) is upstream of the output: otherwise derivative() is zero.
+  bool has_path(std::string const &output, std::string const &input) const {
+    auto const out{connection_source::parse(output)};
+    find(out.material, out.property);
+    auto const seed{seed_of(input)};
+    find(seed.material, seed.property);
+    return m_ctx.has_path(out.material, out.property, seed.material, seed.property);
+  }
+
   /// A history output, for both ends of the step.
   template <typename T>
   history_property<T> const &history(std::string const &material, std::string const &property) const {
@@ -142,7 +165,8 @@ public:
 
   // --- Evaluation ---
 
-  /// One graph update, repeated to the fixed point when a residual is configured.
+  /// One graph update; with the deprecated residual_source, repeated until that residual is converged (a graph
+  /// whose fixed point is declared with converges() is converged after the first).
   void evaluate() {
     if (!m_props_readers.empty() && !m_props_bound)
       throw fatal_error("material_point: this model reads its material constants per call — call bind_props() "
@@ -196,6 +220,22 @@ private:
     static auto const check{material_point::parameters()};
     check.check_parameter(parameters);
     return parameters;
+  }
+
+  /// An input's history output, or "material::property".
+  connection_source seed_of(std::string const &input) const {
+    if (input.contains("::"))
+      return connection_source::parse(input);
+    if (!std::ranges::contains(m_inputs, input))
+      throw umat::fatal_error("material_point: '" + input + "' is not an input of this material point");
+    std::vector<std::string> history;
+    for (auto const *prop : m_ctx.property_execution_order())
+      if (prop->is_history() && prop->traits().id.owner == input)
+        history.push_back(prop->traits().id.name);
+    if (history.size() != 1)
+      throw umat::fatal_error("material_point: input '" + input + "' has " + std::to_string(history.size()) +
+                              " history outputs; name the one to differentiate by as 'material::property'");
+    return {input, history.front()};
   }
 
   property_base *find(std::string const &material, std::string const &property) const {

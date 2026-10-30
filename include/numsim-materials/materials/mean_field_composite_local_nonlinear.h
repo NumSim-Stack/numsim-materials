@@ -2,6 +2,7 @@
 #define NUMSIM_MATERIALS_MEAN_FIELD_COMPOSITE_LOCAL_NONLINEAR_H
 
 #include <algorithm>
+#include <cmath>
 #include <ranges>
 #include <string>
 #include <utility>
@@ -14,10 +15,11 @@ namespace numsim::materials {
 
 /// A composite of nonlinear phases at their local strains: the localisation used the tangents of the
 /// previous pass ("used_tangent", the phase node's on a local edge), so "residual" = max_r ||C_r - C_used,r||
-/// / ||C_r|| says when the passes agree. Outputs "stress", "tangent", "residual".
+/// / ||C_r|| says when the passes agree. update() repeats the passes until it is at most "tolerance"
+/// (converges()). Outputs "stress", "tangent", "residual".
 ///
 /// Parameters: "phases" [{"concentration", "stress", "tangent", "fraction", "used_tangent" (the phases whose
-/// tangent changes)}: "material::property"].
+/// tangent changes)}: "material::property"], "tolerance" (1e-10), "max_passes" (200: then a cutback_error).
 template <typename Traits>
 class mean_field_composite_local_nonlinear final
     : public detail::mean_field_composite_local_base<mean_field_composite_local_nonlinear<Traits>, Traits> {
@@ -36,6 +38,14 @@ public:
     if (m_used.empty())
       throw std::invalid_argument(base::where() + "no phase names the 'used_tangent' its strain was localised with");
     base::register_outputs(m_residual).reads(base::m_A, base::m_sigma, base::m_C, base::m_c, m_used | std::views::values);
+    base::converges(m_residual, base::template get_parameter<value_type>("tolerance"), base::template get_parameter<int>("max_passes"));
+  }
+
+  static typename base::input_parameter_controller parameters() {
+    auto para{base::parameters()};
+    optional<value_type>(para, "tolerance", value_type{1e-10});
+    optional<int>(para, "max_passes", 200);
+    return para;
   }
 
   static constexpr char const *type_name() { return "mean_field_composite_local_nonlinear"; }
@@ -49,7 +59,9 @@ public:
     m_residual = 0;
     for (auto const &[r, used] : m_used) {
       auto const &C{base::m_C[r]->get()};
-      m_residual = std::max(m_residual, tmech::norm(tensor4{C - used->get()}) / tmech::norm(C));
+      auto const change{tmech::norm(tensor4{C - used->get()}) / tmech::norm(C)};
+      if (std::isnan(change) || change > m_residual) // std::max drops a NaN
+        m_residual = change;
     }
   }
 

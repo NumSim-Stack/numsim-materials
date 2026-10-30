@@ -169,8 +169,36 @@ protected:
       return *this;
     }
 
+    /// The callback fills d output / d read for each of `reads` (as in reads()) through partial() while
+    /// want_partials() is true. After reads().
+    template <typename Output, typename... Reads>
+    callback_handle& partials(Output const& output, Reads const&... reads) {
+      (each_read(reads, [&](auto const& read) { m_owner.declare_partial(m_outputs.front(), output, read); }), ...);
+      return *this;
+    }
+
+    /// The outputs of the callback do not depend on `reads`: their partials are zero. After reads().
+    template <typename... Reads>
+    callback_handle& independent_of(Reads const&... reads) {
+      (each_read(reads, [&](auto const& read) { m_owner.declare_independent(m_outputs.front(), read); }), ...);
+      return *this;
+    }
+
   private:
     friend class material_base;
+    template <typename A, typename F>
+    static void each_read(A const& read, F const& f) {
+      if constexpr (std::is_pointer_v<A>) {
+        if (read)
+          f(*read);
+      } else if constexpr (detail::pointer_range<A>) {
+        for (auto const* p : read)
+          if (p)
+            f(*p);
+      } else {
+        f(read);
+      }
+    }
     template <typename A>
     static void sort_read(std::vector<input_wire_base const*>& inputs, std::vector<void const*>& outputs, A const& read) {
       if constexpr (std::derived_from<detail::output_t<A>, input_wire_base>)
@@ -201,6 +229,16 @@ protected:
       base::declare_written_by(output, handle.m_outputs.front());
     return handle;
   }
+
+  /// update() reruns the callbacks downstream of a local edge and upstream of `residual` (an output) until
+  /// |residual| <= tolerance, and throws cutback_error after max_passes. Both are references to parameters.
+  void converges(value_type const& residual, value_type const& tolerance, int const& max_passes) {
+    base::declare_converges(residual, tolerance, max_passes);
+  }
+  // the declaration keeps pointers to tolerance and max_passes: a temporary would dangle
+  void converges(value_type const&, value_type&&, int const&) = delete;
+  void converges(value_type const&, value_type const&, int&&) = delete;
+  void converges(value_type const&, value_type&&, int&&) = delete;
 
   /// `output` has no callback of its own: the callback of `writer` fills it. Lets the engine skip a constant
   /// callback while another callback of the material keeps running.
