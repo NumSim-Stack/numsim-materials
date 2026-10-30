@@ -169,6 +169,12 @@ public:
   /// Engine-owned: the evaluated step becomes the start of the next one.
   void accept() { m_ctx.commit(); }
 
+  /// Engine-owned: the history now, to restore() after accepted substeps (cutbacks).
+  [[nodiscard]] typename context_type::checkpoint_type checkpoint() const { return m_ctx.checkpoint(); }
+
+  /// Back to checkpoint(), also after a failed evaluation.
+  void restore(typename context_type::checkpoint_type const &cp) { m_ctx.restore(cp); }
+
   /// Host-owned: doubles the host stores per point.
   [[nodiscard]] std::size_t history_width() const { return host_map().nstatv(); }
 

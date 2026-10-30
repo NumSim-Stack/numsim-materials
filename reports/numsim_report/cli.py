@@ -18,7 +18,8 @@ report.json
                points (strain states in order, the load factor counts segments); stress (target per
                unit load factor); tensors as components [11, 22, 33, 12, 13, 23]; steps per segment,
                scale (applies to the strains), dt;
-               tangent_every: finite-difference tangent check every n-th step (1; 0 = never), fd_step (1e-7)
+               tangent_every: finite-difference tangent check every n-th step (1; 0 = never), fd_step (1e-7);
+               max_cutbacks: halvings of a step that fails before the case stops (0, at most 20)
   figures      title, text, columns, panels: kind line (x, y, reference, logy, xlabel, ylabel),
                residuals, iterations; case or cases (list or "*")
   checks       name, case/cases, value, expected (default 0), tolerance, relative, where;

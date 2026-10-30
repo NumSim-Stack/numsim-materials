@@ -89,6 +89,43 @@ TEST(ReportJson, ADirectionWithAPathExpandsToPoints) {
   EXPECT_DOUBLE_EQ(c.strain_at(c.path.at(6))(0, 0), 0.0);
 }
 
+TEST(LoadPath, SubstepsSplitAStepFromTheEndOfTheOneBefore) {
+  r::load_path<T> const path{{0, 1, -1}, 2, 0.5, 0.1};
+  auto const s3{path.at(3)}; // first step of the second segment: from load 0.5 to 0
+  auto const subs{path.substeps(s3, 4)};
+  ASSERT_EQ(subs.size(), 4u);
+  std::vector<T> loads, fractions;
+  for (auto const &sub : subs) {
+    EXPECT_EQ(sub.index, 3);
+    EXPECT_EQ(sub.segment, 1u);
+    EXPECT_NEAR(sub.dt, 0.025, 1e-15);
+    loads.push_back(sub.load);
+    fractions.push_back(sub.fraction);
+  }
+  EXPECT_EQ(fractions, (std::vector<T>{0.125, 0.25, 0.375, 0.5}));
+  EXPECT_EQ(loads, (std::vector<T>{0.375, 0.25, 0.125, 0}));
+  EXPECT_NEAR(subs.front().time, s3.time, 1e-15);
+  EXPECT_NEAR(subs.back().time + subs.back().dt, s3.time + s3.dt, 1e-15);
+  EXPECT_EQ(path.substeps(path.at(1), 2).front().load, 0.125) << "the first step starts unloaded";
+  auto const whole{path.substeps(s3, 1)};
+  ASSERT_EQ(whole.size(), 1u);
+  EXPECT_EQ(whole[0].load, s3.load);
+  EXPECT_EQ(whole[0].fraction, s3.fraction);
+  EXPECT_EQ(whole[0].time, s3.time);
+  EXPECT_EQ(whole[0].dt, s3.dt);
+}
+
+TEST(ReportJson, ParsesMaxCutbacks) {
+  auto const with = [](std::string const &extra) {
+    return json::parse(R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1])" + extra + "}");
+  };
+  EXPECT_EQ(r::parse_case<T>(with("")).max_cutbacks, 0) << "no cutbacks by default";
+  EXPECT_EQ(r::parse_case<T>(with(R"(, "max_cutbacks": 3)")).max_cutbacks, 3);
+  EXPECT_THROW(r::parse_case<T>(with(R"(, "max_cutbacks": -1)")), std::invalid_argument);
+  EXPECT_THROW(r::parse_case<T>(with(R"(, "max_cutbacks": 1.5)")), std::invalid_argument);
+  EXPECT_THROW(r::parse_case<T>(with(R"(, "max_cutbacks": 21)")), std::invalid_argument);
+}
+
 TEST(LoadPath, RejectsStepsOutsideThePath) {
   r::load_path<T> const path{{0, 1}, 2};
   EXPECT_THROW((void)path.at(0), std::out_of_range);
@@ -295,6 +332,305 @@ TEST(CaseRunner, ChecksTheTangentOnlyEveryNthStep) {
   ASSERT_EQ(sink.records.size(), 5u);
   for (std::size_t i{1}; i <= 4; ++i)
     EXPECT_EQ(std::isfinite(sink.records[i].tangent_error), i % 2 == 0) << i;
+}
+
+/// Exponential damage under uniaxial stress, one step to 2 %: Newton needs 7 corrections at the full increment, 6 at
+/// half of it and at most 5 at a quarter; the point allows 5.
+json softening_report() {
+  return json::parse(R"({
+    "model": {"materials": [
+      {"type": "external_strain_source", "name": "strain"},
+      {"type": "von_mises_state_function", "name": "state", "strain_source": "strain"},
+      {"type": "strain_threshold_yield", "name": "yield", "state_source": "state", "kappa_critical": 0.002},
+      {"type": "exponential_damage_law", "name": "law", "yield_source": "yield", "kappa_0": 0.002, "beta": 300.0},
+      {"type": "linear_elasticity", "name": "elastic", "strain_producer_name": "strain", "K": 166666.67, "G": 76923.08},
+      {"type": "isotropic_damage", "name": "damaged", "elastic_source": "elastic", "damage_source": "law",
+       "state_source": "state", "yield_source": "yield"}]},
+    "point": {"strain_source": "strain", "stress_source": "damaged", "stress_property": "damaged_stress",
+              "tangent_property": "damaged_tangent", "max_iter": 5},
+    "record": {"d": "law::damage"}})");
+}
+
+json softening_case(int steps, std::string const &extra = "") {
+  return json::parse(R"({"name": "u", "control": "uniaxial_stress", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1],
+    "scale": 0.02, "tangent_every": 0, "steps": )" + std::to_string(steps) + extra + "}");
+}
+
+/// The case's CSV rows and residuals, as the report writes them.
+template <typename Case>
+std::pair<std::string, bool> csv_of(json const &doc, Case const &c) {
+  std::ostringstream csv, its;
+  r::csv_sink<policy> sink{csv, its};
+  bool const converged{r::run_case<policy>(doc, c, sink)};
+  return {csv.str() + its.str(), converged};
+}
+
+TEST(CaseRunner, ASofteningStepThatFailsWholeConvergesInFourSubsteps) {
+  auto const doc = softening_report();
+  for (int const cutbacks : {0, 1}) {
+    recording_sink sink;
+    EXPECT_FALSE(r::run_case<policy>(doc, r::parse_case<T>(softening_case(1, R"(, "max_cutbacks": )" + std::to_string(cutbacks))), sink))
+        << cutbacks;
+    ASSERT_EQ(sink.records.size(), 2u);
+    EXPECT_FALSE(sink.records.back().result.converged);
+    EXPECT_EQ(sink.records.back().cutbacks, cutbacks);
+  }
+  recording_sink sink;
+  ASSERT_TRUE(r::run_case<policy>(doc, r::parse_case<T>(softening_case(1, R"(, "max_cutbacks": 2)")), sink));
+  ASSERT_EQ(sink.records.size(), 2u);
+  auto const &rec{sink.records.back()};
+  EXPECT_EQ(rec.step.index, 1);
+  EXPECT_EQ(rec.step.load, 0.02);
+  EXPECT_EQ(rec.cutbacks, 2);
+  ASSERT_EQ(rec.substeps.size(), 4u);
+  EXPECT_TRUE(std::ranges::all_of(rec.substeps, &r::step_summary<T>::converged));
+  EXPECT_EQ(rec.substeps.back().residuals, rec.result.residuals);
+  EXPECT_EQ(sink.records.front().cutbacks, 0);
+  EXPECT_EQ(sink.records.front().substeps.size(), 1u);
+
+  // the four substeps are the four steps of the case with steps = 4, from the restored start
+  recording_sink four;
+  ASSERT_TRUE(r::run_case<policy>(doc, r::parse_case<T>(softening_case(4)), four));
+  EXPECT_EQ(rec.columns, four.records.back().columns);
+}
+
+TEST(CaseRunner, WithoutCutbacksTheCsvIsUnchanged) {
+  auto const doc = softening_report();
+  auto const plain{csv_of(doc, r::parse_case<T>(softening_case(1)))};
+  EXPECT_FALSE(plain.second);
+  EXPECT_EQ(csv_of(doc, r::parse_case<T>(softening_case(1, R"(, "max_cutbacks": 0)"))), plain);
+  // cutbacks a step does not need change nothing
+  auto const four{csv_of(doc, r::parse_case<T>(softening_case(4)))};
+  EXPECT_TRUE(four.second);
+  EXPECT_EQ(csv_of(doc, r::parse_case<T>(softening_case(4, R"(, "max_cutbacks": 3)"))), four);
+}
+
+/// The failure rule of the cutback test materials: an increment above "limit" (above "late_limit" once the strain
+/// is past "late_from") throws the exception named by "throws"; every throw is counted.
+int g_throws{0};
+
+template <typename Traits, typename Controller>
+void failure_parameters(Controller &para) {
+  using V = typename Traits::value_type;
+  nm::required<V>(para, "limit");
+  nm::optional<V>(para, "late_from", V{1e30});
+  nm::optional<V>(para, "late_limit", V{1e30});
+  nm::optional<std::string>(para, "throws", std::string{"cutback"});
+}
+
+template <typename V>
+struct failure_rule {
+  V limit, late_from, late_limit;
+  std::string throws;
+
+  template <typename Base>
+  explicit failure_rule(Base &b)
+      : limit(b.template get_parameter<V>("limit")), late_from(b.template get_parameter<V>("late_from")),
+        late_limit(b.template get_parameter<V>("late_limit")), throws(b.template get_parameter<std::string>("throws")) {}
+
+  void check(V increment, V reached) const {
+    if (increment <= (reached > late_from ? late_limit : limit))
+      return;
+    ++g_throws;
+    if (throws == "runtime")
+      throw std::runtime_error("increment too large");
+    if (throws == "logic")
+      throw std::logic_error("increment too large");
+    if (throws == "fatal")
+      throw nm::umat::fatal_error("increment too large");
+    throw nm::umat::cutback_error("increment too large");
+  }
+};
+
+/// Linear elastic (tangent 2 I^sym + I x I) with a failure rule on the strain increment; "n" counts the computes.
+template <typename Traits>
+class increment_limited final : public nm::material_base<increment_limited<Traits>, Traits> {
+public:
+  using base = nm::material_base<increment_limited<Traits>, Traits>;
+  using value_type = typename base::value_type;
+  using input_parameter_controller = typename base::input_parameter_controller;
+
+  template <typename... Args>
+  explicit increment_limited(Args &&...args)
+      : base(std::forward<Args>(args)...), m_stress(base::template add_output<tensor2>("stress")),
+        m_tangent(base::template add_output<tensor4>("tangent")),
+        m_n(base::template add_history_output<value_type>("n")), m_rule(*this),
+        m_strain(base::template add_input_history<tensor2>(nm::connection_source{"strain", "strain"}, nm::EdgeKind::Global)) {
+    base::add_callback(&increment_limited::compute, m_stress, m_tangent, m_n).reads(m_strain);
+  }
+
+  static input_parameter_controller parameters() {
+    input_parameter_controller para{base::parameters()};
+    failure_parameters<Traits>(para);
+    return para;
+  }
+
+  void compute() {
+    m_rule.check(tmech::norm(tensor2{m_strain.new_value() - m_strain.old_value()}), tmech::norm(m_strain.new_value()));
+    auto const I{tmech::eye<value_type, 3, 2>()};
+    m_tangent = 2 * nm::sym_identity<value_type, 3>() + tmech::otimes(I, I);
+    m_stress = tmech::dcontract(m_tangent, m_strain.new_value());
+    m_n.new_value() = m_n.old_value() + 1;
+  }
+
+private:
+  tensor2 &m_stress;
+  tensor4 &m_tangent;
+  nm::history_property<value_type> &m_n;
+  failure_rule<value_type> m_rule;
+  nm::input_history<tensor2, nm::property_traits> const &m_strain;
+};
+
+/// The same at finite strain: P = (2 I^sym + I x I) : (F - I), the rule on the increment of F.
+template <typename Traits>
+class f_limited final : public nm::material_base<f_limited<Traits>, Traits> {
+public:
+  using base = nm::material_base<f_limited<Traits>, Traits>;
+  using value_type = typename base::value_type;
+  using input_parameter_controller = typename base::input_parameter_controller;
+
+  template <typename... Args>
+  explicit f_limited(Args &&...args)
+      : base(std::forward<Args>(args)...), m_stress(base::template add_output<tensor2>("stress")),
+        m_tangent(base::template add_output<tensor4>("tangent")), m_rule(*this),
+        m_F(base::template add_input_history<tensor2>(nm::connection_source{"F", "deformation_gradient"}, nm::EdgeKind::Global)) {
+    base::add_callback(&f_limited::compute, m_stress, m_tangent).reads(m_F);
+  }
+
+  static input_parameter_controller parameters() {
+    input_parameter_controller para{base::parameters()};
+    failure_parameters<Traits>(para);
+    return para;
+  }
+
+  void compute() {
+    auto const I{tmech::eye<value_type, 3, 2>()};
+    m_rule.check(tmech::norm(tensor2{m_F.new_value() - m_F.old_value()}), tmech::norm(tensor2{m_F.new_value() - I}));
+    m_tangent = 2 * nm::sym_identity<value_type, 3>() + tmech::otimes(I, I);
+    m_stress = tmech::dcontract(m_tangent, tensor2{m_F.new_value() - I});
+  }
+
+private:
+  tensor2 &m_stress;
+  tensor4 &m_tangent;
+  failure_rule<value_type> m_rule;
+  nm::input_history<tensor2, nm::property_traits> const &m_F;
+};
+
+/// A strain (or F) driven point of the material `type`, with its failure rule: limit 0.0025.
+json limited_report(std::string const &type, std::string const &extra = "") {
+  static bool const registered{[] {
+    nm::material_factory<policy>::instance().register_type<increment_limited<policy>>("increment_limited");
+    nm::material_factory<policy>::instance().register_type<f_limited<policy>>("f_limited");
+    return true;
+  }()};
+  static_cast<void>(registered);
+  bool const finite{type == "f_limited"};
+  std::string const source{finite ? "F" : "strain"};
+  auto const source_type{finite ? "external_deformation_gradient_source" : "external_strain_source"};
+  auto const key{finite ? "deformation_gradient_source" : "strain_source"};
+  return json::parse(R"({"model": {"materials": [{"type": ")" + std::string{source_type} + R"(", "name": ")" + source +
+                     R"("}, {"type": ")" + type + R"(", "name": "m", "limit": 0.0025)" + extra + R"(}]},
+    "point": {")" + key + R"(": ")" + source + R"(", "stress_source": "m"})" +
+                     (finite ? "" : R"(, "record": {"n": "m::n"})") + "}");
+}
+
+json increment_limited_report(std::string const &extra = "") { return limited_report("increment_limited", extra); }
+
+json limited_case(int steps, T scale, int cutbacks, std::string const &extra = "") {
+  return json::parse(R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], "tangent_every": 0, "steps": )" +
+                     std::to_string(steps) + R"(, "scale": )" + std::to_string(scale) + R"(, "max_cutbacks": )" +
+                     std::to_string(cutbacks) + extra + "}");
+}
+
+TEST(CaseRunner, ACutbackErrorCutsTheStepToo) {
+  auto const doc = increment_limited_report();
+  auto const spec = [](int cutbacks) { return r::parse_case<T>(limited_case(1, 0.004, cutbacks)); };
+  recording_sink failed;
+  EXPECT_THROW(static_cast<void>(r::run_case<policy>(doc, spec(0), failed)), nm::umat::cutback_error) << "as without cutbacks";
+  recording_sink sink;
+  ASSERT_TRUE(r::run_case<policy>(doc, spec(1), sink));
+  ASSERT_EQ(sink.records.size(), 2u);
+  EXPECT_EQ(sink.records.back().cutbacks, 1);
+  EXPECT_EQ(sink.records.back().substeps.size(), 2u);
+  EXPECT_DOUBLE_EQ(sink.records.back().columns.front(), 0.004); // strain_11 at the end of the step
+}
+
+TEST(CaseRunner, ARuntimeErrorCutsTheStepLikeInUmat) {
+  // the return maps throw runtime_error, not cutback_error
+  auto const doc = increment_limited_report(R"(, "throws": "runtime")");
+  recording_sink sink;
+  ASSERT_TRUE(r::run_case<policy>(doc, r::parse_case<T>(limited_case(1, 0.004, 1)), sink));
+  EXPECT_EQ(sink.records.back().cutbacks, 1);
+  EXPECT_EQ(sink.records.back().substeps.size(), 2u);
+  recording_sink last;
+  EXPECT_THROW(static_cast<void>(r::run_case<policy>(doc, r::parse_case<T>(limited_case(1, 0.004, 0)), last)),
+               std::runtime_error) << "at the last level it is rethrown";
+}
+
+TEST(CaseRunner, ALogicErrorAndAFatalErrorAreNotCutBack) {
+  g_throws = 0;
+  recording_sink sink;
+  EXPECT_THROW(static_cast<void>(r::run_case<policy>(increment_limited_report(R"(, "throws": "logic")"),
+                                                     r::parse_case<T>(limited_case(1, 0.004, 3)), sink)),
+               std::logic_error);
+  EXPECT_EQ(g_throws, 1) << "no retry";
+  g_throws = 0;
+  EXPECT_THROW(static_cast<void>(r::run_case<policy>(increment_limited_report(R"(, "throws": "fatal")"),
+                                                     r::parse_case<T>(limited_case(1, 0.004, 3)), sink)),
+               nm::umat::fatal_error);
+  EXPECT_EQ(g_throws, 1) << "no retry";
+}
+
+TEST(CaseRunner, CutbacksNeedBetweenZeroAndTwentyOfThem) {
+  auto const doc = elastic_report();
+  for (int const bad : {-1, 21, 40}) {
+    auto c{r::parse_case<T>(json::parse(R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], "steps": 1})"))};
+    c.max_cutbacks = bad;
+    recording_sink sink;
+    EXPECT_THROW(static_cast<void>(r::run_case<policy>(doc, c, sink)), std::invalid_argument) << bad;
+  }
+}
+
+TEST(CaseRunner, AStepThatFailsAfterAcceptedSubstepsReturnsToItsStart) {
+  // 0.004 in two substeps of 0.002: the first passes, the second is past late_from and above late_limit
+  auto const doc = increment_limited_report(R"(, "late_from": 0.002, "late_limit": 0.0012, "throws": "runtime")");
+  recording_sink sink;
+  ASSERT_TRUE(r::run_case<policy>(doc, r::parse_case<T>(limited_case(1, 0.004, 2)), sink));
+  auto const &rec{sink.records.back()};
+  EXPECT_EQ(rec.cutbacks, 2);
+  ASSERT_EQ(rec.substeps.size(), 4u);
+  EXPECT_DOUBLE_EQ(rec.columns.front(), 0.004);
+  // the initial state and the four substeps: the accepted substep of the failed level was undone
+  EXPECT_DOUBLE_EQ(rec.columns.back(), 5.0);
+  recording_sink four;
+  ASSERT_TRUE(r::run_case<policy>(doc, r::parse_case<T>(limited_case(4, 0.004, 0)), four));
+  EXPECT_EQ(rec.columns, four.records.back().columns);
+}
+
+TEST(CaseRunner, TheTangentIsCheckedAfterACutStep) {
+  auto const doc = increment_limited_report(R"(, "throws": "runtime")");
+  recording_sink sink;
+  ASSERT_TRUE(r::run_case<policy>(doc, r::parse_case<T>(limited_case(2, 0.008, 1, R"(, "tangent_every": 1)")), sink));
+  ASSERT_EQ(sink.records.size(), 3u);
+  for (std::size_t i{1}; i < sink.records.size(); ++i) {
+    EXPECT_EQ(sink.records[i].cutbacks, 1) << i;
+    EXPECT_TRUE(std::isfinite(sink.records[i].tangent_error)) << i;
+    EXPECT_LT(sink.records[i].tangent_error, 1e-5) << i;
+  }
+}
+
+TEST(CaseRunner, AFiniteStrainStepIsCutBackToo) {
+  auto const doc = limited_report("f_limited", R"(, "throws": "runtime")");
+  auto const spec = [](int cutbacks) { return limited_case(1, 0.004, cutbacks); };
+  recording_sink failed;
+  EXPECT_THROW(static_cast<void>(r::run_case<policy>(doc, r::parse_case<T>(spec(0), true), failed)), std::runtime_error);
+  recording_sink sink;
+  ASSERT_TRUE(r::run_case<policy>(doc, r::parse_case<T>(spec(1), true), sink));
+  ASSERT_EQ(sink.records.size(), 2u);
+  EXPECT_EQ(sink.records.back().cutbacks, 1);
+  EXPECT_EQ(sink.records.back().substeps.size(), 2u);
+  EXPECT_DOUBLE_EQ(sink.records.back().columns.front(), 1.004); // F_11
 }
 
 TEST(CaseRunner, StopsAtAStepThatDoesNotConverge) {

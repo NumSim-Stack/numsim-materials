@@ -21,7 +21,8 @@ struct step_summary {
   }
 };
 
-/// One row of a load case: the step, the Newton summary and the columns.
+/// One row of a load case: the step, the Newton summary and the columns. A step cut back ran in 2^cutbacks
+/// substeps; `result` is the last one's summary.
 template <typename Traits>
 struct step_record {
   using value_type = typename Traits::value_type;
@@ -29,6 +30,8 @@ struct step_record {
   step_summary<value_type> result;
   std::vector<value_type> columns;
   value_type tangent_error{std::numeric_limits<value_type>::quiet_NaN()};
+  int cutbacks{0};
+  std::vector<step_summary<value_type>> substeps{}; ///< the substeps run at that level, in order
 };
 
 /// Receives the column names once, then one record per step.
