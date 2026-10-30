@@ -86,10 +86,11 @@ protected:
     return base::template add_history<T>(property_name, std::move(initial));
   }
 
-  /// As above, stored and rotated by a host as `kind` says (core/history_kind.h).
-  template<typename T>
-  history_property<T>& add_history_output(std::string const& property_name, history_kind kind, T initial = T{}) {
-    return base::template add_history<T>(property_name, std::move(initial), kind);
+  /// As above, stored and rotated by a host as `codec` says (core/history_codec.h).
+  template<typename T, typename Codec>
+    requires history_codec_for<Codec, T, value_type>
+  history_property<T>& add_history_output(std::string const& property_name, Codec codec, T initial = T{}) {
+    return base::template add_history<T>(property_name, std::move(initial), codec);
   }
 
   template<typename T>

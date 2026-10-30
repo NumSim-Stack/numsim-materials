@@ -23,7 +23,7 @@
 #include "numsim-materials/core/property_traits.h"
 #include "numsim-materials/core/property.h"
 #include "numsim-materials/core/history_property.h"
-#include "numsim-materials/core/history_kind.h"
+#include "numsim-materials/core/history_slot.h"
 #include "numsim-materials/core/input_types.h"
 #include "numsim-materials/core/property_registry_interface.h"
 #include "numsim-materials/core/material_ref.h"
@@ -288,29 +288,29 @@ protected:
   history_property<T>& add_history(std::string const& property_name, T&& data = T()) {
     auto& value{m_property_handler.template add_history<T>(name(), property_name, std::forward<T>(data))};
     m_outputs[&value] = {*m_property_handler.find(name(), property_name), {}}; // never constant
+    if constexpr (history_codec_for<default_codec<T>, T, value_type>)
+      m_history_slots.insert_or_assign(&value, history_slot<value_type>{value, default_codec<T>{}});
     return value;
   }
 
-  /// A vector or rank-2 history a host stores and rotates as `kind` says; without a kind, default_history_kind.
-  template <typename T>
-  history_property<T>& add_history(std::string const& property_name, T&& data, history_kind kind) {
-    if (!kind.valid_for(history_kind_rank<std::remove_cvref_t<T>>))
-      throw std::logic_error("add_history(): '" + m_name + "::" + property_name + "' cannot take the history kind " +
-                             to_string(kind) + " (a vector takes full storage, six slots a rank-2 tensor with both legs alike)");
+  /// A history a host stores and rotates as `codec` says (core/history_codec.h).
+  template <typename T, typename Codec>
+    requires history_codec_for<Codec, T, value_type>
+  history_property<T>& add_history(std::string const& property_name, T&& data, Codec codec) {
     auto& value{add_history<T>(property_name, std::forward<T>(data))};
-    m_history_kinds.emplace_back(*m_property_handler.find(name(), property_name), kind);
+    m_history_slots.insert_or_assign(&value, history_slot<value_type>{value, codec});
     return value;
   }
 
 public:
-  /// The kind `history` was declared with; empty when declared without one or not a history of this material.
-  std::optional<history_kind> history_kind_of(property_base_type const* history) const {
-    auto const it{std::ranges::find(m_history_kinds, history, &decltype(m_history_kinds)::value_type::first)};
-    return it == m_history_kinds.end() ? std::nullopt : std::optional{it->second};
+  /// How a host stores and rotates `history`; null when its value has no codec.
+  history_slot<value_type> const* history_slot_of(property_base_type const* history) const {
+    auto const it{m_history_slots.find(history)};
+    return it == m_history_slots.end() ? nullptr : &it->second;
   }
 
 private:
-  std::vector<std::pair<property_base_type const*, history_kind>> m_history_kinds;
+  std::unordered_map<property_base_type const*, history_slot<value_type>> m_history_slots;
 
 protected:
   template <typename T>

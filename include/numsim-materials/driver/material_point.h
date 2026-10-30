@@ -180,7 +180,7 @@ public:
   /// Host-owned: the evaluated history back to the host.
   void store_history(std::span<value_type> buffer) const { host_map().pack(checked(buffer).data()); }
 
-  /// Host-owned: the spatial legs of the history into the current configuration (after load_history()).
+  /// Host-owned: tensor history into the current configuration (after load_history()).
   void rotate_history(tensor2 const &R) const { host_map().rotate_history(R); }
 
   [[nodiscard]] bool has_rotatable_history() const { return host_map().has_rotatable_history(); }

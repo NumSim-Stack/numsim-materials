@@ -12,7 +12,7 @@
 #include "numsim-materials/solvers/backward_euler.h"
 #include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/umat/material_point_evaluator.h"
-#include "numsim-materials/core/history_kind.h"
+#include "numsim-materials/core/history_codec.h"
 #include "numsim-materials/umat/statev_map.h"
 #include "numsim-materials/solvers/local_newton.h"
 #include "numsim-materials/materials/j2_plasticity.h"
@@ -856,7 +856,7 @@ public:
   explicit history_kind_probe(Args&&... args)
       : base(std::forward<Args>(args)...),
         back_stress(base::template add_history_output<tmech::tensor<value_type, 3, 2>>(
-            "back_stress", nm::history_kinds::stress_like)),
+            "back_stress", nm::codecs::stress{})),
         plastic_strain(base::template add_history_output<tmech::tensor<value_type, 3, 2>>("plastic_strain")) {}
 
   static input_parameter_controller parameters() { return base::parameters(); }
