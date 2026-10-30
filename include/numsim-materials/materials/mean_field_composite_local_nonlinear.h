@@ -2,6 +2,7 @@
 #define NUMSIM_MATERIALS_MEAN_FIELD_COMPOSITE_LOCAL_NONLINEAR_H
 
 #include <algorithm>
+#include <cmath>
 #include <ranges>
 #include <string>
 #include <utility>
@@ -58,7 +59,9 @@ public:
     m_residual = 0;
     for (auto const &[r, used] : m_used) {
       auto const &C{base::m_C[r]->get()};
-      m_residual = std::max(m_residual, tmech::norm(tensor4{C - used->get()}) / tmech::norm(C));
+      auto const change{tmech::norm(tensor4{C - used->get()}) / tmech::norm(C)};
+      if (std::isnan(change) || change > m_residual) // std::max drops a NaN
+        m_residual = change;
     }
   }
 

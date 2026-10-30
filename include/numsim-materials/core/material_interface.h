@@ -402,6 +402,9 @@ protected:
       throw std::logic_error("converges(): '" + key_of(entry) + "' is declared twice");
     m_converging.push_back({entry.property, &residual, &tolerance, &max_passes});
   }
+  void declare_converges(value_type const&, value_type&&, int const&) = delete;
+  void declare_converges(value_type const&, value_type const&, int&&) = delete;
+  void declare_converges(value_type const&, value_type&&, int&&) = delete;
 
   void declare_written_by(void const* output, void const* writer) {
     auto const& out{output_entry_of("written_by", output)};

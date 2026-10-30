@@ -691,21 +691,30 @@ private:
       prop->traits().update();
   }
 
-  /// Reruns the group until |residual| <= tolerance; a NaN never converges.
+  /// Throws when tolerance or max_passes of a converges() declaration is unusable (NaN included).
+  static void check_settings(const convergence& c) {
+    if (!(*c.tolerance >= 0) || *c.max_passes < 1)
+      throw std::invalid_argument("converges(): '" + prop_key(c.residual->traits().id) + "' needs a tolerance >= 0 and max_passes >= 1");
+  }
+
+  /// Reruns the group until |residual| <= tolerance; a residual that is not finite never converges.
   static void iterate(stage const& s) {
+    check_settings(*s.group);
     auto const& [residual, value, tolerance, max_passes]{*s.group};
     for (int pass{1};; ++pass) {
       run(s.callbacks);
-      if (std::abs(*value) <= *tolerance)
+      auto const finite{std::isfinite(*value)};
+      if (finite && std::abs(*value) <= *tolerance)
         return;
-      if (pass >= *max_passes || std::isnan(*value))
+      if (pass >= *max_passes || !finite)
         throw cutback_error(std::format("'{}' did not reach {:g} in {} pass{} (last {:g})", prop_key(residual->traits().id),
                                         *tolerance, pass, pass == 1 ? "" : "es", *value));
     }
   }
 
-  /// Per converges(), by residual order: the callbacks downstream of a local edge's consumer and upstream of the
-  /// residual, less an earlier group's. Each group's stage runs after the callbacks it reads, before the rest.
+  /// Per converges(), by residual order: the callbacks on a path from the consumer Q of a closed local edge P->Q
+  /// (P downstream of Q, upstream of the residual) to the residual. Each group's stage runs after the callbacks
+  /// it reads, before the rest. A group must not share a callback with an earlier one (nested loops).
   void form_groups(const std::vector<material_interface_type*>& interfaces) {
     std::vector<const convergence*> declared;
     for (auto const* mat : interfaces)
@@ -715,38 +724,72 @@ private:
     std::ranges::sort(declared, {}, position);
 
     std::unordered_map<const property_base*, std::vector<const property_base*>> downstream_edges;
-    for (auto const& e : m_edges)
+    std::unordered_map<const property_base*, std::vector<const property_base*>> writers_of;
+    for (auto const& e : m_edges) {
       if (e.kind != edge_kind::local)
         downstream_edges[e.from].push_back(e.to);
+      if (e.kind == edge_kind::written_by)
+        writers_of[e.to].push_back(e.from);
+    }
+    // the callbacks that fill a property: itself, or its writers
+    auto const callbacks_filling{[&](const property_base* prop) {
+      return has_callback(prop) ? std::vector{prop} : writers_of[prop];
+    }};
+    std::unordered_map<const property_base*, std::unordered_set<const property_base*>> reach_cache;
+    auto const reach{[&](const property_base* from) -> const std::unordered_set<const property_base*>& {
+      if (auto const it{reach_cache.find(from)}; it != reach_cache.end())
+        return it->second;
+      std::unordered_set<const property_base*> seen{from};
+      std::vector<const property_base*> todo{from};
+      while (!todo.empty()) {
+        auto const* prop{todo.back()};
+        todo.pop_back();
+        for (auto const* next : downstream_edges[prop])
+          if (seen.insert(next).second)
+            todo.push_back(next);
+      }
+      return reach_cache.emplace(from, std::move(seen)).first->second;
+    }};
     auto const callbacks{m_property_execution_order | std::views::filter(has_callback) | std::ranges::to<std::vector>()};
     std::unordered_map<const property_base*, const convergence*> member_of;
     std::vector<std::pair<const convergence*, std::vector<property_base*>>> groups;
     for (auto const* c : declared) {
       auto const key{prop_key(c->residual->traits().id)};
-      if (!(*c->tolerance >= 0) || *c->max_passes < 1)
-        throw std::invalid_argument("converges(): '" + key + "' needs a tolerance >= 0 and max_passes >= 1");
+      check_settings(*c);
       auto const& upstream{upstream_of(c->residual)};
-      std::unordered_set<const property_base*> downstream;
-      std::vector<const property_base*> todo;
-      for (auto const& e : m_edges)
-        if (e.kind == edge_kind::local && upstream.contains(const_cast<property_base*>(e.to)) && downstream.insert(e.to).second)
-          todo.push_back(e.to);
-      while (!todo.empty()) {
-        auto const* prop{todo.back()};
-        todo.pop_back();
-        for (auto const* next : downstream_edges[prop])
-          if (downstream.insert(next).second)
-            todo.push_back(next);
+      std::unordered_set<const property_base*> path;
+      std::unordered_set<const convergence*> owners; // earlier groups whose loops this residual also sees
+      for (auto const& e : m_edges) {
+        if (e.kind != edge_kind::local)
+          continue;
+        auto const producers{callbacks_filling(e.from)};
+        for (auto const* q : callbacks_filling(e.to)) {
+          auto const closing{std::ranges::find_if(producers, [&](auto const* p) {
+            return upstream.contains(const_cast<property_base*>(p)) && reach(q).contains(p);
+          })};
+          if (closing == producers.end())
+            continue;
+          // the callbacks of the loop q ... p
+          auto const body{callbacks | std::views::filter([&](auto const* prop) { return reach(q).contains(prop) && reach(prop).contains(*closing); }) |
+                          std::ranges::to<std::vector<const property_base*>>()};
+          auto const owned{std::ranges::count_if(body, [&](auto const* prop) { return member_of.contains(prop); })};
+          if (owned == static_cast<std::ptrdiff_t>(body.size())) { // the loop of an earlier group
+            owners.insert(member_of.at(body.front()));
+            continue;
+          }
+          if (owned != 0) {
+            auto const* other{member_of.at(*std::ranges::find_if(body, [&](auto const* prop) { return member_of.contains(prop); }))};
+            throw std::logic_error("converges(): the loop " + prop_key((*closing)->traits().id) + " -> " + prop_key(q->traits().id) + " of '" + key +
+                                   "' runs through the iteration group of '" + prop_key(other->residual->traits().id) +
+                                   "': nested loops are not supported");
+          }
+          path.insert(reach(q).begin(), reach(q).end());
+        }
       }
       std::vector<property_base*> members;
-      const convergence* earlier{nullptr};
       for (auto* prop : callbacks) {
-        if (!upstream.contains(prop) || !downstream.contains(prop))
+        if (!upstream.contains(prop) || !path.contains(prop) || member_of.contains(prop))
           continue;
-        if (auto const it{member_of.find(prop)}; it != member_of.end()) {
-          earlier = it->second;
-          continue;
-        }
         if (m_stateful.contains(prop))
           throw std::logic_error("converges(): '" + prop_key(prop->traits().id) + "' is stateful() and inside the iteration group of '" + key +
                                  "'; a pass must not count or record");
@@ -754,9 +797,10 @@ private:
       }
       if (members.empty())
         throw std::logic_error("converges(): '" + key + "' " +
-                               (earlier ? "iterates no callback outside the group of '" + prop_key(earlier->residual->traits().id) +
-                                              "': one residual per group"
-                                        : std::string{"has no local edge behind it: nothing to iterate"}));
+                               (owners.empty() ? std::string{"has no closed local loop behind it: nothing to iterate (a local edge whose producer is "
+                                                             "downstream of its consumer and upstream of the residual)"}
+                                               : "iterates no loop outside the group of '" + prop_key((*owners.begin())->residual->traits().id) +
+                                                     "': one residual per group"));
       for (auto* prop : members)
         member_of.emplace(prop, c);
       groups.emplace_back(c, std::move(members));

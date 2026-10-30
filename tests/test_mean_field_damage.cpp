@@ -6,6 +6,7 @@
 #include <vector>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/elastic_constants.h"
+#include "numsim-materials/core/errors.h"
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/materials/constant_scalar.h"
 #include "numsim-materials/materials/eshelby_sphere.h"
@@ -412,6 +413,24 @@ TEST(MeanFieldDamage, ReussEqualisesThePhaseStressesAsTheStepVanishes) {
   T const coarse{mismatch(6)}, fine{mismatch(600)}; // the error sits in the step that crosses the yield surface
   EXPECT_LT(fine, coarse / 20);
   EXPECT_LT(fine, 1e-5);
+}
+
+TEST(MeanFieldDamage, ANaNTangentIsNotConverged) {
+  auto ctx{build(true)};
+  dynamic_cast<nm::linear_elasticity<policy> &>(*ctx->find("elastic")).set_parameter<T>("K", std::numeric_limits<T>::quiet_NaN());
+  auto &strain{*dynamic_cast<nm::external_strain_source<policy> *>(ctx->find("strain"))};
+  strain.bind(tensor2{}, uniaxial(1e-3));
+  EXPECT_THROW(ctx->update(), nm::cutback_error) << "the residual of a NaN tangent is NaN, not 0";
+}
+
+TEST(MeanFieldDamage, AZeroTangentIsNotConverged) {
+  auto ctx{build(true)};
+  auto &elastic{dynamic_cast<nm::linear_elasticity<policy> &>(*ctx->find("elastic"))};
+  elastic.set_parameter<T>("K", 0);
+  elastic.set_parameter<T>("G", 0);
+  auto &strain{*dynamic_cast<nm::external_strain_source<policy> *>(ctx->find("strain"))};
+  strain.bind(tensor2{}, uniaxial(1e-3));
+  EXPECT_THROW(ctx->update(), nm::cutback_error) << "norm(C) = 0 makes the residual 0 / 0";
 }
 
 TEST(MeanFieldDamage, RejectsAnInconsistentWiring) {
