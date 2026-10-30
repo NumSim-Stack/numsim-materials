@@ -14,7 +14,7 @@
 #include "numsim-materials/io/json_material_factory.h"
 #include "numsim-materials/core/input_types.h"
 #include "numsim-materials/umat/errors.h"
-#include "numsim-materials/umat/external_state_source.h"
+#include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/umat/umat_interface.h"
 
 /// Define a UMAT model from JSON rather than compiled C++, so a new material is

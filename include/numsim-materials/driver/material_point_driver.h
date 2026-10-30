@@ -10,8 +10,8 @@
 #include "numsim-materials/core/parameter_helpers.h"
 #include "numsim-materials/core/tensor_identities.h"
 #include "numsim-materials/driver/material_point.h"
-#include "numsim-materials/umat/errors.h"
-#include "numsim-materials/umat/external_state_source.h"
+#include "numsim-materials/core/errors.h"
+#include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/driver/load_control.h"
 
 /// One material point under mixed strain/stress control: Newton on the free strain components.
@@ -69,7 +69,7 @@ public:
         m_max_iter(m_parameters.template get<int>("max_iter")),
         m_fd_step(m_parameters.template get<value_type>("fd_step")) {
     if (m_max_iter < 0 || !(m_tolerance >= 0) || !(m_fd_step > 0))
-      throw umat::fatal_error("material_point_driver: max_iter and tolerance must be >= 0, fd_step > 0");
+      throw fatal_error("material_point_driver: max_iter and tolerance must be >= 0, fd_step > 0");
     if (!text("time_source").empty())
       m_time = &m_point.template input<external_scalar_source<Traits>>(text("time_source"));
   }

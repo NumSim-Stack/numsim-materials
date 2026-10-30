@@ -15,7 +15,7 @@
 #include "numsim-materials/default_materials.h"
 #include "numsim-materials/io/json_material_factory.h"
 #include "numsim-materials/driver/material_point_driver.h"
-#include "numsim-materials/umat/external_state_source.h"
+#include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/umat/json_model.h"
 
 namespace {

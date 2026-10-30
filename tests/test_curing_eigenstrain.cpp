@@ -15,7 +15,7 @@
 #include "numsim-materials/materials/scalar_complement_weight.h"
 #include "numsim-materials/materials/scalar_stepper.h"
 #include "numsim-materials/materials/thermal_eigenstrain.h"
-#include "numsim-materials/umat/external_state_source.h"
+#include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/umat/json_model.h"
 
 namespace {

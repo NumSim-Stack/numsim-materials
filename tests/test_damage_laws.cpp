@@ -11,7 +11,7 @@
 #include "numsim-materials/materials/saturation_damage_law.h"
 #include "numsim-materials/materials/strain_threshold_yield.h"
 #include "numsim-materials/materials/von_mises_state_function.h"
-#include "numsim-materials/umat/external_state_source.h"
+#include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/umat/json_model.h"
 
 namespace {

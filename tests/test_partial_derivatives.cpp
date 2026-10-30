@@ -1,4 +1,6 @@
 #include <gtest/gtest.h>
+#include <cmath>
+#include <functional>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -93,6 +95,35 @@ struct contract_e { // tensor2 of tensor4: z = Y : E
   static tensor2 value(tensor4 const &Y) { return tmech::dcontract(Y, E2); }
   static tensor6 partial(tensor4 const &) { return tmech::otimes(Is, E2); }
 };
+struct constant_law { // tensor2 of tensor2, independent of its read
+  using in = tensor2;
+  using out = tensor2;
+  static tensor2 value(tensor2 const &) { return B2; }
+  static tensor4 partial(tensor2 const &) { return tensor4{}; }
+};
+// y = c tr(x)^3, about 1e8 at a strain of 1e-3; the partial is off by `error` (relative).
+template <int Error>
+struct cubic_strain {
+  using in = tensor2;
+  using out = T;
+  static constexpr T c{1e19};
+  static T value(tensor2 const &x) { return c * std::pow(tmech::trace(x), 3); }
+  static tensor2 partial(tensor2 const &x) {
+    return tensor2{(1 + Error * T{1e-6}) * 3 * c * std::pow(tmech::trace(x), 2) * I};
+  }
+};
+struct throwing_map { // throws once the read leaves the state it was armed at
+  using in = tensor2;
+  using out = tensor2;
+  static inline tensor2 armed{};
+  static inline bool active{false};
+  static tensor2 value(tensor2 const &x) {
+    if (active && tmech::norm(tensor2{x - armed}) > 0)
+      throw std::runtime_error("perturbed state");
+    return tmech::dcontract(A4, x);
+  }
+  static tensor4 partial(tensor2 const &) { return A4; }
+};
 struct wrong_map { // declares A4 for B4 : x
   using in = tensor2;
   using out = tensor2;
@@ -128,8 +159,12 @@ public:
     return para;
   }
 
+  static inline std::function<void()> hook; ///< called by every run, when set
+
   void compute() {
     ++m_runs;
+    if (hook)
+      hook();
     m_y = Law::value(m_x.get());
     if (base::want_partials()) {
       base::partial(m_y, m_x) = Law::partial(m_x.get());
@@ -463,6 +498,136 @@ TEST(PartialDerivatives, PartialsAreDeclaredForReadsAndOutputsOfTheCallback) {
   }
 }
 
+// --- independent_of() is verified, not trusted (review of #227) ---
+
+TEST(PartialDerivatives, AWrongIndependentOfFailsTheFiniteDifferenceCheck) {
+  chain c;
+  c.node<map_a>("a", "strain::strain");
+  c.node<map_b>("liar", "a::y", "independent"); // B4 : x does depend on x
+  c.ctx.finalize();
+  c.load(x0, s0);
+  auto const mismatches{nm::check_partials(c.ctx, "liar")};
+  ASSERT_FALSE(mismatches.empty());
+  EXPECT_TRUE(mismatches.front().contains("liar::y")) << mismatches.front();
+  EXPECT_TRUE(mismatches.front().contains("a::y")) << mismatches.front();
+  EXPECT_TRUE(mismatches.front().contains("independent_of")) << mismatches.front();
+  EXPECT_LT(distance(c.ctx.get<tensor2>("liar", "y"), map_b::value(c.ctx.get<tensor2>("a", "y"))), 1e-15) << "the state is restored";
+}
+
+TEST(PartialDerivatives, ATrueIndependentOfPassesTheFiniteDifferenceCheck) {
+  chain c;
+  c.node<map_a>("a", "strain::strain");
+  c.node<constant_law>("k", "a::y", "independent");
+  c.ctx.finalize();
+  c.load(x0, s0);
+  EXPECT_TRUE(nm::check_partials(c.ctx, "k").empty());
+}
+
+// --- the step follows the read, the allowance the analytic block (review of #227) ---
+
+TEST(PartialDerivatives, ACorrectPartialPassesAtTheScaleOfAStrain) {
+  chain c;
+  c.node<cubic_strain<0>>("n", "strain::strain");
+  c.ctx.finalize();
+  c.load(tensor2{1e-3 * x0}, s0);
+  ASSERT_GT(std::abs(c.ctx.get<T>("n", "y")), 1e7);
+  auto const mismatches{nm::check_partials(c.ctx, "n")};
+  EXPECT_TRUE(mismatches.empty()) << mismatches.front();
+}
+
+TEST(PartialDerivatives, ASmallRelativeErrorIsDetectedAtOutputsOfOneHundredMillion) {
+  chain c;
+  c.node<cubic_strain<20>>("n", "strain::strain"); // 2e-5 relative
+  c.ctx.finalize();
+  c.load(tensor2{1e-3 * x0}, s0);
+  ASSERT_GT(std::abs(c.ctx.get<T>("n", "y")), 1e7);
+  EXPECT_FALSE(nm::check_partials(c.ctx, "n").empty());
+}
+
+// --- a throwing rerun leaves the context as it was (review of #227) ---
+
+TEST(PartialDerivatives, AThrowingPerturbedRerunRestoresReadsAndOutputs) {
+  chain c;
+  c.node<throwing_map>("t", "strain::strain");
+  c.ctx.finalize();
+  c.load(x0, s0);
+  throwing_map::armed = x0;
+  throwing_map::active = true;
+  EXPECT_THROW(nm::check_partials(c.ctx, "t"), std::runtime_error);
+  throwing_map::active = false;
+  EXPECT_EQ(tmech::norm(tensor2{dynamic_cast<nm::external_strain_source<policy> *>(c.ctx.find("strain"))->strain().new_value() - x0}), 0) << "the read";
+  EXPECT_LT(distance(c.ctx.get<tensor2>("t", "y"), throwing_map::value(x0)), 1e-15) << "the output";
+}
+
+// --- the result type is the one the context can fill (review of #227) ---
+
+template <typename R>
+concept derivable = requires(ctx_type &c, std::string const &name) { c.template derivative<R>(name, name, name, name); };
+
+TEST(PartialDerivatives, OnlyTheScalarAndTensorsOfTheContextAreDerivativeTypes) {
+  static_assert(derivable<T>);
+  static_assert(derivable<tensor2>);
+  static_assert(derivable<tensor4>);
+  static_assert(derivable<tensor6>);
+  static_assert(!derivable<tmech::tensor<T, 2, 4>>); // another dimension would write out of bounds
+  static_assert(!derivable<tmech::tensor<float, 3, 2>>);
+  static_assert(!derivable<float>);
+  static_assert(!derivable<int>);
+  static_assert(!derivable<std::string>);
+}
+
+
+TEST(PartialDerivatives, AFourthOrderResultOfATensorIsRankSix) {
+  chain c;
+  c.node<dyad>("d", "strain::strain");
+  c.ctx.finalize();
+  auto const &d{c.ctx.derivative<tensor6>("d", "y", "strain", "strain")};
+  c.load(x0, s0);
+  EXPECT_LT(distance(d, dyad::partial(x0)), 1e-12);
+}
+
+// --- derivative() on an evaluated context, and the path query (review of #227) ---
+
+TEST(PartialDerivatives, ADerivativeRequestedAfterAnUpdateIsFilledAtOnce) {
+  chain c;
+  c.node<map_a>("a", "strain::strain");
+  c.node<map_b>("b", "a::y");
+  c.ctx.finalize();
+  c.load(x0, s0);
+  auto const &d{c.ctx.derivative<tensor4>("b", "y", "strain", "strain")};
+  EXPECT_LT(distance(d, tensor4{tmech::dcontract(B4, A4)}), 1e-12);
+  c.load(tensor2{2 * x0}, s0);
+  EXPECT_LT(distance(d, tensor4{tmech::dcontract(B4, A4)}), 1e-12) << "and by the next update";
+}
+
+TEST(PartialDerivatives, ADerivativeFromACallbackIsRefused) {
+  chain c;
+  c.node<map_a>("a", "strain::strain");
+  c.ctx.finalize();
+  bool refused{false};
+  law_node<map_a, policy>::hook = [&] {
+    try {
+      c.ctx.derivative<tensor4>("a", "y", "strain", "strain");
+    } catch (std::logic_error const &) {
+      refused = true;
+    }
+  };
+  c.load(x0, s0);
+  law_node<map_a, policy>::hook = nullptr;
+  EXPECT_TRUE(refused);
+}
+
+TEST(PartialDerivatives, HasPathTellsIndependenceFromATypo) {
+  chain c;
+  c.node<map_a>("y", "strain::strain");
+  c.ctx.finalize();
+  EXPECT_TRUE(c.ctx.has_path("y", "y", "strain", "strain"));
+  EXPECT_TRUE(c.ctx.has_path("y", "y", "y", "y"));
+  EXPECT_FALSE(c.ctx.has_path("y", "y", "temperature", "state"));
+  EXPECT_FALSE(c.ctx.has_path("strain", "strain", "y", "y"));
+  EXPECT_THROW(c.ctx.has_path("y", "y", "temperature", "nothing"), std::runtime_error);
+}
+
 // --- zero cost when nothing is requested ---
 
 TEST(PartialDerivatives, NoPartialsAreComputedWithoutARequest) {
@@ -476,11 +641,13 @@ TEST(PartialDerivatives, NoPartialsAreComputedWithoutARequest) {
   EXPECT_EQ(a.runs(), 3);
   EXPECT_EQ(a.fills() + b.fills() + q.fills(), 0);
 
-  c.ctx.derivative<tensor4>("b", "y", "strain", "strain");
+  c.ctx.derivative<tensor4>("b", "y", "strain", "strain"); // fills once at the held state
+  EXPECT_EQ(a.fills(), 1);
+  EXPECT_EQ(b.fills(), 1);
   for (int i{0}; i < 2; ++i)
     c.load(x0, s0);
-  EXPECT_EQ(a.fills(), 2);
-  EXPECT_EQ(b.fills(), 2);
+  EXPECT_EQ(a.fills(), 3);
+  EXPECT_EQ(b.fills(), 3);
   EXPECT_EQ(q.fills(), 0) << "q is off the requested path";
 }
 

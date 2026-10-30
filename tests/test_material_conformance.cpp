@@ -157,31 +157,34 @@ TEST(MaterialConformance, MissingRequiredParametersThrow) {
   }
 }
 
-/// Materials whose callbacks declare partials (.partials()), checked by finite differences below.
+/// Materials whose callbacks declare partials or independence (.partials(), .independent_of()), checked by finite differences below.
 const std::set<std::string> kPartialsChecked = {
     "exponential_damage_law", "incremental_linear_elasticity", "isotropic_damage", "isotropic_moduli",
     "isotropic_tangent", "linear_damage_law", "linear_elasticity", "linear_stress", "peerlings_damage_law",
     "power_damage_law", "saturation_damage_law", "strain_energy_state_function", "strain_threshold_yield",
     "thermal_eigenstrain", "vector_strain_state_function", "von_mises_state_function"};
 
-/// Header stems under materials/ and solvers/ that declare partials, themselves or through a detail/ base they include.
+/// Header stems under materials/ and solvers/ that declare partials or independent reads, themselves or through a
+/// detail/ base they include.
 std::set<std::string> headers_declaring_partials() {
   namespace fs = std::filesystem;
   auto const source{[](fs::path const& file) {
     std::ifstream in(file);
     return std::string{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
   }};
+  auto const declares{[](std::string const& src) {
+    return src.find(".partials(") != std::string::npos || src.find(".independent_of(") != std::string::npos;
+  }};
   std::vector<std::string> bases;
   for (const auto& e : fs::directory_iterator(fs::path{NUMSIM_MATERIALS_INCLUDE_DIR} / "detail"))
-    if (e.path().extension() == ".h" && source(e.path()).find(".partials(") != std::string::npos)
+    if (e.path().extension() == ".h" && declares(source(e.path())))
       bases.push_back("detail/" + e.path().filename().string());
   std::set<std::string> out;
   for (const char* directory : {NUMSIM_MATERIALS_INCLUDE_DIR, NUMSIM_SOLVERS_INCLUDE_DIR})
     for (const auto& e : fs::directory_iterator(fs::path{directory})) {
       if (e.path().extension() != ".h") continue;
       const std::string src{source(e.path())};
-      if (src.find(".partials(") != std::string::npos ||
-          std::ranges::any_of(bases, [&](auto const& base) { return src.contains(base); }))
+      if (declares(src) || std::ranges::any_of(bases, [&](auto const& base) { return src.contains(base); }))
         out.insert(e.path().stem().string());
     }
   return out;
@@ -189,7 +192,7 @@ std::set<std::string> headers_declaring_partials() {
 
 TEST(MaterialConformance, EveryMaterialDeclaringPartialsIsChecked) {
   EXPECT_EQ(headers_declaring_partials(), kPartialsChecked)
-      << "a material declaring partials joins kPartialsChecked and the model of DeclaredPartialsMatchFiniteDifferences";
+      << "a material declaring partials or independent reads joins kPartialsChecked and the model of DeclaredPartialsMatchFiniteDifferences";
 }
 
 /// Every declared partial against central differences of its own callback, at a state off every symmetry.

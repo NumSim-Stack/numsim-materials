@@ -6,7 +6,7 @@
 #include "numsim-materials/materials/neo_hooke.h"
 #include "numsim-materials/materials/saint_venant_kirchhoff.h"
 #include "numsim-materials/driver/deformation_gradient_driver.h"
-#include "numsim-materials/umat/external_state_source.h"
+#include "numsim-materials/driver/external_state_source.h"
 
 namespace {
 
