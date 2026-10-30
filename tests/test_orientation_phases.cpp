@@ -321,6 +321,12 @@ TEST(NonlinearFibres, ExpandIntoTheNonlinearComposite) {
   EXPECT_EQ(named(expand(e), "sf_3").at("tangent_source"), "fibre_3");
   e["matrix_used_tangent"] = "matrix::tangent";
   EXPECT_EQ(named(expand(e), "sf").at("phases")[0].at("used_tangent"), "matrix::tangent");
+  EXPECT_FALSE(named(expand(e), "sf").contains("tolerance")) << "the composite's defaults";
+  e["tolerance"] = 1e-12;
+  e["max_passes"] = 50;
+  json const converging = named(expand(e), "sf");
+  EXPECT_EQ(converging.at("tolerance"), 1e-12);
+  EXPECT_EQ(converging.at("max_passes"), 50);
 }
 
 TEST(NonlinearFibres, NeedALocalTangentEdge) {
@@ -337,6 +343,9 @@ TEST(NonlinearFibres, NeedALocalTangentEdge) {
   EXPECT_THROW((void)expand(e), std::invalid_argument);
   e["localisation"] = "linear";
   e["matrix_used_tangent"] = "matrix::tangent"; // only a nonlinear composite reads it
+  EXPECT_THROW((void)expand(e), std::invalid_argument);
+  e.erase("matrix_used_tangent");
+  e["tolerance"] = 1e-12; // only a nonlinear composite iterates
   EXPECT_THROW((void)expand(e), std::invalid_argument);
 }
 

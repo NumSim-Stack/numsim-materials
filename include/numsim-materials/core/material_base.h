@@ -202,6 +202,16 @@ protected:
     return handle;
   }
 
+  /// update() reruns the callbacks downstream of a local edge and upstream of `residual` (an output) until
+  /// |residual| <= tolerance, and throws cutback_error after max_passes. Both are references to parameters.
+  void converges(value_type const& residual, value_type const& tolerance, int const& max_passes) {
+    base::declare_converges(residual, tolerance, max_passes);
+  }
+  // the declaration keeps pointers to tolerance and max_passes: a temporary would dangle
+  void converges(value_type const&, value_type&&, int const&) = delete;
+  void converges(value_type const&, value_type const&, int&&) = delete;
+  void converges(value_type const&, value_type&&, int&&) = delete;
+
   /// `output` has no callback of its own: the callback of `writer` fills it. Lets the engine skip a constant
   /// callback while another callback of the material keeps running.
   template <typename T, typename U>

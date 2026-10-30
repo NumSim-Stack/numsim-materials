@@ -52,6 +52,8 @@ material_context (facade)
   - `.reads()` — the parameters alone; `.reads_all_inputs()` — every input the material has at `finalize()`
   - `.stateful()` — keeps state of its own or acts outside its outputs: runs on every update
   - `.drives(local inputs...)` — reruns their source callbacks (a solver): runs after what those read
+- `converges(residual, tolerance, max_passes)` — a fixed point over local edges: `update()` reruns the callbacks
+  between the local edge and `residual` until it converges, and throws `cutback_error` after `max_passes`
 - Debug checks (CMake option `NUMSIM_MATERIALS_DEBUG_CHECKS`, on except in release configurations) rerun the
   constants and throw when one changes (`ctx.verify_constants(bool)`), and throw when a callback reads an input
   it did not declare (`ctx.check_reads(bool)`); `ctx.is_constant("mat", "prop")`

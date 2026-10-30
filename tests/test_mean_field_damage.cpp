@@ -1,9 +1,12 @@
 #include <gtest/gtest.h>
 #include <cmath>
+#include <limits>
 #include <memory>
 #include <stdexcept>
+#include <vector>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/elastic_constants.h"
+#include "numsim-materials/core/errors.h"
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/materials/constant_scalar.h"
 #include "numsim-materials/materials/eshelby_sphere.h"
@@ -25,6 +28,7 @@
 #include "numsim-materials/driver/material_point_driver.h"
 #include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/umat/json_model.h"
+#include "numsim-materials/umat/material_point_evaluator.h"
 
 namespace {
 
@@ -137,13 +141,19 @@ std::unique_ptr<ctx_type> build(bool nonlinear, std::string const &kernel = "mor
   ctx.create<nm::linear_stress<policy>>(p);
   p.clear();
   p.insert<std::string>("name", "mt");
-  p.insert<nm::phase_sources>("phases", {{{"concentration", "mt_strain::concentration_matrix"},
-                                          {"stress", nonlinear ? "damage::damaged_stress" : "elastic::stress"},
-                                          {"tangent", nonlinear ? "damage::damaged_tangent" : "elastic::tangent"},
-                                          {"fraction", "matrix::volume_fraction"}, {"used_tangent", "matrix::tangent"}},
-                                         {{"concentration", "mt_strain::concentration_spheres"}, {"stress", "stiff::stress"},
-                                          {"tangent", "C_i::tangent"}, {"fraction", "spheres::volume_fraction"}}});
-  ctx.create<nm::mean_field_composite_local_nonlinear<policy>>(p);
+  nm::phase_sources phases{{{"concentration", "mt_strain::concentration_matrix"},
+                            {"stress", nonlinear ? "damage::damaged_stress" : "elastic::stress"},
+                            {"tangent", nonlinear ? "damage::damaged_tangent" : "elastic::tangent"},
+                            {"fraction", "matrix::volume_fraction"}},
+                           {{"concentration", "mt_strain::concentration_spheres"}, {"stress", "stiff::stress"},
+                            {"tangent", "C_i::tangent"}, {"fraction", "spheres::volume_fraction"}}};
+  if (nonlinear)
+    phases[0]["used_tangent"] = "matrix::tangent";
+  p.insert<nm::phase_sources>("phases", phases);
+  if (nonlinear)
+    ctx.create<nm::mean_field_composite_local_nonlinear<policy>>(p);
+  else // a converging composite needs the local edge
+    ctx.create<nm::mean_field_composite_local_linear<policy>>(p);
   ctx.finalize();
   return owner;
 }
@@ -154,23 +164,13 @@ tensor2 uniaxial(T e) {
   return eps;
 }
 
-/// One step: passes until the phase tangents the strains were formed with agree with the materials'.
-int converge(ctx_type &ctx, T tol = 1e-10) {
-  int passes{1};
-  ctx.update();
-  while (ctx.get<T>("mt", "residual") > tol && passes < 200) {
-    ctx.update();
-    ++passes;
-  }
-  return passes;
-}
-
-/// Loads the composite in equal steps to the strain `eps`, committing every step.
+/// Loads the composite in equal steps to the strain `eps`, committing every step: each update() repeats the
+/// passes until the phase tangents the strains were formed with agree with the materials' (converges()).
 void load(ctx_type &ctx, tensor2 const &eps, int steps) {
   auto &strain{*dynamic_cast<nm::external_strain_source<policy> *>(ctx.find("strain"))};
   for (int n{1}; n <= steps; ++n) {
     strain.bind(tensor2{eps * T(n - 1) / T(steps)}, tensor2{eps * T(n) / T(steps)});
-    converge(ctx);
+    ctx.update();
     ctx.commit();
   }
 }
@@ -223,6 +223,7 @@ TEST(MeanFieldDamage, TangentIsTheConcentrationWeightedPhaseTangent) {
 TEST(MeanFieldDamage, ResidualDecreasesOverThePassesOfAStep) {
   auto ctx{build(true)};
   load(*ctx, uniaxial(0.004), 4);
+  ctx->find("mt")->set_parameter<T>("tolerance", std::numeric_limits<T>::infinity()); // one pass per update
   auto &strain{*dynamic_cast<nm::external_strain_source<policy> *>(ctx->find("strain"))};
   strain.bind(uniaxial(0.004), uniaxial(0.006)); // a large damaging step: several passes
   ctx->update();
@@ -261,6 +262,53 @@ TEST(MeanFieldDamage, TangentMatchesFiniteDifferencesOnASmallStep) {
   auto const res{d.step(uniaxial(0.006 + 1e-6), tensor2{}, nm::load_control<T>::strain(), 6, 1)};
   ASSERT_TRUE(res.converged);
   EXPECT_LT(d.tangent_error(res), 1e-2);
+}
+
+// the fixed point inside update() takes bitwise the passes of the material point's loop it replaces: there, the
+// composite converges after every pass and residual_source repeats the whole update
+TEST(MeanFieldDamage, TheEngineIteratesBitwiseAsTheMaterialPointDid) {
+  for (auto const &control : {nm::load_control<T>::strain(), nm::load_control<T>::uniaxial_stress()}) {
+    auto engine{build(true)}, host{build(true)};
+    host->find("mt")->set_parameter<T>("tolerance", std::numeric_limits<T>::infinity());
+    auto in_engine{mt_point()};
+    in_engine.insert<std::string>("residual_source", std::string{});
+    nm::material_point_driver<policy> e(*engine, in_engine), h(*host, mt_point());
+    for (int n{1}; n <= 24; ++n) {
+      T const eps{(n <= 16 ? n : 32 - n) * 5e-4}; // loading, then unloading
+      auto const a{e.step(uniaxial(eps), tensor2{}, control, n - 1, 1)}, b{h.step(uniaxial(eps), tensor2{}, control, n - 1, 1)};
+      ASSERT_TRUE(a.converged) << n;
+      ASSERT_TRUE(b.converged) << n;
+      EXPECT_EQ(a.residuals, b.residuals) << n;
+      EXPECT_EQ(a.stress, b.stress) << n;
+      EXPECT_EQ(engine->get<tensor4>("mt", "tangent"), host->get<tensor4>("mt", "tangent")) << n;
+      EXPECT_EQ(engine->get<T>("law", "damage"), host->get<T>("law", "damage")) << n;
+      EXPECT_EQ(engine->get<T>("mt", "residual"), host->get<T>("mt", "residual")) << n;
+      e.accept();
+      h.accept();
+    }
+    EXPECT_GT(engine->get<T>("law", "damage"), 0);
+  }
+}
+
+// the UMAT closes the fixed point without residual_property: the composite converges in update()
+TEST(MeanFieldDamage, TheUmatEvaluatorConvergesWithoutAResidualProperty) {
+  auto ctx{build(true)}, reference{build(true)};
+  nm::umat::material_point_evaluator<policy>::config cfg;
+  cfg.strain_source = "strain";
+  cfg.stress_source = "mt";
+  nm::umat::material_point_evaluator<policy> eval(*ctx, cfg);
+  std::vector<T> statev(eval.nstatv(), 0);
+  T stran[6]{}, stress[6]{}, ddsdde[36]{};
+  T const dstran[6]{1e-3, 0, 0, 0, 0, 0};
+  for (int n{1}; n <= 6; ++n) {
+    eval.evaluate({.stran = stran, .dstran = dstran, .stress = stress, .ddsdde = ddsdde, .statev = statev});
+    EXPECT_LE(ctx->get<T>("mt", "residual"), 1e-10) << n;
+    stran[0] += dstran[0];
+  }
+  load(*reference, uniaxial(0.006), 6);
+  EXPECT_GT(reference->get<T>("law", "damage"), 0);
+  T const expected{reference->get<tensor2>("mt", "stress")(0, 0)};
+  EXPECT_NEAR(stress[0], expected, 1e-10 * std::abs(expected));
 }
 
 TEST(MeanFieldDamage, StressControlReEvaluatesFromTheCommittedLocalStrains) {
@@ -365,6 +413,24 @@ TEST(MeanFieldDamage, ReussEqualisesThePhaseStressesAsTheStepVanishes) {
   T const coarse{mismatch(6)}, fine{mismatch(600)}; // the error sits in the step that crosses the yield surface
   EXPECT_LT(fine, coarse / 20);
   EXPECT_LT(fine, 1e-5);
+}
+
+TEST(MeanFieldDamage, ANaNTangentIsNotConverged) {
+  auto ctx{build(true)};
+  dynamic_cast<nm::linear_elasticity<policy> &>(*ctx->find("elastic")).set_parameter<T>("K", std::numeric_limits<T>::quiet_NaN());
+  auto &strain{*dynamic_cast<nm::external_strain_source<policy> *>(ctx->find("strain"))};
+  strain.bind(tensor2{}, uniaxial(1e-3));
+  EXPECT_THROW(ctx->update(), nm::cutback_error) << "the residual of a NaN tangent is NaN, not 0";
+}
+
+TEST(MeanFieldDamage, AZeroTangentIsNotConverged) {
+  auto ctx{build(true)};
+  auto &elastic{dynamic_cast<nm::linear_elasticity<policy> &>(*ctx->find("elastic"))};
+  elastic.set_parameter<T>("K", 0);
+  elastic.set_parameter<T>("G", 0);
+  auto &strain{*dynamic_cast<nm::external_strain_source<policy> *>(ctx->find("strain"))};
+  strain.bind(tensor2{}, uniaxial(1e-3));
+  EXPECT_THROW(ctx->update(), nm::cutback_error) << "norm(C) = 0 makes the residual 0 / 0";
 }
 
 TEST(MeanFieldDamage, RejectsAnInconsistentWiring) {
