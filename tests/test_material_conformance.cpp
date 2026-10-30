@@ -155,10 +155,10 @@ TEST(MaterialConformance, MissingRequiredParametersThrow) {
   }
 }
 
-/// Materials whose callbacks declare partials (.partials()), checked by finite differences below.
+/// Materials whose callbacks declare partials or independence (.partials(), .independent_of()), checked by finite differences below.
 const std::set<std::string> kPartialsChecked = {"linear_elasticity", "thermal_eigenstrain"};
 
-/// Header stems under materials/ and solvers/ that declare partials.
+/// Header stems under materials/ and solvers/ that declare partials or independent reads.
 std::set<std::string> headers_declaring_partials() {
   namespace fs = std::filesystem;
   std::set<std::string> out;
@@ -167,7 +167,7 @@ std::set<std::string> headers_declaring_partials() {
       if (e.path().extension() != ".h") continue;
       std::ifstream in(e.path());
       const std::string src{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
-      if (src.find(".partials(") != std::string::npos)
+      if (src.find(".partials(") != std::string::npos || src.find(".independent_of(") != std::string::npos)
         out.insert(e.path().stem().string());
     }
   return out;
@@ -175,7 +175,7 @@ std::set<std::string> headers_declaring_partials() {
 
 TEST(MaterialConformance, EveryMaterialDeclaringPartialsIsChecked) {
   EXPECT_EQ(headers_declaring_partials(), kPartialsChecked)
-      << "a material declaring partials joins kPartialsChecked and the model of DeclaredPartialsMatchFiniteDifferences";
+      << "a material declaring partials or independent reads joins kPartialsChecked and the model of DeclaredPartialsMatchFiniteDifferences";
 }
 
 /// Every declared partial against central differences of its own callback, at a state off every symmetry.

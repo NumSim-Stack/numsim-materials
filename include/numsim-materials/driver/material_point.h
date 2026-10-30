@@ -136,12 +136,22 @@ public:
   /// output: the strain, the temperature) or "material::property". T is a scalar for two scalars, else a tensor of
   /// the summed rank (stress by strain: rank 4).
   template <typename T>
+    requires derivatives::derivative_value<T, typename Traits::value_type, Traits::Dim>
   T const &derivative(std::string const &output, std::string const &input) const {
     auto const out{connection_source::parse(output)};
     find(out.material, out.property);
     auto const seed{seed_of(input)};
     find(seed.material, seed.property);
     return m_ctx.template derivative<T>(out.material, out.property, seed.material, seed.property);
+  }
+
+  /// Whether the input (as in derivative()) is upstream of the output: otherwise derivative() is zero.
+  bool has_path(std::string const &output, std::string const &input) const {
+    auto const out{connection_source::parse(output)};
+    find(out.material, out.property);
+    auto const seed{seed_of(input)};
+    find(seed.material, seed.property);
+    return m_ctx.has_path(out.material, out.property, seed.material, seed.property);
   }
 
   /// A history output, for both ends of the step.

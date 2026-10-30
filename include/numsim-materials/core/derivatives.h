@@ -56,6 +56,11 @@ template <typename V, typename T, std::size_t Dim>
 concept node_value = std::is_same_v<V, T> || std::is_same_v<V, tmech::tensor<T, Dim, 2>> ||
                      std::is_same_v<V, tmech::tensor<T, Dim, 4>>;
 
+/// The type a derivative is read as: node_value's scalar, or a tensor of rank 2 to 8 (d tensor4 / d tensor4), of the same T and Dim.
+template <typename R, typename T, std::size_t Dim>
+concept derivative_value = node_value<R, T, Dim> || std::is_same_v<R, tmech::tensor<T, Dim, 6>> ||
+                           std::is_same_v<R, tmech::tensor<T, Dim, 8>>;
+
 template <typename T, std::size_t Dim, std::size_t Rank>
 struct partial_value {
   using type = tmech::tensor<T, Dim, Rank>;
@@ -199,25 +204,61 @@ std::optional<std::size_t> property_rank(property_base const& prop) {
   return std::nullopt;
 }
 
+/// A read the check perturbs one Mandel component at a time: its value is held by a property, given as `source`.
+template <typename T>
+class read_probe {
+public:
+  virtual ~read_probe() = default;
+  /// Mandel components of the read.
+  virtual std::size_t width() const noexcept = 0;
+  /// Mandel component k of the read's value, held by `source`.
+  virtual T read_component(property_base& source, std::size_t k) const = 0;
+  /// Adds h to Mandel component k of the read's value; the returned function restores the value.
+  virtual std::function<void()> perturb(property_base& source, std::size_t k, T h) const = 0;
+};
+
+template <typename T, std::size_t Dim, typename V>
+class typed_read : public read_probe<T> {
+public:
+  std::size_t width() const noexcept override { return derivatives::width<Dim>(rank_of<V>()); }
+
+  T read_component(property_base& source, std::size_t k) const override {
+    std::array<T, derivatives::width<Dim>(rank_of<V>())> packed{};
+    derivatives::pack<Dim, rank_of<V>()>(value_in<V>(source), packed.data());
+    return packed[k];
+  }
+
+  std::function<void()> perturb(property_base& source, std::size_t k, T h) const override {
+    auto& v{value_in<V>(source)};
+    std::function<void()> restore{[&v, old = v] { v = old; }};
+    if constexpr (std::is_arithmetic_v<V>) {
+      v += h;
+    } else {
+      std::array<T, derivatives::width<Dim>(rank_of<V>())> unit{};
+      unit[k] = h;
+      V step;
+      derivatives::unpack<Dim, rank_of<V>()>(unit.data(), step);
+      v = V{v + step};
+    }
+    return restore;
+  }
+};
+
 /// One declared partial d output / d read of a callback: the value the callback fills, packed on demand.
 template <typename T>
-class partial_block {
+class partial_block : public read_probe<T> {
 public:
   partial_block(std::size_t rows, std::size_t cols) noexcept : m_rows(rows), m_cols(cols) {}
-  virtual ~partial_block() = default;
   partial_block(partial_block const&) = delete;
   partial_block& operator=(partial_block const&) = delete;
 
   std::size_t rows() const noexcept { return m_rows; }
   std::size_t cols() const noexcept { return m_cols; }
+  std::size_t width() const noexcept override { return m_cols; }
   /// The partial as a rows() x cols() column-major Mandel block.
   virtual void pack(T* block) const = 0;
   /// The output's value, rows() Mandel components.
   virtual void pack_output(T* value) const = 0;
-  /// Mandel component k of the read's value, held by `source`.
-  virtual T read_component(property_base& source, std::size_t k) const = 0;
-  /// Adds h to Mandel component k of the read's value; the returned function restores the value.
-  virtual std::function<void()> perturb(property_base& source, std::size_t k, T h) const = 0;
 
 private:
   std::size_t m_rows, m_cols;
@@ -231,7 +272,7 @@ public:
   static constexpr std::size_t out_rank{rank_of<output_value>()};
 
   explicit typed_partial(Out const& output)
-      : partial_block<T>{width<Dim>(out_rank), width<Dim>(rank_of<read_value>())}, m_output(output) {}
+      : partial_block<T>{derivatives::width<Dim>(out_rank), derivatives::width<Dim>(rank_of<read_value>())}, m_output(output) {}
 
   partial_t<output_value, read_value, T, Dim> value{};
 
@@ -244,29 +285,13 @@ public:
       derivatives::pack<Dim, out_rank>(m_output, out);
   }
 
-  T read_component(property_base& source, std::size_t k) const override {
-    std::array<T, width<Dim>(rank_of<read_value>())> packed{};
-    derivatives::pack<Dim, rank_of<read_value>()>(value_in<read_value>(source), packed.data());
-    return packed[k];
-  }
+  T read_component(property_base& source, std::size_t k) const override { return m_read.read_component(source, k); }
 
-  std::function<void()> perturb(property_base& source, std::size_t k, T h) const override {
-    auto& v{value_in<read_value>(source)};
-    std::function<void()> restore{[&v, old = v] { v = old; }};
-    if constexpr (std::is_arithmetic_v<read_value>) {
-      v += h;
-    } else {
-      std::array<T, width<Dim>(rank_of<read_value>())> unit{};
-      unit[k] = h;
-      read_value step;
-      derivatives::unpack<Dim, rank_of<read_value>()>(unit.data(), step);
-      v = read_value{v + step};
-    }
-    return restore;
-  }
+  std::function<void()> perturb(property_base& source, std::size_t k, T h) const override { return m_read.perturb(source, k, h); }
 
 private:
   Out const& m_output;
+  typed_read<T, Dim, read_value> m_read;
 };
 
 /// A requested derivative as the host reads it, unpacked from its accumulated block.
