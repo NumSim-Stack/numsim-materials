@@ -11,7 +11,7 @@ namespace numsim::materials {
 /// Strain energy based equivalent strain.
 ///
 ///   eps_eq = sqrt(eps : C : eps / E)
-///   d(eps_eq)/d(eps) = (C : eps) / (E * eps_eq)
+///   d(eps_eq)/d(eps) = (C + C^T) : eps / (2 E eps_eq)   (C^T: major transpose)
 ///
 /// Requires tangent from an elastic material as input.
 template <typename Traits>
@@ -55,13 +55,12 @@ public:
   void compute() {
     const auto& eps = m_strain.get();
     const auto& C = m_tangent.get();
-    const auto C_eps = tmech::dcontract(C, eps);
-    const auto energy = tmech::dcontract(eps, C_eps);
+    const auto energy = tmech::dcontract(eps, tmech::dcontract(C, eps));
 
     m_eps_eq = std::sqrt(energy / m_E);
 
     if (m_eps_eq > value_type{1e-30}) {
-      m_deps_eq = C_eps / (m_E * m_eps_eq);
+      m_deps_eq = tmech::dcontract(tmech::trans(C) + C, eps) / (2 * m_E * m_eps_eq);
     } else {
       m_deps_eq = tensor2{};
     }

@@ -2,7 +2,9 @@
 #include <filesystem>
 #include <nlohmann/json.hpp>
 #include <algorithm>
+#include <format>
 #include <fstream>
+#include <memory>
 #include <regex>
 #include <set>
 #include <string>
@@ -195,9 +197,11 @@ TEST(MaterialConformance, EveryMaterialDeclaringPartialsIsChecked) {
       << "a material declaring partials or independent reads joins kPartialsChecked and the model of DeclaredPartialsMatchFiniteDifferences";
 }
 
-/// Every declared partial against central differences of its own callback, at a state off every symmetry.
-TEST(MaterialConformance, DeclaredPartialsMatchFiniteDifferences) {
-  nm::material_context<policy> ctx;
+/// The model of every material declaring partials; isotropic_damage runs over `damage_law`, which names one of the laws.
+/// `kappa_f` is the end of the linear law.
+std::unique_ptr<nm::material_context<policy>> partials_model(std::string const& damage_law, double kappa_f = 0.5) {
+  auto owner{std::make_unique<nm::material_context<policy>>()};
+  auto& ctx{*owner};
   for (const auto* source : {"strain", "temperature"}) {
     policy::ParameterHandler p;
     p.insert<std::string>("name", source);
@@ -206,9 +210,9 @@ TEST(MaterialConformance, DeclaredPartialsMatchFiniteDifferences) {
     else
       ctx.create<nm::external_scalar_source<policy>>(p);
   }
-  // strains of 1e-1 keep the differences of the nonlinear state functions accurate; the damage chain yields below
-  // every cap; the moduli skip the isotropy check, which a perturbed tangent fails
-  for (const auto* document : {
+  // strains of 1e-1 keep the differences of the nonlinear state functions accurate; the moduli skip the isotropy
+  // check, which a perturbed tangent fails
+  for (const std::string& document : std::vector<std::string>{
            R"({"type": "constant_scalar", "name": "alpha", "value": 1.2e-5})",
            R"({"type": "constant_scalar", "name": "K", "value": 150.0})",
            R"({"type": "constant_scalar", "name": "G", "value": 70.0})",
@@ -223,21 +227,29 @@ TEST(MaterialConformance, DeclaredPartialsMatchFiniteDifferences) {
            R"({"type": "vector_strain_state_function", "name": "vector_strain_state_function", "strain_source": "strain", "m_direction": [0], "n_direction": [1]})",
            R"({"type": "strain_threshold_yield", "name": "strain_threshold_yield", "state_source": "von_mises_state_function", "kappa_critical": 0.02})",
            R"({"type": "exponential_damage_law", "name": "exponential_damage_law", "yield_source": "strain_threshold_yield", "kappa_0": 0.02, "beta": 10.0})",
-           R"({"type": "linear_damage_law", "name": "linear_damage_law", "yield_source": "strain_threshold_yield", "kappa_0": 0.02, "kappa_f": 0.5})",
+           std::format(R"({{"type": "linear_damage_law", "name": "linear_damage_law", "yield_source": "strain_threshold_yield", "kappa_0": 0.02, "kappa_f": {}}})", kappa_f),
            R"({"type": "power_damage_law", "name": "power_damage_law", "yield_source": "strain_threshold_yield", "K": 5.0, "m": 1.5, "kappa_0": 0.02})",
            R"({"type": "saturation_damage_law", "name": "saturation_damage_law", "yield_source": "strain_threshold_yield", "K": 0.9, "m": 20.0, "kappa_0": 0.02})",
-           R"({"type": "peerlings_damage_law", "name": "peerlings_damage_law", "yield_source": "strain_threshold_yield", "kappa_0": 0.02, "alpha": 0.95, "beta": 10.0})",
-           R"({"type": "isotropic_damage", "name": "isotropic_damage", "elastic_source": "linear_elasticity", "damage_source": "exponential_damage_law", "state_source": "von_mises_state_function", "yield_source": "strain_threshold_yield"})"}) {
+           R"({"type": "peerlings_damage_law", "name": "peerlings_damage_law", "yield_source": "strain_threshold_yield", "kappa_0": 0.02, "alpha": 0.95, "beta": 10.0})"}) {
     const nlohmann::json j = nlohmann::json::parse(document);
     nm::create_from_json<policy>(ctx, j);
   }
+  nm::create_from_json<policy>(ctx, nlohmann::json::parse(
+      R"({"type": "isotropic_damage", "name": "isotropic_damage", "elastic_source": "linear_elasticity", "damage_source": ")" +
+      damage_law + R"(", "state_source": "von_mises_state_function", "yield_source": "strain_threshold_yield"})"));
   ctx.finalize();
-  tmech::tensor<double, 3, 2> strain;
-  strain(0, 0) = 0.1, strain(1, 1) = -0.04, strain(2, 2) = 0.02;
-  strain(0, 1) = strain(1, 0) = 0.03, strain(0, 2) = strain(2, 0) = -0.01, strain(1, 2) = strain(2, 1) = 0.05;
-  dynamic_cast<nm::external_strain_source<policy>*>(ctx.find("strain"))->bind({}, strain);
-  dynamic_cast<nm::external_scalar_source<policy>*>(ctx.find("temperature"))->bind(20, 75);
+  return owner;
+}
+
+void bind_state(nm::material_context<policy>& ctx, tmech::tensor<double, 3, 2> const& previous,
+                tmech::tensor<double, 3, 2> const& strain, double temperature) {
+  dynamic_cast<nm::external_strain_source<policy>*>(ctx.find("strain"))->bind(previous, strain);
+  dynamic_cast<nm::external_scalar_source<policy>*>(ctx.find("temperature"))->bind(20, temperature);
   ctx.update();
+}
+
+/// Every material with partials against central differences at the state the context holds.
+void expect_partials_match(nm::material_context<policy>& ctx) {
   std::set<std::string> checked;
   for (const auto* material : ctx.materials())
     if (!material->partials().empty()) {
@@ -246,6 +258,50 @@ TEST(MaterialConformance, DeclaredPartialsMatchFiniteDifferences) {
         ADD_FAILURE() << mismatch;
     }
   EXPECT_EQ(checked, kPartialsChecked);
+}
+
+tmech::tensor<double, 3, 2> const off_symmetry_strain{[] {
+  tmech::tensor<double, 3, 2> strain;
+  strain(0, 0) = 0.1, strain(1, 1) = -0.04, strain(2, 2) = 0.02;
+  strain(0, 1) = strain(1, 0) = 0.03, strain(0, 2) = strain(2, 0) = -0.01, strain(1, 2) = strain(2, 1) = 0.05;
+  return strain;
+}()};
+
+TEST(MaterialConformance, DeclaredPartialsMatchFiniteDifferences) {
+  auto const owner{partials_model("exponential_damage_law")};
+  bind_state(*owner, {}, off_symmetry_strain, 75);
+  expect_partials_match(*owner);
+}
+
+/// Committed at the strain, then loaded back to 60 %: the equivalent strain is below kappa, the damage stays, the yield
+/// node declares zero.
+TEST(MaterialConformance, DeclaredPartialsMatchFiniteDifferencesWhileUnloading) {
+  auto const owner{partials_model("exponential_damage_law")};
+  bind_state(*owner, {}, off_symmetry_strain, 75);
+  owner->commit();
+  bind_state(*owner, off_symmetry_strain, tmech::tensor<double, 3, 2>{0.6 * off_symmetry_strain}, 75);
+  ASSERT_EQ(owner->get<int>("strain_threshold_yield", "is_yielding"), 0);
+  ASSERT_GT(owner->get<double>("exponential_damage_law", "damage"), 0.1);
+  ASSERT_GT(owner->get<double>("strain_threshold_yield", "kappa"), owner->get<double>("von_mises_state_function", "equivalent_strain"));
+  expect_partials_match(*owner);
+}
+
+/// The linear law reaches the cap d_max = 0.999 at kappa_0 + 0.999 (kappa_f - kappa_0); kappa_f is chosen so that the
+/// equivalent strain of the state lands just below the cap (the slope is still 1 / (kappa_f - kappa_0)) and just above it (the
+/// slope is zero).
+TEST(MaterialConformance, DeclaredPartialsMatchFiniteDifferencesAtTheDamageCap) {
+  auto const probe{partials_model("linear_damage_law")};
+  bind_state(*probe, {}, off_symmetry_strain, 75);
+  double const kappa{probe->get<double>("von_mises_state_function", "equivalent_strain")};
+  for (double const margin : {1e-5, -1e-3}) {
+    double const kappa_f{0.02 + (kappa + margin - 0.02) / 0.999};
+    auto const owner{partials_model("linear_damage_law", kappa_f)};
+    bind_state(*owner, {}, off_symmetry_strain, 75);
+    bool const capped{margin < 0};
+    ASSERT_EQ(owner->get<double>("linear_damage_law", "d_damage") == 0, capped) << margin;
+    ASSERT_GT(owner->get<double>("linear_damage_law", "damage"), 0.9985) << margin;
+    expect_partials_match(*owner);
+  }
 }
 
 }  // namespace

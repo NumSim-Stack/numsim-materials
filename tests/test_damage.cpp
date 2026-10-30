@@ -147,19 +147,36 @@ TEST_P(DamageChain, AccumulatedTangentIsTheDamagedTangentLoadingAndUnloading) {
   tensor2 direction;
   direction(0, 0) = 1, direction(1, 1) = -0.3, direction(0, 1) = direction(1, 0) = 0.4;
   T previous{0};
-  int damaging{0}, unloading{0};
+  int damaging{0}, unloading{0}, differenced{0};
   for (T const load : {0.001, 0.003, 0.005, 0.007, 0.005, 0.002, -0.001, 0.004, 0.008, 0.01}) {
-    source.bind(tensor2{previous * direction}, tensor2{load * direction});
-    ctx.update();
+    // the damaged stress at the committed history, without committing
+    auto const stress_at{[&](T value) {
+      source.bind(tensor2{previous * direction}, tensor2{value * direction});
+      ctx.update();
+      return tensor2{ctx.get<tensor2>("damaged", "damaged_stress")};
+    }};
+    T constexpr h{1e-7};
+    tensor2 const forward{(stress_at(load + h) - stress_at(load)) / h}, backward{(stress_at(load) - stress_at(load - h)) / h};
+    tensor2 const fd{(stress_at(load + h) - stress_at(load - h)) / (2 * h)};
+    stress_at(load);
+    // at the yield threshold the one-sided slopes differ: no central difference there
+    bool const smooth{tmech::norm(tensor2{forward - backward}) <= 1e-4 * tmech::norm(fd) + 1e-8};
     bool const yielding{ctx.get<int>("yield", "is_yielding") != 0};
     damaging += yielding;
     unloading += !yielding && ctx.get<T>("law", "damage") > 0;
     EXPECT_LE(relative(derivative, ctx.get<tensor4>("damaged", "damaged_tangent")), 1e-12) << "load " << load;
+    // independent of the hand-written tangent: central differences of the stress along the load direction
+    tensor2 const along{tmech::dcontract(derivative, direction)};
+    if (smooth) {
+      EXPECT_LE(tmech::norm(tensor2{along - fd}), 1e-5 * tmech::norm(fd) + 1e-8) << "load " << load;
+      ++differenced;
+    }
     ctx.commit();
     previous = load;
   }
   EXPECT_GT(damaging, 2);
   EXPECT_GT(unloading, 2);
+  EXPECT_GT(differenced, 7);
 }
 
 INSTANTIATE_TEST_SUITE_P(

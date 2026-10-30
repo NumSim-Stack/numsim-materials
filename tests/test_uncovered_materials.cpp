@@ -5,6 +5,8 @@
 #include <vector>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_context.h"
+#include "numsim-materials/core/partial_check.h"
+#include "numsim-materials/core/tensor_identities.h"
 #include "numsim-materials/materials/exponential_isotropic_hardening.h"
 #include "numsim-materials/materials/linear_damage_law.h"
 #include "numsim-materials/materials/linear_elasticity.h"
@@ -29,6 +31,7 @@ using T = policy::value_type;
 using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
 using tensor2 = tmech::tensor<T, 3, 2>;
+using tensor4 = tmech::tensor<T, 3, 4>;
 
 /// Publishes one scalar under a caller-chosen property name, so a material can
 /// be exercised in isolation instead of behind a full plasticity model. The
@@ -244,6 +247,75 @@ TEST(StrainEnergyStateFunction, DerivativeMatchesAFiniteDifference) {
 
 // ---------------------------------------------------------------------------
 
+/// Publishes a fixed tangent that is minor-symmetric but not major-symmetric (C != C^T), as a hosted law can produce.
+template <typename Traits>
+class asymmetric_tangent_stub final : public nm::material_base<asymmetric_tangent_stub<Traits>, Traits> {
+public:
+  using base = nm::material_base<asymmetric_tangent_stub<Traits>, Traits>;
+  using input_parameter_controller = typename base::input_parameter_controller;
+
+  template <typename... Args>
+  explicit asymmetric_tangent_stub(Args &&...args)
+      : base(std::forward<Args>(args)...), m_tangent(base::template add_output<tensor4>("tangent")) {
+    tensor2 A, B;
+    A(0, 0) = 1, A(1, 1) = -0.5, A(2, 2) = 0.25, A(0, 1) = A(1, 0) = 0.4, A(1, 2) = A(2, 1) = -0.3;
+    B(0, 0) = -0.2, B(1, 1) = 0.7, B(2, 2) = 0.1, B(0, 2) = B(2, 0) = 0.5, B(0, 1) = B(1, 0) = 0.2;
+    m_tangent = tensor4{2 * 76.92 * nm::sym_identity<T, 3>() + 166.67 * tmech::otimes(tmech::eye<T, 3, 2>(), tmech::eye<T, 3, 2>()) +
+                        60.0 * tmech::otimes(A, B)};
+  }
+
+  static input_parameter_controller parameters() { return input_parameter_controller{base::parameters()}; }
+
+private:
+  tensor4 &m_tangent;
+};
+
+tensor2 sym_tensor(T a, T b, T c, T d, T e, T f) {
+  tensor2 x;
+  x(0, 0) = a, x(1, 1) = b, x(2, 2) = c, x(1, 2) = x(2, 1) = d, x(0, 2) = x(2, 0) = e, x(0, 1) = x(1, 0) = f;
+  return x;
+}
+
+std::unique_ptr<ctx_type> asymmetric_energy_model(tensor2 const &strain) {
+  auto ctx = std::make_unique<ctx_type>();
+  param_type p;
+  p.insert<std::string>("name", "strain");
+  ctx->create<nm::external_strain_source<policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "elastic");
+  ctx->create<asymmetric_tangent_stub<policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "state");
+  p.insert<std::string>("strain_source", "strain");
+  p.insert<std::string>("tangent_source", "elastic");
+  p.insert<T>("youngs_modulus", 200.0);
+  ctx->create<nm::strain_energy_state_function<policy>>(p);
+  ctx->finalize();
+  dynamic_cast<nm::external_strain_source<policy> *>(ctx->find("strain"))->bind(tensor2{}, strain);
+  ctx->update();
+  return ctx;
+}
+
+/// d(eps : C : eps) = (C + C^T) : eps : d(eps) for a tangent without major symmetry.
+TEST(StrainEnergyStateFunction, AsymmetricTangentGivesTheFiniteDifferenceGradient) {
+  tensor2 const eps{sym_tensor(0.01, -0.004, 0.002, 0.003, -0.001, 0.005)};
+  auto at = asymmetric_energy_model(eps);
+  ASSERT_GT(tmech::norm(tensor4{tmech::trans(at->get<tensor4>("elastic", "tangent")) - at->get<tensor4>("elastic", "tangent")}), 1.0);
+
+  auto const& d = at->get<tensor2>("state", "d_equivalent_strain");
+  constexpr T h = 1e-6;
+  for (auto const& direction : {sym_tensor(1, 0, 0, 0, 0, 0), sym_tensor(0, 1, 0, 0, 0, 0), sym_tensor(0, 0, 0, 0, 0, 1),
+                                sym_tensor(0.3, -0.5, 0.8, 0.2, -0.6, 0.4)}) {
+    auto const plus = asymmetric_energy_model(tensor2{eps + h * direction});
+    auto const minus = asymmetric_energy_model(tensor2{eps - h * direction});
+    T const fd = (plus->get<T>("state", "equivalent_strain") - minus->get<T>("state", "equivalent_strain")) / (2 * h);
+    EXPECT_NEAR(tmech::dcontract(d, direction), fd, 1e-7 * std::abs(fd) + 1e-9);
+  }
+  EXPECT_TRUE(nm::check_partials(*at, "state").empty()) << "the declared partials of the equivalent strain wrt strain and tangent";
+}
+
+// ---------------------------------------------------------------------------
+
 /// eps_eq = |n . eps . m|, so the derivative is the symmetrised n (x) m, and
 /// the absolute value must flip its sign under a sign change of the strain.
 TEST(VectorStrainStateFunction, PicksOneComponentAndIsSignSymmetric) {
@@ -303,6 +375,16 @@ TEST(StateFunctions, AccumulatedDerivativeIsTheHandWrittenOne) {
       ctx.update();
       auto const &expected{ctx.get<tensor2>("state", "d_equivalent_strain")};
       EXPECT_LE(tmech::norm(tensor2{derivative - expected}), 1e-12 * tmech::norm(expected)) << state << " " << load;
+      // independent of both: a central difference of the equivalent strain along the load direction
+      auto const eps_eq{[&](T value) {
+        dynamic_cast<nm::external_strain_source<policy> *>(ctx.find("strain"))->bind(tensor2{}, tensor2{value * direction});
+        ctx.update();
+        return ctx.get<T>("state", "equivalent_strain");
+      }};
+      constexpr T h{1e-7};
+      T const fd{(eps_eq(load + h) - eps_eq(load - h)) / (2 * h)};
+      eps_eq(load);
+      EXPECT_NEAR(tmech::dcontract(derivative, direction), fd, 1e-6 * std::abs(fd) + 1e-9) << state << " " << load;
       ctx.commit();
     }
   }

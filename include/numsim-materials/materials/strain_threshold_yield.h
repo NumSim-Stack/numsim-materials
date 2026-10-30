@@ -52,7 +52,8 @@ public:
     const auto threshold{std::max(m_kappa.old_value(), m_kappa_critical)};
     m_kappa.new_value() = std::max(m_eps_eq.get(), threshold);
     m_is_yielding = (m_eps_eq.get() > threshold) ? 1 : 0;
-    if (base::want_partials()) // kappa follows eps_eq only above the threshold: zero while unloading
+    // kappa follows eps_eq only above the threshold; at eps_eq == kappa the partial is the left derivative, zero
+    if (base::want_partials())
       base::partial(m_kappa, m_eps_eq) = value_type(m_is_yielding);
   }
 

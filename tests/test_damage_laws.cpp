@@ -176,23 +176,42 @@ TEST(DamageLaws, OlderLawsShareTheCap) {
   EXPECT_EQ(dd2, 0);
 }
 
+/// Evaluates at uniaxial strain x without committing, so the same history can be evaluated again.
+T damage_at(ctx_type &ctx, T x) {
+  tensor2 eps;
+  eps(0, 0) = x;
+  dynamic_cast<nm::external_strain_source<policy> *>(ctx.find("strain"))->bind(tensor2{}, eps);
+  ctx.update();
+  return ctx.get<T>("law", "damage");
+}
+
 /// d damage / d strain accumulated from the partials of state, yield and law against the chain written by hand
-/// (is_yielding d_damage d_equivalent_strain), loading, unloading and reloading into the cap.
+/// (is_yielding d_damage d_equivalent_strain) and, independently of both, against central differences of the damage
+/// along e11 at the committed history, loading, unloading and reloading into the cap.
 template <typename Law>
 void expect_accumulated_chain(param_type const &p) {
   std::unique_ptr<ctx_type> const ctx{build<Law>(p)};
   auto const &derivative{ctx->derivative<tensor2>("law", "damage", "strain", "strain")};
-  int damaging{0}, unloading{0};
+  int damaging{0}, unloading{0}, differenced{0};
+  constexpr T h{1e-7};
   for (T const x : {0.002, 0.004, 0.006, 0.008, 0.005, 0.001, 0.007, 0.01, 0.014, 0.02}) {
-    law_at(*ctx, x); // commits, the values stay
+    T const plus{damage_at(*ctx, x + h)}, minus{damage_at(*ctx, x - h)}, at{damage_at(*ctx, x)};
     bool const yielding{ctx->get<int>("yield", "is_yielding") != 0};
     damaging += yielding;
-    unloading += !yielding && ctx->get<T>("law", "damage") > 0;
+    unloading += !yielding && at > 0;
     tensor2 const expected{(yielding ? ctx->get<T>("law", "d_damage") : T{0}) * ctx->get<tensor2>("state", "d_equivalent_strain")};
     EXPECT_LE(tmech::norm(tensor2{derivative - expected}), 1e-12 * tmech::norm(expected)) << Law::type_name() << " x = " << x;
+    // a kink (threshold, kappa_f, the cap) has different one-sided slopes: no central difference there
+    T const forward{(plus - at) / h}, backward{(at - minus) / h};
+    if (std::abs(forward - backward) <= 1e-4 * (std::abs(forward) + std::abs(backward)) + 1e-8) {
+      EXPECT_NEAR(derivative(0, 0), (plus - minus) / (2 * h), 1e-5 * std::abs(forward) + 1e-8) << Law::type_name() << " x = " << x;
+      ++differenced;
+    }
+    ctx->commit();
   }
   EXPECT_GT(damaging, 3) << Law::type_name();
   EXPECT_GT(unloading, 1) << Law::type_name();
+  EXPECT_GT(differenced, 6) << Law::type_name();
 }
 
 TEST(DamageLaws, AccumulatedDerivativeIsTheHandWrittenChain) {
@@ -212,6 +231,52 @@ TEST(DamageLaws, AccumulatedDerivativeIsTheHandWrittenChain) {
   expect_accumulated_chain<nm::peerlings_damage_law<policy>>(peerlings);
   expect_accumulated_chain<nm::exponential_damage_law<policy>>(exponential);
   expect_accumulated_chain<nm::linear_damage_law<policy>>(linear);
+}
+
+/// Re-evaluating at the committed strain puts the equivalent strain exactly on kappa. There the yield node takes the left
+/// derivative of kappa(eps_eq), zero, so the damage has no slope: the central difference there is half the right slope.
+template <typename Law>
+void expect_left_derivative_at_the_kink(param_type const &p) {
+  std::unique_ptr<ctx_type> const ctx{build<Law>(p)};
+  auto const &derivative{ctx->derivative<tensor2>("law", "damage", "strain", "strain")};
+  constexpr T x{0.006}, h{1e-7};
+  law_at(*ctx, x); // loads to kappa = eps_eq and commits
+  tensor2 eps;
+  eps(0, 0) = x;
+  auto const evaluate{[&](T value) {
+    eps(0, 0) = value;
+    dynamic_cast<nm::external_strain_source<policy> *>(ctx->find("strain"))->bind(tensor2{}, eps);
+    ctx->update();
+    return ctx->get<T>("law", "damage");
+  }};
+  T const left{(evaluate(x) - evaluate(x - h)) / h}, right{(evaluate(x + h) - evaluate(x)) / h};
+  evaluate(x);
+  ASSERT_EQ(ctx->get<T>("state", "equivalent_strain"), kappa_at(*ctx)) << Law::type_name();
+  EXPECT_EQ(ctx->get<int>("yield", "is_yielding"), 0) << Law::type_name();
+  EXPECT_GT(ctx->get<T>("law", "d_damage"), 0) << Law::type_name() << ": the law itself has a slope there";
+  EXPECT_EQ(left, 0) << Law::type_name();
+  EXPECT_GT(right, 0) << Law::type_name();
+  EXPECT_EQ(derivative(0, 0), left) << Law::type_name();
+  EXPECT_EQ(tmech::norm(derivative), 0) << Law::type_name();
+}
+
+TEST(DamageLaws, AtTheKinkTheAccumulatedDerivativeIsTheLeftOne) {
+  param_type power, saturation, peerlings, exponential, linear;
+  for (auto *p : {&power, &saturation, &peerlings, &exponential, &linear})
+    p->insert<T>("kappa_0", kappa_0);
+  power.insert<T>("K", 200.0);
+  power.insert<T>("m", 1.5);
+  saturation.insert<T>("K", 0.9);
+  saturation.insert<T>("m", 300.0);
+  peerlings.insert<T>("alpha", 0.95);
+  peerlings.insert<T>("beta", 200.0);
+  exponential.insert<T>("beta", 100.0);
+  linear.insert<T>("kappa_f", 0.02);
+  expect_left_derivative_at_the_kink<nm::power_damage_law<policy>>(power);
+  expect_left_derivative_at_the_kink<nm::saturation_damage_law<policy>>(saturation);
+  expect_left_derivative_at_the_kink<nm::peerlings_damage_law<policy>>(peerlings);
+  expect_left_derivative_at_the_kink<nm::exponential_damage_law<policy>>(exponential);
+  expect_left_derivative_at_the_kink<nm::linear_damage_law<policy>>(linear);
 }
 
 TEST(DamageLaws, FromJson) {
