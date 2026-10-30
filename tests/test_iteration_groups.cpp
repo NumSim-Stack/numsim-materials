@@ -1,7 +1,9 @@
 // Iteration groups: a fixed point closed over local edges runs inside update() (#214).
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <ranges>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -23,6 +25,9 @@ using T = policy::value_type;
 using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
 
+/// The names of the callbacks in the order they ran.
+std::vector<std::string> g_log;
+
 /// "target" = goal::value; "calls" counts its runs (stateful: never folded, never in a group).
 template <typename Traits>
 class probe final : public nm::material_base<probe<Traits>, Traits> {
@@ -40,6 +45,7 @@ public:
   static input_parameter_controller parameters() { return input_parameter_controller{base::parameters()}; }
 
   void compute() {
+    g_log.push_back(base::name());
     m_target = m_goal.get();
     m_calls += 1;
   }
@@ -60,17 +66,22 @@ public:
   template <typename... Args>
   explicit guess(Args &&...args)
       : base(std::forward<Args>(args)...), m_used(base::template add_output<T>("used")),
-        m_x(base::template add_input<T>(base::template get_parameter<std::string>("source"), "x", nm::EdgeKind::Local)) {
+        m_x(base::template add_input<T>(base::template get_parameter<std::string>("source"),
+                                        base::template get_parameter<std::string>("property"), nm::EdgeKind::Local)) {
     base::add_callback(&guess::copy, m_used).reads(m_x);
   }
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
     nm::required<std::string>(para, "source");
+    nm::optional<std::string>(para, "property", std::string{"x"});
     return para;
   }
 
-  void copy() { m_used = m_x.get(); }
+  void copy() {
+    g_log.push_back(base::name());
+    m_used = m_x.get();
+  }
 
 private:
   T &m_used;
@@ -115,6 +126,7 @@ public:
   }
 
   void compute() {
+    g_log.push_back(base::name());
     m_x = (m_used.get() + m_target.get()) / 2;
     m_residual = std::abs(m_x - m_used.get());
     m_check = m_residual;
@@ -159,6 +171,88 @@ public:
 private:
   T &m_residual;
 };
+
+/// "x" = "<source>" (its output), a callback that only passes a value on.
+template <typename Traits>
+class follow final : public nm::material_base<follow<Traits>, Traits> {
+public:
+  using base = nm::material_base<follow<Traits>, Traits>;
+  using input_parameter_controller = typename base::input_parameter_controller;
+
+  template <typename... Args>
+  explicit follow(Args &&...args)
+      : base(std::forward<Args>(args)...), m_x(base::template add_output<T>("x")), m_in(source(base::template get_parameter<std::string>("source"))) {
+    base::add_callback(&follow::copy, m_x).reads(m_in);
+  }
+
+  static input_parameter_controller parameters() {
+    input_parameter_controller para{base::parameters()};
+    nm::required<std::string>(para, "source");
+    return para;
+  }
+
+  void copy() { m_x = m_in.get(); }
+
+private:
+  T &m_x;
+  nm::input_property<T, nm::property_traits> const &m_in;
+
+  nm::input_property<T, nm::property_traits> const &source(std::string const &s) {
+    auto const src{nm::connection_source::parse(s)};
+    return base::template add_input<T>(src.material, src.property);
+  }
+};
+
+/// Two halves of a solver (as j2_plasticity and its hardening law): each reads the other over a local edge, and
+/// each counts its runs (stateful: never folded, and an error inside a group).
+template <typename Traits>
+class half final : public nm::material_base<half<Traits>, Traits> {
+public:
+  using base = nm::material_base<half<Traits>, Traits>;
+  using input_parameter_controller = typename base::input_parameter_controller;
+
+  template <typename... Args>
+  explicit half(Args &&...args)
+      : base(std::forward<Args>(args)...), m_out(base::template add_output<T>("out")), m_calls(base::template add_output<T>("calls")),
+        m_in(base::template add_input<T>(base::template get_parameter<std::string>("other"), "out", nm::EdgeKind::Local)) {
+    base::add_callback(&half::compute, m_out, m_calls).reads(m_in).stateful();
+  }
+
+  static input_parameter_controller parameters() {
+    input_parameter_controller para{base::parameters()};
+    nm::required<std::string>(para, "other");
+    return para;
+  }
+
+  void compute() {
+    m_out = m_in.get() + 1;
+    m_calls += 1;
+  }
+
+  // a deleted overload keeps the pointers the declaration stores from dangling
+  template <typename Self = half>
+  static constexpr bool accepts_references = requires(Self &s, T &r, T const &tol, int const &n) { s.converges(r, tol, n); };
+  template <typename Self = half>
+  static constexpr bool accepts_literals = requires(Self &s, T &r) { s.converges(r, 1e-10, 100); };
+  template <typename Self = half>
+  static constexpr bool accepts_literal_tolerance = requires(Self &s, T &r, int const &n) { s.converges(r, 1e-10, n); };
+  template <typename Self = half>
+  static constexpr bool accepts_literal_passes = requires(Self &s, T &r, T const &tol) { s.converges(r, tol, 100); };
+  template <typename Self = half>
+  static constexpr bool declares_literals = requires(Self &s, T &r) { s.declare_converges(r, 1e-10, 100); };
+  template <typename Self = half>
+  static constexpr bool declares_references = requires(Self &s, T &r, T const &tol, int const &n) { s.declare_converges(r, tol, n); };
+
+private:
+  T &m_out;
+  T &m_calls;
+  nm::input_property<T, nm::property_traits> const &m_in;
+};
+
+static_assert(half<policy>::accepts_references<> && half<policy>::declares_references<>);
+static_assert(!half<policy>::accepts_literals<> && !half<policy>::accepts_literal_tolerance<> && !half<policy>::accepts_literal_passes<>,
+              "converges() keeps pointers to its arguments: a temporary would dangle");
+static_assert(!half<policy>::declares_literals<>);
 
 void constant(ctx_type &ctx, std::string const &name, T value) {
   param_type p;
@@ -296,6 +390,193 @@ TEST(IterationGroups, AGroupDownstreamOfAnotherRunsAfterIt) {
   EXPECT_NEAR(ctx->get<T>("relax2", "x"), 2, 1e-7);
 }
 
+TEST(IterationGroups, AGroupDownstreamOfAnotherRunsAfterItInTheCallLog) {
+  auto ctx{build({}, false, false)};
+  param_type p;
+  p.insert<std::string>("name", "guess2");
+  p.insert<std::string>("source", "relax2");
+  ctx->create<guess<policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "relax2");
+  p.insert<std::string>("guess", "guess2");
+  p.insert<std::string>("target_source", "relax::x");
+  ctx->create<relaxer<policy>>(p);
+  ctx->finalize();
+  g_log.clear();
+  ctx->update();
+  auto const first{[&](std::string const &name) { return std::ranges::find(g_log, name) - g_log.begin(); }};
+  auto const last{[&](std::string const &name) { return std::ranges::find_last(g_log, name).begin() - g_log.begin(); }};
+  EXPECT_EQ(first("probe"), 0);
+  EXPECT_EQ(std::ranges::count(g_log, "probe"), 1);
+  EXPECT_LT(last("relax"), first("guess2")) << "the second group starts after the first has converged";
+  EXPECT_LT(last("guess"), first("guess2"));
+  EXPECT_GT(std::ranges::count(g_log, "relax2"), 1) << "and iterates";
+  EXPECT_EQ(g_log.back(), "relax2");
+}
+
+TEST(IterationGroups, GroupsThatReadEachOtherThrowAtFinalize) {
+  param_type relax;
+  relax.insert<std::string>("target_source", "guess2::used"); // each group reads the front of the other
+  auto ctx{build(relax, false, false)};
+  param_type p;
+  p.insert<std::string>("name", "guess2");
+  p.insert<std::string>("source", "relax2");
+  ctx->create<guess<policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "relax2");
+  p.insert<std::string>("guess", "guess2");
+  p.insert<std::string>("target_source", "guess::used");
+  ctx->create<relaxer<policy>>(p);
+  auto const message{thrown<std::logic_error>([&] { ctx->finalize(); })};
+  EXPECT_NE(message.find("relax::residual"), std::string::npos) << message;
+  EXPECT_NE(message.find("relax2::residual"), std::string::npos) << message;
+  EXPECT_NE(message.find("read each other"), std::string::npos) << message;
+}
+
+TEST(IterationGroups, ALocalEdgeWhoseProducerIsOutsideTheGroupThrowsAtFinalize) {
+  ctx_type ctx; // guess reads probe::target of the previous pass, but probe is not downstream of guess
+  constant(ctx, "goal", 2);
+  param_type p;
+  p.insert<std::string>("name", "probe");
+  ctx.create<probe<policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "guess");
+  p.insert<std::string>("source", "probe");
+  p.insert<std::string>("property", "target");
+  ctx.create<guess<policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "relax");
+  ctx.create<relaxer<policy>>(p);
+  auto const message{thrown<std::logic_error>([&] { ctx.finalize(); })};
+  EXPECT_NE(message.find("relax::residual"), std::string::npos) << message;
+  EXPECT_NE(message.find("closed local loop"), std::string::npos) << message;
+}
+
+TEST(IterationGroups, AResidualInTheMiddleOfTheLoopThrowsAtFinalize) {
+  ctx_type ctx; // guess -> relax -> follow -> (local) guess: the producer of the edge is behind the residual
+  constant(ctx, "goal", 2);
+  param_type p;
+  p.insert<std::string>("name", "probe");
+  ctx.create<probe<policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "guess");
+  p.insert<std::string>("source", "follow");
+  ctx.create<guess<policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "relax");
+  ctx.create<relaxer<policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "follow");
+  p.insert<std::string>("source", "relax::x");
+  ctx.create<follow<policy>>(p);
+  auto const message{thrown<std::logic_error>([&] { ctx.finalize(); })};
+  EXPECT_NE(message.find("relax::residual"), std::string::npos) << message;
+  EXPECT_NE(message.find("closed local loop"), std::string::npos) << message;
+}
+
+TEST(IterationGroups, ANestedLoopThrowsAtFinalize) {
+  ctx_type ctx; // the inner loop (gi, ri) feeds the outer one (go, ro), which feeds the inner one back through ro::x
+  constant(ctx, "goal", 2);
+  param_type p;
+  p.insert<std::string>("name", "probe");
+  ctx.create<probe<policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "go");
+  p.insert<std::string>("source", "ro");
+  ctx.create<guess<policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "gi");
+  p.insert<std::string>("source", "ri");
+  ctx.create<guess<policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "ri");
+  p.insert<std::string>("guess", "gi");
+  p.insert<std::string>("target_source", "go::used");
+  ctx.create<relaxer<policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "ro");
+  p.insert<std::string>("guess", "go");
+  p.insert<std::string>("target_source", "ri::x");
+  ctx.create<relaxer<policy>>(p);
+  auto const message{thrown<std::logic_error>([&] { ctx.finalize(); })};
+  EXPECT_NE(message.find("ri::residual"), std::string::npos) << message;
+  EXPECT_NE(message.find("ro::residual"), std::string::npos) << message;
+  EXPECT_NE(message.find("nested"), std::string::npos) << message;
+}
+
+TEST(IterationGroups, ALoopThroughTheGroupOfAnotherResidualThrowsAtFinalize) {
+  param_type relax; // relax2 -> (local) guess3 -> relax (target_source) -> relax2: the loop runs through relax's group
+  relax.insert<std::string>("target_source", "guess3::used");
+  auto ctx{build(relax, false, false)};
+  param_type p;
+  p.insert<std::string>("name", "guess3");
+  p.insert<std::string>("source", "relax2");
+  ctx->create<guess<policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "relax2");
+  p.insert<std::string>("guess", "guess3");
+  p.insert<std::string>("target_source", "relax::x");
+  ctx->create<relaxer<policy>>(p);
+  auto const message{thrown<std::logic_error>([&] { ctx->finalize(); })};
+  EXPECT_NE(message.find("relax2::residual"), std::string::npos) << message;
+  EXPECT_NE(message.find("relax::residual"), std::string::npos) << message;
+  EXPECT_NE(message.find("nested"), std::string::npos) << message;
+}
+
+TEST(IterationGroups, ASolverWithLocalEdgesUpstreamOfAResidualRunsOncePerUpdate) {
+  ctx_type ctx; // a and b read each other over local edges, as j2_plasticity and its hardening law do
+  constant(ctx, "goal", 2);
+  param_type p;
+  p.insert<std::string>("name", "a");
+  p.insert<std::string>("other", "b");
+  ctx.create<half<policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "b");
+  p.insert<std::string>("other", "a");
+  ctx.create<half<policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "probe");
+  ctx.create<probe<policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "guess");
+  p.insert<std::string>("source", "relax");
+  ctx.create<guess<policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "relax");
+  p.insert<std::string>("target_source", "b::out");
+  ctx.create<relaxer<policy>>(p);
+  ASSERT_NO_THROW(ctx.finalize()) << "neither is a member of the group: both are stateful";
+  for (int n{1}; n <= 3; ++n) {
+    ctx.update();
+    EXPECT_EQ(ctx.get<T>("a", "calls"), n);
+    EXPECT_EQ(ctx.get<T>("b", "calls"), n);
+    EXPECT_LE(ctx.get<T>("relax", "residual"), 1e-8);
+  }
+}
+
+TEST(IterationGroups, AnInfiniteResidualIsNotConvergedByAnInfiniteTolerance) {
+  param_type relax;
+  relax.insert<T>("tolerance", std::numeric_limits<T>::infinity());
+  auto ctx{build(relax)};
+  dynamic_cast<nm::constant_scalar<policy> &>(*ctx->find("goal")).set_parameter<T>("value", std::numeric_limits<T>::infinity());
+  auto const message{thrown<nm::cutback_error>([&] { ctx->update(); })};
+  EXPECT_NE(message.find("in 1 pass "), std::string::npos) << "stops at the first pass: " << message;
+}
+
+TEST(IterationGroups, SettingsChangedAfterFinalizeAreCheckedAtEveryUpdate) {
+  auto ctx{build()};
+  auto &relax{dynamic_cast<relaxer<policy> &>(*ctx->find("relax"))};
+  relax.set_parameter<T>("tolerance", -1);
+  EXPECT_NE(thrown<std::invalid_argument>([&] { ctx->update(); }).find("relax::residual"), std::string::npos);
+  ctx->revert();
+  relax.set_parameter<T>("tolerance", 1e-8);
+  relax.set_parameter<int>("max_passes", 0);
+  EXPECT_NE(thrown<std::invalid_argument>([&] { ctx->update(); }).find("relax::residual"), std::string::npos);
+  ctx->revert();
+  relax.set_parameter<int>("max_passes", 100);
+  EXPECT_NO_THROW(ctx->update());
+}
+
 TEST(IterationGroups, ConvergesWithoutALocalEdgeBehindItThrowsAtFinalize) {
   ctx_type ctx;
   param_type p;
@@ -303,7 +584,7 @@ TEST(IterationGroups, ConvergesWithoutALocalEdgeBehindItThrowsAtFinalize) {
   ctx.create<lonely<policy>>(p);
   auto const message{thrown<std::logic_error>([&] { ctx.finalize(); })};
   EXPECT_NE(message.find("alone::residual"), std::string::npos) << message;
-  EXPECT_NE(message.find("local edge"), std::string::npos) << message;
+  EXPECT_NE(message.find("closed local loop"), std::string::npos) << message;
 }
 
 TEST(IterationGroups, AStatefulCallbackInsideAGroupThrowsAtFinalize) {

@@ -516,6 +516,9 @@ protected:
       properties.push_back(output_entry_of("system", unknown).property);
     m_systems.push_back({method, std::move(properties), std::move(seeds), std::move(residuals), nullptr, &tolerance, &max_iter, &report});
   }
+  void declare_converges(value_type const&, value_type&&, int const&) = delete;
+  void declare_converges(value_type const&, value_type const&, int&&) = delete;
+  void declare_converges(value_type const&, value_type&&, int&&) = delete;
 
   void declare_written_by(void const* output, void const* writer) {
     auto const& out{output_entry_of("written_by", output)};

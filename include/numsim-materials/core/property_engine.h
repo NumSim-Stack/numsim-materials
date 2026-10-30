@@ -64,7 +64,7 @@ struct graph_node {
   bool callback{false}; ///< has a callback of its own
 };
 
-/// The finalized graph: nodes in execution order, edges sorted by key.
+/// The finalized graph: nodes in execution order; edges are the sorted global ones, then the sorted local ones.
 struct property_graph {
   std::vector<graph_node> nodes;
   std::vector<graph_edge> edges;
@@ -748,18 +748,26 @@ private:
       prop->traits().update();
   }
 
-  /// Sets the unknowns, reruns the members and gathers the residuals until |R|_inf <= tolerance (a NaN never
+  /// Throws when tolerance or max_iter (max_passes) of a system is unusable (NaN included).
+  static void check_settings(system_stage const& s) {
+    auto const converges{s.declared->own_residual != nullptr};
+    if (!(*s.declared->tolerance >= 0) || *s.declared->max_iter < (converges ? 1 : 0))
+      throw std::invalid_argument(describe(s) + " needs a tolerance >= 0 and " + (converges ? "max_passes >= 1" : "max_iter >= 0"));
+  }
+
+  /// Sets the unknowns, reruns the members and gathers the residuals until |R|_inf <= tolerance (a non-finite residual never
   /// converges); max_iter counts the updates of the unknowns, converges() counts passes.
   void solve(system_stage& s, std::vector<property_base*> const& callbacks) {
     auto const& d{*s.declared};
     auto const limit{d.own_residual ? *d.max_iter - 1 : *d.max_iter};
+    check_settings(s);
     start(s);
     for (int it{0};; ++it) {
       scatter(s, s.x);
       run(callbacks);
       gather(s, s.R);
       auto const norm{s.R.hasNaN() ? std::numeric_limits<value_type>::quiet_NaN() : s.R.template lpNorm<Eigen::Infinity>()};
-      if (norm <= *d.tolerance) {
+      if (std::isfinite(norm) && norm <= *d.tolerance) {
         if (d.report)
           d.report->iterations = it;
         return;
@@ -891,9 +899,11 @@ private:
     return s.declared->own_residual ? "converges(): '" + s.name + "'" : "system '" + s.name + "'";
   }
 
-  /// Per system, by residual order: the members are the callbacks downstream of its unknowns (converges(): of a
-  /// local edge's consumer) and upstream of its residuals. Each system's stage runs after the callbacks it reads,
-  /// before the rest; a system with unknowns shares no member.
+  /// Per system, by residual order. The members of a system with unknowns are the callbacks downstream of its
+  /// unknowns and upstream of its residuals. converges(): the callbacks on a path from the consumer Q of a closed
+  /// local edge P->Q (P downstream of Q, upstream of the residual) to the residual; its group must not share a
+  /// callback with an earlier one (nested loops). Each stage runs after the callbacks it reads, before the rest;
+  /// a system with unknowns shares no member.
   void form_groups(const std::vector<material_interface_type*>& interfaces) {
     m_systems.clear();
     for (auto const* mat : interfaces)
@@ -907,45 +917,91 @@ private:
     std::ranges::stable_sort(m_systems, {}, position);
 
     std::unordered_map<const property_base*, std::vector<const property_base*>> downstream_edges;
-    for (auto const& e : m_edges)
+    std::unordered_map<const property_base*, std::vector<const property_base*>> writers_of;
+    for (auto const& e : m_edges) {
       if (e.kind != edge_kind::local)
         downstream_edges[e.from].push_back(e.to);
-    auto const callbacks{m_property_execution_order | std::views::filter(has_callback) | std::ranges::to<std::vector>()};
-    std::unordered_map<const property_base*, system_stage*> member_of;
-    std::vector<std::pair<system_stage*, std::vector<property_base*>>> groups;
-    for (auto const& owned : m_systems) {
-      auto& s{*owned};
-      auto const& d{*s.declared};
-      auto const converges{d.own_residual != nullptr};
-      if (!(*d.tolerance >= 0) || *d.max_iter < (converges ? 1 : 0))
-        throw std::invalid_argument(describe(s) + " needs a tolerance >= 0 and " + (converges ? "max_passes >= 1" : "max_iter >= 0"));
-      std::unordered_set<const property_base*> upstream;
-      for (auto const* residual : s.residuals)
-        upstream.insert(upstream_of(residual).begin(), upstream_of(residual).end());
-      std::unordered_set<const property_base*> downstream;
-      std::vector<const property_base*> todo;
-      for (auto const* unknown : s.unknowns)
-        todo.push_back(unknown);
-      if (s.unknowns.empty())
-        for (auto const& e : m_edges)
-          if (e.kind == edge_kind::local && upstream.contains(e.to) && downstream.insert(e.to).second)
-            todo.push_back(e.to);
+      if (e.kind == edge_kind::written_by)
+        writers_of[e.to].push_back(e.from);
+    }
+    // the callbacks that fill a property: itself, or its writers
+    auto const callbacks_filling{[&](const property_base* prop) {
+      return has_callback(prop) ? std::vector{prop} : writers_of[prop];
+    }};
+    std::unordered_map<const property_base*, std::unordered_set<const property_base*>> reach_cache;
+    auto const reach{[&](const property_base* from) -> const std::unordered_set<const property_base*>& {
+      if (auto const it{reach_cache.find(from)}; it != reach_cache.end())
+        return it->second;
+      std::unordered_set<const property_base*> seen{from};
+      std::vector<const property_base*> todo{from};
       while (!todo.empty()) {
         auto const* prop{todo.back()};
         todo.pop_back();
         for (auto const* next : downstream_edges[prop])
-          if (downstream.insert(next).second)
+          if (seen.insert(next).second)
             todo.push_back(next);
       }
+      return reach_cache.emplace(from, std::move(seen)).first->second;
+    }};
+    auto const callbacks{m_property_execution_order | std::views::filter(has_callback) | std::ranges::to<std::vector>()};
+    std::unordered_map<const property_base*, system_stage*> member_of;
+    std::vector<std::pair<system_stage*, std::vector<property_base*>>> groups;
+    for (auto const& owned_system : m_systems) {
+      auto& s{*owned_system};
+      auto const converges{s.declared->own_residual != nullptr};
+      auto const loop{s.unknowns.empty()}; // converges(), or picard iterating a local loop
+      check_settings(s);
+      std::unordered_set<const property_base*> upstream;
+      for (auto const* residual : s.residuals)
+        upstream.insert(upstream_of(residual).begin(), upstream_of(residual).end());
+      std::unordered_set<const property_base*> path;
+      std::unordered_set<const system_stage*> owners; // earlier groups whose loops this residual also sees
+      auto const converging_owner{[&](const property_base* prop) {
+        auto const it{member_of.find(prop)};
+        return it != member_of.end() && it->second->unknowns.empty() ? it->second : nullptr;
+      }};
+      if (!loop) {
+        std::vector<const property_base*> todo{s.unknowns.begin(), s.unknowns.end()};
+        while (!todo.empty()) {
+          auto const* prop{todo.back()};
+          todo.pop_back();
+          for (auto const* next : downstream_edges[prop])
+            if (path.insert(next).second)
+              todo.push_back(next);
+        }
+      } else
+        for (auto const& e : m_edges) {
+          if (e.kind != edge_kind::local)
+            continue;
+          auto const producers{callbacks_filling(e.from)};
+          for (auto const* q : callbacks_filling(e.to)) {
+            auto const closing{std::ranges::find_if(producers, [&](auto const* p) { return upstream.contains(p) && reach(q).contains(p); })};
+            if (closing == producers.end())
+              continue;
+            // the callbacks of the loop q ... p
+            auto const body{callbacks | std::views::filter([&](auto const* prop) { return reach(q).contains(prop) && reach(prop).contains(*closing); }) |
+                            std::ranges::to<std::vector<const property_base*>>()};
+            auto const owned{std::ranges::count_if(body, [&](auto const* prop) { return converging_owner(prop) != nullptr; })};
+            if (owned == static_cast<std::ptrdiff_t>(body.size())) { // the loop of an earlier group
+              owners.insert(converging_owner(body.front()));
+              continue;
+            }
+            if (owned != 0) {
+              auto const* other{converging_owner(*std::ranges::find_if(body, [&](auto const* prop) { return converging_owner(prop) != nullptr; }))};
+              throw std::logic_error((converges ? "converges(): the loop " : "system '" + s.name + "': the loop ") + prop_key((*closing)->traits().id) +
+                                     " -> " + prop_key(q->traits().id) + (converges ? " of '" + s.name + "'" : std::string{}) +
+                                     " runs through the iteration group of '" + other->name + "': nested loops are not supported");
+            }
+            path.insert(reach(q).begin(), reach(q).end());
+          }
+        }
       std::vector<property_base*> members;
-      const system_stage* earlier{nullptr};
       for (auto* prop : callbacks) {
-        if (!upstream.contains(prop) || !downstream.contains(prop))
+        if (!upstream.contains(prop) || !path.contains(prop))
           continue;
         if (auto const it{member_of.find(prop)}; it != member_of.end()) {
-          earlier = it->second;
-          if (!s.unknowns.empty() || !earlier->unknowns.empty())
-            throw std::logic_error(describe(s) + ": '" + prop_key(prop->traits().id) + "' is a member of " + describe(*earlier) +
+          if (!s.unknowns.empty() || !it->second->unknowns.empty())
+            throw std::logic_error(describe(s) + ": '" + prop_key(prop->traits().id) + "' is a member of " + describe(*it->second) +
                                    " too; systems are disjoint");
           continue;
         }
@@ -958,9 +1014,12 @@ private:
         members.push_back(prop);
       }
       if (members.empty())
-        throw std::logic_error(!converges ? describe(s) + ": no callback lies between its unknowns and its residuals"
-                               : earlier  ? describe(s) + " iterates no callback outside the group of '" + earlier->name + "': one residual per group"
-                                          : describe(s) + " has no local edge behind it: nothing to iterate");
+        throw std::logic_error(!loop ? describe(s) + ": no callback lies between its unknowns and its residuals"
+                                     : describe(s) + " " +
+                                                (owners.empty() ? std::string{"has no closed local loop behind it: nothing to iterate (a local edge whose producer is "
+                                                                              "downstream of its consumer and upstream of the residual)"}
+                                                                : "iterates no loop outside the group of '" + (*owners.begin())->name +
+                                                                      "': one residual per group"));
       for (auto* prop : members)
         member_of.emplace(prop, &s);
       for (auto const* unknown : s.unknowns)
@@ -1333,7 +1392,7 @@ private:
   std::vector<property_base*> m_property_execution_order;
   std::unordered_map<std::string, property_base*> m_key_to_prop;  // for string-based find
   std::unordered_map<property_base*, std::vector<property_base*>> m_reverse_edges;  // pointer-based
-  std::vector<graph_edge> m_edges;                                               ///< every edge with its kind, local ones too
+  std::vector<graph_edge> m_edges;                                               ///< global edges sorted by key, then local ones sorted by key
   mutable std::unordered_map<const property_base*, std::unordered_set<property_base*>> m_upstream; ///< upstream_of() cache
   std::unordered_set<const property_base*> m_stateful;                           ///< outputs declared stateful()
   std::vector<property_base*> m_history_properties;
