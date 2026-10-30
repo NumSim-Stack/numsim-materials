@@ -17,7 +17,7 @@
 #include "numsim-materials/materials/linear_isotropic_hardening.h"
 #include "numsim-materials/solvers/local_newton.h"
 #include "numsim-materials/umat/calculix_interface.h"
-#include "numsim-materials/umat/external_state_source.h"
+#include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/umat/umat_interface.h"
 
 // umat_ is the reference path; the clx_* symbols are the adapter under test.

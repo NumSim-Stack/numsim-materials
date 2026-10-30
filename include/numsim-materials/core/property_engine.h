@@ -10,9 +10,11 @@
 #include <print>
 #include <queue>
 #include <ranges>
+#include <map>
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -23,6 +25,44 @@
 #include "numsim-materials/core/material_interface.h"
 
 namespace numsim::materials {
+
+/// How an edge entered the graph; local edges are kept but not sorted.
+enum class edge_kind { dependency, input, declared_read, drives, material_ref, callback_order, written_by, local };
+
+constexpr std::string_view to_string(edge_kind kind) noexcept {
+  switch (kind) {
+  case edge_kind::dependency: return "dependency";
+  case edge_kind::input: return "input";
+  case edge_kind::declared_read: return "declared read";
+  case edge_kind::drives: return "drives";
+  case edge_kind::material_ref: return "material_ref";
+  case edge_kind::callback_order: return "callback order";
+  case edge_kind::written_by: return "written_by";
+  case edge_kind::local: return "local";
+  }
+  return "?";
+}
+
+struct graph_edge {
+  const property_base* from;
+  const property_base* to;
+  edge_kind kind;
+};
+
+struct graph_node {
+  const property_base* property;
+  bool history{false};
+  bool constant{false};
+  bool stateful{false};
+  bool routed{false};   ///< filled by its writer's callback
+  bool callback{false}; ///< has a callback of its own
+};
+
+/// The finalized graph: nodes in execution order; edges are the sorted global ones, then the sorted local ones.
+struct property_graph {
+  std::vector<graph_node> nodes;
+  std::vector<graph_edge> edges;
+};
 
 /// Manages the property dependency graph, topological sort, and execution.
 template<typename Traits>
@@ -40,6 +80,9 @@ public:
     std::ranges::for_each(interfaces, &material_interface_type::check_reads);
     auto const writers{collect_writers(interfaces)};
     compute_execution_order(properties, interfaces, writers);
+    m_stateful.clear();
+    for (auto const* mat : interfaces)
+      m_stateful.insert(mat->stateful_outputs().begin(), mat->stateful_outputs().end());
     collect_history_properties(properties);
     find_constants(interfaces, writers);
     if constexpr (NUMSIM_MATERIALS_DEBUG_CHECKS)
@@ -80,7 +123,7 @@ public:
   /// and the running update keeps its state.
   void update_property(const property_base* target,
                        const std::unordered_set<const property_base*>& exclude = {}) {
-    auto const subgraph = collect_upstream(target);
+    auto const& subgraph{upstream_of(target)};
     auto const runs{[&](property_base* prop) { return subgraph.contains(prop) && !exclude.contains(prop); }};
     if (m_running) {
       for (auto* prop : m_callbacks | std::views::filter(runs))
@@ -182,6 +225,15 @@ public:
     return m_execution_order;
   }
 
+  /// Nodes with their flags and every edge with its kind (after build()).
+  property_graph graph() const {
+    property_graph g{{}, m_edges};
+    for (auto const* prop : m_property_execution_order)
+      g.nodes.push_back({prop, prop->is_history(), is_constant(prop), m_stateful.contains(prop), m_routed.contains(prop),
+                         has_callback(prop) && !m_routed.contains(prop)});
+    return g;
+  }
+
   void dump() const {
     std::println(stderr, "=== Property execution order ({} properties) ===",
                  m_property_execution_order.size());
@@ -224,11 +276,15 @@ private:
       }
     }
 
-    auto add_edge = [&](const std::string& from, const std::string& to) {
+    // edges keep the first kind seen; local edges are recorded but take no part in the sort
+    std::map<std::pair<std::string, std::string>, edge_kind> str_kinds;
+    std::map<std::pair<std::string, std::string>, edge_kind> str_local;
+    auto add_edge = [&](const std::string& from, const std::string& to, edge_kind kind) {
       auto& adj = str_edges[from];
       if (!std::ranges::contains(adj, to)) {
         adj.push_back(to);
         str_reverse_edges[to].push_back(from);
+        str_kinds.try_emplace({from, to}, kind);
         indegree[to]++;
       }
     };
@@ -237,11 +293,13 @@ private:
       for (auto& [name, prop] : props) {
         auto this_key = owner + "::" + name;
         for (auto& dep : prop->traits().input_dependencies) {
-          if (dep.kind == EdgeKind::Global) {
-            auto dep_key = dep.id.owner + "::" + dep.id.name;
-            if (key_to_prop.contains(dep_key))
-              add_edge(dep_key, this_key);
-          }
+          auto dep_key = dep.id.owner + "::" + dep.id.name;
+          if (!key_to_prop.contains(dep_key))
+            continue;
+          if (dep.kind == EdgeKind::Global)
+            add_edge(dep_key, this_key, edge_kind::dependency);
+          else
+            str_local.try_emplace({dep_key, this_key}, edge_kind::local);
         }
       }
     }
@@ -251,60 +309,65 @@ private:
       by_name[std::string(mat->name())] = mat;
 
     // global inputs: to the callback declaring the read, to every other output of the material without a declaration
-    auto const add_input_edge{[&](input_wire_base const* input, const property_base* to) {
+    auto const add_input_edge{[&](input_wire_base const* input, const property_base* to, edge_kind kind) {
       auto const src_key{input->source_owner() + "::" + input->source_name()};
       auto const dst_key{prop_key(to->traits().id)};
-      if (input->edge_kind() == EdgeKind::Global && key_to_prop.contains(src_key) && src_key != dst_key)
-        add_edge(src_key, dst_key);
+      if (!key_to_prop.contains(src_key) || src_key == dst_key)
+        return;
+      if (input->edge_kind() == EdgeKind::Global)
+        add_edge(src_key, dst_key, kind);
+      else if (kind == edge_kind::declared_read || kind == edge_kind::input)
+        str_local.try_emplace({src_key, dst_key}, edge_kind::local);
     }};
     for (auto* mat : interfaces) {
       std::unordered_set<const property_base*> declared;
       for (auto const& d : mat->declared_reads()) {
         declared.insert(d.outputs.begin(), d.outputs.end());
         for (auto const* input : d.inputs)
-          add_input_edge(input, d.callback);
+          add_input_edge(input, d.callback, edge_kind::declared_read);
       }
       for (auto* prop : mat->get_property_registry().produced_properties())
         if (!declared.contains(prop))
           for (auto const& input : mat->typed_inputs())
-            add_input_edge(input.get(), prop);
+            add_input_edge(input.get(), prop, edge_kind::input);
     }
 
     // dependencies outside the inputs: what a driven callback reads globally, and the material behind a
     // material_ref; reads of the material's own outputs order nothing there (it fills them itself)
-    auto const add_outside_edge{[&](const material_interface_type& mat, input_wire_base const* input, const property_base* to) {
+    auto const add_outside_edge{[&](const material_interface_type& mat, input_wire_base const* input, const property_base* to,
+                                     edge_kind kind) {
       if (input->source_owner() != mat.name())
-        add_input_edge(input, to);
+        add_input_edge(input, to, kind);
     }};
     for (auto* mat : interfaces)
       for (auto const& d : mat->declared_reads())
         for (auto const* driven : d.drives)
           if (auto const it{by_name.find(driven->source_owner())}; it != by_name.end())
             for (auto const* read : reads_of(*it->second, driven->source_name()))
-              add_outside_edge(*mat, read, d.callback);
+              add_outside_edge(*mat, read, d.callback, edge_kind::drives);
     for (auto* mat : interfaces)
       for (auto const& target_name : mat->material_ref_targets())
         if (auto const it{by_name.find(target_name)}; it != by_name.end()) {
           auto const& target{*it->second};
           for (auto const* callback : callbacks_of(*mat)) {
             for (auto const& input : target.typed_inputs())
-              add_outside_edge(*mat, input.get(), callback); // what the target reads, the referencing callbacks read
+              add_outside_edge(*mat, input.get(), callback, edge_kind::material_ref); // what the target reads, the referencing callbacks read
             auto const reads{reads_of(*mat, callback->traits().id.name)};
             for (auto const* out : bare_outputs(target)) // filled by the referencing callbacks, unless one reads it
               if (std::ranges::none_of(reads, [&](auto const* read) {
                     return read->source_owner() == target.name() && read->source_name() == out->traits().id.name;
                   }))
-                add_edge(prop_key(callback->traits().id), prop_key(out->traits().id));
+                add_edge(prop_key(callback->traits().id), prop_key(out->traits().id), edge_kind::material_ref);
           }
         }
 
     // within a material: declared callback order, and an output without a callback after its writers
     for (auto* mat : interfaces) {
       for (auto const& [earlier, later] : mat->callback_order())
-        add_edge(prop_key(earlier->traits().id), prop_key(later->traits().id));
+        add_edge(prop_key(earlier->traits().id), prop_key(later->traits().id), edge_kind::callback_order);
       for (auto const& [output, by] : writers.at(mat))
         for (auto const* writer : by)
-          add_edge(prop_key(writer->traits().id), prop_key(output->traits().id));
+          add_edge(prop_key(writer->traits().id), prop_key(output->traits().id), edge_kind::written_by);
     }
 
     // --- Topological sort, ties broken by creation order, then key: the order does not depend on hashing ---
@@ -340,9 +403,12 @@ private:
           ready.insert(rank(next));
     }
 
-    if (m_property_execution_order.size() != key_to_prop.size())
-      throw std::runtime_error("Circular dependency in property graph "
-                               "(global edges, reads, runs_after and written_by)");
+    if (m_property_execution_order.size() != key_to_prop.size()) {
+      std::set<std::string> left;
+      for (auto const& [key, deg] : indegree)
+        if (deg > 0) left.insert(key);
+      throw std::runtime_error("Circular dependency in property graph: " + describe_cycle(find_cycle(left, str_edges), str_kinds));
+    }
 
     // --- Convert to pointer-based structures for runtime ---
     m_key_to_prop = std::move(key_to_prop);
@@ -353,6 +419,53 @@ private:
       for (auto& up_key : upstreams)
         ptr_upstreams.push_back(m_key_to_prop[up_key]);
     }
+    m_upstream.clear();
+    m_edges.clear();
+    for (auto const* kinds : {&str_kinds, &str_local})
+      for (auto const& [ends, kind] : *kinds)
+        m_edges.push_back({m_key_to_prop.at(ends.first), m_key_to_prop.at(ends.second), kind});
+  }
+
+  /// One cycle among the nodes the sort could not place (each lies on a cycle or behind one), starting at its smallest key.
+  static std::vector<std::string> find_cycle(std::set<std::string> const& left,
+                                             std::unordered_map<std::string, std::vector<std::string>> const& edges) {
+    std::unordered_map<std::string, int> state; // 1: on the path, 2: done
+    std::vector<std::string> path;
+    std::vector<std::string> cycle;
+    auto const visit{[&](auto const& self, std::string const& key) -> bool {
+      state[key] = 1;
+      path.push_back(key);
+      for (auto const& next : edges.at(key)) {
+        if (!left.contains(next) || state[next] == 2)
+          continue;
+        if (state[next] == 1) {
+          cycle.assign(std::ranges::find(path, next), path.end());
+          return true;
+        }
+        if (self(self, next))
+          return true;
+      }
+      state[key] = 2;
+      path.pop_back();
+      return false;
+    }};
+    for (auto const& key : left)
+      if (state[key] == 0 && visit(visit, key))
+        break;
+    std::ranges::rotate(cycle, std::ranges::min_element(cycle));
+    return cycle;
+  }
+
+  static std::string describe_cycle(std::vector<std::string> const& cycle,
+                                    std::map<std::pair<std::string, std::string>, edge_kind> const& kinds) {
+    std::string out{cycle.empty() ? std::string{} : cycle.front()};
+    for (std::size_t i{0}; i < cycle.size(); ++i) {
+      auto const& to{cycle[(i + 1) % cycle.size()]};
+      out += " -[" + std::string{to_string(kinds.at({cycle[i], to}))} + "]-> " + to;
+    }
+    if (out.contains(to_string(edge_kind::callback_order)))
+      out += " (callback order: runs_after() or a read of the material's own output)";
+    return out;
   }
 
   /// The inputs behind the callback that fills material::property: its declared reads, else every input.
@@ -558,6 +671,13 @@ private:
   }
   std::unordered_set<const property_base*> m_routed; ///< outputs whose update reruns their writer
 
+  /// The upstream set of a property, computed once per finalize().
+  const std::unordered_set<property_base*>& upstream_of(const property_base* target) const {
+    if (auto const it{m_upstream.find(target)}; it != m_upstream.end())
+      return it->second;
+    return m_upstream.emplace(target, collect_upstream(target)).first->second;
+  }
+
   /// Collect all upstream dependencies of a property (pointer-based, no string allocation).
   std::unordered_set<property_base*> collect_upstream(const property_base* target) const {
     std::unordered_set<property_base*> result;
@@ -586,6 +706,9 @@ private:
   std::vector<property_base*> m_property_execution_order;
   std::unordered_map<std::string, property_base*> m_key_to_prop;  // for string-based find
   std::unordered_map<property_base*, std::vector<property_base*>> m_reverse_edges;  // pointer-based
+  std::vector<graph_edge> m_edges;                                               ///< global edges sorted by key, then local ones sorted by key
+  mutable std::unordered_map<const property_base*, std::unordered_set<property_base*>> m_upstream; ///< upstream_of() cache
+  std::unordered_set<const property_base*> m_stateful;                           ///< outputs declared stateful()
   std::vector<property_base*> m_history_properties;
   using declaration = typename material_interface_type::constant_declaration;
   std::unordered_set<const property_base*> m_constant;

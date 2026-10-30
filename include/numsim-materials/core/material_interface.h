@@ -238,6 +238,8 @@ public:
   const auto& written_outputs() const noexcept { return m_written_by; }
   /// (earlier, later): callbacks of this material in the order they must run.
   const auto& callback_order() const noexcept { return m_callback_order; }
+  /// The outputs declared stateful().
+  const auto& stateful_outputs() const noexcept { return m_stateful; }
 
   /// Throws when an output read by a callback of this material has no writer; at finalize(), when all are bound.
   void check_reads() const {

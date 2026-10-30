@@ -7,16 +7,19 @@ on:
 
 jobs:
   build-and-test:
-    name: build-and-test (${{ matrix.cxx }}${{ matrix.build_type == '' && ', no build type' || '' }})
+    name: build-and-test (${{ matrix.cxx }}${{ matrix.asan && ', asan' || '' }}${{ matrix.build_type == '' && ', no build type' || '' }})
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         cxx: [g++-14, clang++-19]
+        # The sanitizer executables build in their own job, in parallel with the plain one.
+        asan: [false, true]
         build_type: [Release]
         include:
           # No build type: the tests compile at -O1, so its -Werror warnings are covered.
           - cxx: clang++-19
+            asan: false
             build_type: ""
 
     steps:
@@ -40,14 +43,15 @@ jobs:
           -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
           -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
           -DNUMSIM_MATERIALS_BUILD_TESTS=ON \
-          -DNUMSIM_MATERIALS_BUILD_REPORTS=ON \
-          -DNUMSIM_MATERIALS_REPORT_TESTS=ON \
+          -DNUMSIM_SANITIZER_TESTS=${{ matrix.asan && 'ON' || 'OFF' }} \
+          -DNUMSIM_MATERIALS_BUILD_REPORTS=${{ matrix.asan && 'OFF' || 'ON' }} \
+          -DNUMSIM_MATERIALS_REPORT_TESTS=${{ matrix.asan && 'OFF' || 'ON' }} \
           -DNUMSIM_MATERIALS_BUILD_EXAMPLES=OFF \
           -DNUMSIM_MATERIALS_ENABLE_PLOTTING=OFF \
           -DNUMSIM_MATERIALS_DEBUG_CHECKS=ON
 
     - name: Build
-      run: cmake --build build -j$(nproc)
+      run: cmake --build build -j$(nproc) ${{ matrix.asan && '--target numsim_materials_asan_tests' || '' }}
 
     - name: Test
-      run: cd build && ctest --output-on-failure
+      run: cd build && ctest --output-on-failure -j$(nproc) ${{ matrix.asan && '-R _asan$' || '' }}

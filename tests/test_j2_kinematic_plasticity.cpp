@@ -14,7 +14,8 @@
 #include "numsim-materials/materials/j2_kinematic_plasticity.h"
 #include "numsim-materials/materials/linear_isotropic_hardening.h"
 #include "numsim-materials/solvers/vector_newton.h"
-#include "numsim-materials/umat/external_state_source.h"
+#include "numsim-materials/driver/external_state_source.h"
+#include "numsim-materials/umat/errors.h"
 
 namespace {
 
@@ -58,12 +59,14 @@ t2 strain_b() {
 
 struct rig {
   static constexpr T K = 166.67, G = 76.92, sigma_0 = 1.0, H_iso = 5.0, C = 30.0;
+  T H_mod;
 
   ctx_type ctx;
   nm::external_strain_source<policy>* src{};
   nm::vector_newton<policy>* solver{};
 
-  explicit rig(T gamma, int max_iter = 50, bool graph_driven = false) {
+  explicit rig(T gamma, int max_iter = 50, bool graph_driven = false, T hardening = H_iso)
+      : H_mod(hardening) {
     param_type p;
     p.insert<std::string>("name", "stepper");
     src = &ctx.create<nm::external_strain_source<policy>>(p);
@@ -83,7 +86,7 @@ struct rig {
     p.clear();
     p.insert<std::string>("name", "hardening");
     p.insert<std::string>("source", "kin");
-    p.insert<T>("K", H_iso);
+    p.insert<T>("K", H_mod);
     ctx.create<nm::linear_isotropic_hardening<policy>>(p);
 
     p.clear();
@@ -252,6 +255,28 @@ TEST(J2Kinematic, AnElasticStepDoesNotRunTheSolver) {
 TEST(J2Kinematic, RejectsAGraphDrivenSolver) {
   rig r(40.0, 50, /*graph_driven=*/true);
   expect_throw_saying([&] { r.step(t2{0.1 * strain_a()}); }, "graph_driven = false");
+}
+
+/// A failed return map is retryable at a smaller step; a misconfigured solver is not.
+TEST(J2Kinematic, ANonConvergedReturnMapAsksForASmallerStep) {
+  rig af(40.0, /*max_iter=*/1);
+  EXPECT_THROW(af.step(strain_a()), nm::umat::cutback_error);
+}
+
+TEST(J2Kinematic, ANegativeMultiplierAsksForASmallerStep) {
+  rig soft(0.0, 50, false, /*H_iso=*/-1000.0);
+  EXPECT_THROW(soft.step(strain_a()), nm::umat::cutback_error);
+}
+
+TEST(J2Kinematic, AGraphDrivenSolverIsAConfigurationErrorNotACutback) {
+  rig r(40.0, 50, /*graph_driven=*/true);
+  try {
+    r.step(t2{0.1 * strain_a()});
+    FAIL() << "a graph-driven solver was accepted";
+  } catch (const nm::umat::cutback_error& e) {
+    FAIL() << "retrying a smaller step cannot fix the configuration: " << e.what();
+  } catch (const std::runtime_error&) {
+  }
 }
 
 /// Jacobian blocks against central differences of the residual, as directional

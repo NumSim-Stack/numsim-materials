@@ -5,7 +5,7 @@
 #include "numsim-materials/driver/material_point_driver.h"
 #include "numsim-materials/materials/incremental_linear_elasticity.h"
 #include "numsim-materials/materials/linear_elasticity.h"
-#include "numsim-materials/umat/external_state_source.h"
+#include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/umat/json_model.h"
 #include "numsim-materials/umat/material_point_evaluator.h"
 
