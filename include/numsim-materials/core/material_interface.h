@@ -23,6 +23,7 @@
 #include "numsim-materials/core/property_traits.h"
 #include "numsim-materials/core/property.h"
 #include "numsim-materials/core/history_property.h"
+#include "numsim-materials/core/history_kind.h"
 #include "numsim-materials/core/input_types.h"
 #include "numsim-materials/core/property_registry_interface.h"
 #include "numsim-materials/core/material_ref.h"
@@ -290,6 +291,28 @@ protected:
     return value;
   }
 
+  /// A vector or rank-2 history a host stores and rotates as `kind` says; without a kind, default_history_kind.
+  template <typename T>
+  history_property<T>& add_history(std::string const& property_name, T&& data, history_kind kind) {
+    if (!kind.valid_for(history_kind_rank<std::remove_cvref_t<T>>))
+      throw std::logic_error("add_history(): '" + m_name + "::" + property_name + "' cannot take the history kind " +
+                             to_string(kind) + " (a vector takes full storage, six slots a rank-2 tensor with both legs alike)");
+    auto& value{add_history<T>(property_name, std::forward<T>(data))};
+    m_history_kinds.emplace_back(*m_property_handler.find(name(), property_name), kind);
+    return value;
+  }
+
+public:
+  /// The kind `history` was declared with; empty when declared without one or not a history of this material.
+  std::optional<history_kind> history_kind_of(property_base_type const* history) const {
+    auto const it{std::ranges::find(m_history_kinds, history, &decltype(m_history_kinds)::value_type::first)};
+    return it == m_history_kinds.end() ? std::nullopt : std::optional{it->second};
+  }
+
+private:
+  std::vector<std::pair<property_base_type const*, history_kind>> m_history_kinds;
+
+protected:
   template <typename T>
   input_property<T, property_traits>& add_input(
       std::string source_material, std::string source_property,

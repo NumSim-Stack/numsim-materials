@@ -86,6 +86,12 @@ protected:
     return base::template add_history<T>(property_name, std::move(initial));
   }
 
+  /// As above, stored and rotated by a host as `kind` says (core/history_kind.h).
+  template<typename T>
+  history_property<T>& add_history_output(std::string const& property_name, history_kind kind, T initial = T{}) {
+    return base::template add_history<T>(property_name, std::move(initial), kind);
+  }
+
   template<typename T>
   [[deprecated("bind the callback with add_callback(&callback, output).reads(...)")]]
   T& add_output(std::string const& property_name, void (Derived::*callback)()) {

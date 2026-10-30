@@ -1,19 +1,19 @@
 #include <gtest/gtest.h>
 #include <cmath>
 #include <numbers>
+#include <stdexcept>
 #include <string>
-#include <type_traits>
 #include <vector>
 #include <tmech/tmech.h>
+#include "numsim-materials/core/history_kind.h"
 #include "numsim-materials/core/material_context.h"
-#include "numsim-materials/core/stress_like.h"
-#include "numsim-materials/core/tensor_kind.h"
 #include "numsim-materials/umat/statev_map.h"
 
 namespace {
 
 namespace nm = numsim::materials;
 namespace u = numsim::materials::umat;
+namespace kinds = numsim::materials::history_kinds;
 
 using policy = nm::material_policy_default;
 using T = policy::value_type;
@@ -23,34 +23,36 @@ using tensor1 = tmech::tensor<T, 3, 1>;
 using tensor2 = tmech::tensor<T, 3, 2>;
 using map_type = u::statev_map<policy>;
 
-/// One history output of every kind; names sort in declaration order.
+/// One plain-tensor history output of every kind; names sort in declaration order.
 template <typename Traits>
 class frame_probe final : public nm::material_base<frame_probe<Traits>, Traits> {
 public:
   using base = nm::material_base<frame_probe<Traits>, Traits>;
   using value_type = typename base::value_type;
   using input_parameter_controller = typename base::input_parameter_controller;
+  using vector_type = tmech::tensor<value_type, 3, 1>;
+  using tensor_type = tmech::tensor<value_type, 3, 2>;
 
   template <typename... Args>
   explicit frame_probe(Args&&... args)
       : base(std::forward<Args>(args)...),
-        a_ref(base::template add_history_output<nm::reference_strain<value_type>>("a_ref")),
-        b_mvec(base::template add_history_output<nm::material_vector<value_type>>("b_mvec")),
-        c_strain(base::template add_history_output<tmech::tensor<value_type, 3, 2>>("c_strain")),
-        d_svec(base::template add_history_output<nm::spatial_vector<value_type>>("d_svec")),
-        e_fe(base::template add_history_output<nm::two_point<value_type>>("e_fe")),
-        f_fp(base::template add_history_output<nm::material_tensor<value_type>>("f_fp")),
-        g_moduli(base::template add_history_output<nm::spatial_moduli<value_type>>("g_moduli")) {}
+        a_ref(base::template add_history_output<tensor_type>("a_ref", kinds::reference_strain)),
+        b_mvec(base::template add_history_output<vector_type>("b_mvec", kinds::material_vector)),
+        c_strain(base::template add_history_output<tensor_type>("c_strain")),
+        d_svec(base::template add_history_output<vector_type>("d_svec", kinds::spatial_vector)),
+        e_fe(base::template add_history_output<tensor_type>("e_fe", kinds::two_point)),
+        f_fp(base::template add_history_output<tensor_type>("f_fp", kinds::material_tensor)),
+        g_moduli(base::template add_history_output<tensor_type>("g_moduli", kinds::spatial_moduli)) {}
 
   static input_parameter_controller parameters() { return base::parameters(); }
 
-  nm::history_property<nm::reference_strain<value_type>>& a_ref;
-  nm::history_property<nm::material_vector<value_type>>& b_mvec;
-  nm::history_property<tmech::tensor<value_type, 3, 2>>& c_strain;
-  nm::history_property<nm::spatial_vector<value_type>>& d_svec;
-  nm::history_property<nm::two_point<value_type>>& e_fe;
-  nm::history_property<nm::material_tensor<value_type>>& f_fp;
-  nm::history_property<nm::spatial_moduli<value_type>>& g_moduli;
+  nm::history_property<tensor_type>& a_ref;
+  nm::history_property<vector_type>& b_mvec;
+  nm::history_property<tensor_type>& c_strain;
+  nm::history_property<vector_type>& d_svec;
+  nm::history_property<tensor_type>& e_fe;
+  nm::history_property<tensor_type>& f_fp;
+  nm::history_property<tensor_type>& g_moduli;
 };
 
 /// Only material-leg and scalar history: nothing a rotation acts on.
@@ -60,23 +62,92 @@ public:
   using base = nm::material_base<material_frame_probe<Traits>, Traits>;
   using value_type = typename base::value_type;
   using input_parameter_controller = typename base::input_parameter_controller;
+  using vector_type = tmech::tensor<value_type, 3, 1>;
+  using tensor_type = tmech::tensor<value_type, 3, 2>;
 
   template <typename... Args>
   explicit material_frame_probe(Args&&... args)
       : base(std::forward<Args>(args)...),
         damage(base::template add_history_output<value_type>("damage")),
-        fp(base::template add_history_output<nm::material_tensor<value_type>>("fp")),
-        moduli(base::template add_history_output<nm::material_moduli<value_type>>("moduli")),
-        mvec(base::template add_history_output<nm::material_vector<value_type>>("mvec")),
-        ref(base::template add_history_output<nm::reference_strain<value_type>>("ref")) {}
+        fp(base::template add_history_output<tensor_type>("fp", kinds::material_tensor)),
+        moduli(base::template add_history_output<tensor_type>("moduli", kinds::material_moduli)),
+        mvec(base::template add_history_output<vector_type>("mvec", kinds::material_vector)),
+        ref(base::template add_history_output<tensor_type>("ref", kinds::reference_strain)) {}
 
   static input_parameter_controller parameters() { return base::parameters(); }
 
   nm::history_property<value_type>& damage;
-  nm::history_property<nm::material_tensor<value_type>>& fp;
-  nm::history_property<nm::material_moduli<value_type>>& moduli;
-  nm::history_property<nm::material_vector<value_type>>& mvec;
-  nm::history_property<nm::reference_strain<value_type>>& ref;
+  nm::history_property<tensor_type>& fp;
+  nm::history_property<tensor_type>& moduli;
+  nm::history_property<vector_type>& mvec;
+  nm::history_property<tensor_type>& ref;
+};
+
+/// A rank-2 tensor and a vector history declared without a kind.
+template <typename Traits>
+class default_kind_probe final : public nm::material_base<default_kind_probe<Traits>, Traits> {
+public:
+  using base = nm::material_base<default_kind_probe<Traits>, Traits>;
+  using value_type = typename base::value_type;
+  using input_parameter_controller = typename base::input_parameter_controller;
+
+  template <typename... Args>
+  explicit default_kind_probe(Args&&... args)
+      : base(std::forward<Args>(args)...),
+        strain(base::template add_history_output<tmech::tensor<value_type, 3, 2>>("strain")),
+        vec(base::template add_history_output<tmech::tensor<value_type, 3, 1>>("vec")) {}
+
+  static input_parameter_controller parameters() { return base::parameters(); }
+
+  nm::history_property<tmech::tensor<value_type, 3, 2>>& strain;
+  nm::history_property<tmech::tensor<value_type, 3, 1>>& vec;
+};
+
+/// Declares a history with a kind its value cannot take: 0 engineering vector, 1 plain two-point, 2 scalar.
+template <typename Traits, int Case>
+class invalid_kind_probe final : public nm::material_base<invalid_kind_probe<Traits, Case>, Traits> {
+public:
+  using base = nm::material_base<invalid_kind_probe<Traits, Case>, Traits>;
+  using value_type = typename base::value_type;
+  using input_parameter_controller = typename base::input_parameter_controller;
+
+  template <typename... Args>
+  explicit invalid_kind_probe(Args&&... args) : base(std::forward<Args>(args)...) {
+    if constexpr (Case == 0)
+      base::template add_history_output<tmech::tensor<value_type, 3, 1>>("v", kinds::strain);
+    else if constexpr (Case == 1)
+      base::template add_history_output<tmech::tensor<value_type, 3, 2>>(
+          "fe", nm::history_kind{nm::storage::plain, {nm::leg::spatial, nm::leg::material}});
+    else
+      base::template add_history_output<value_type>("d", kinds::stress_like);
+  }
+
+  static input_parameter_controller parameters() { return base::parameters(); }
+};
+
+/// Reads probe::a_ref, a reference_strain history, through a plain tensor input.
+template <typename Traits>
+class reference_reader final : public nm::material_base<reference_reader<Traits>, Traits> {
+public:
+  using base = nm::material_base<reference_reader<Traits>, Traits>;
+  using value_type = typename base::value_type;
+  using input_parameter_controller = typename base::input_parameter_controller;
+  using tensor_type = tmech::tensor<value_type, 3, 2>;
+
+  template <typename... Args>
+  explicit reference_reader(Args&&... args)
+      : base(std::forward<Args>(args)...),
+        ref(base::template add_input<tensor_type>("probe", "a_ref")),
+        copy(base::template add_output<tensor_type>("copy")) {
+    base::add_callback(&reference_reader::compute, copy).reads(ref);
+  }
+
+  static input_parameter_controller parameters() { return base::parameters(); }
+
+  void compute() { copy = ref.get(); }
+
+  nm::input_property<tensor_type, nm::property_traits> const& ref;
+  tensor_type& copy;
 };
 
 tensor2 rotation_z(T degrees) {
@@ -139,42 +210,123 @@ void set_history(H& h, V const& v) {
   h.new_value() = v;
 }
 
+/// The logic_error creating @p Probe throws, or a note that it threw none.
+template <typename Probe>
+std::string declaration_error() {
+  ctx_type ctx;
+  param_type p;
+  p.insert<std::string>("name", "probe");
+  try {
+    ctx.template create<Probe>(p);
+  } catch (std::logic_error const& e) {
+    return e.what();
+  }
+  return "no logic_error";
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
 // The kind itself
 // ---------------------------------------------------------------------------
 
-TEST(TensorKind, StressLikeIsTheSpatialPlainKind) {
-  static_assert(std::is_same_v<nm::stress_like<T>,
-                               nm::kinded<T, nm::voigt::plain, nm::leg::spatial, nm::leg::spatial>>);
-  static_assert(std::is_base_of_v<tensor2, nm::two_point<T>>);
-  static_assert(std::is_base_of_v<tensor1, nm::spatial_vector<T>>);
-  nm::stress_like<T> s = symmetric_sample();
-  EXPECT_EQ(distance<2>(s, symmetric_sample()), 0.0);
-}
-
-TEST(TensorKind, RotatedActsOnEachSpatialLegOnly) {
+TEST(HistoryKind, RotatedActsOnEachSpatialLegOnly) {
+  using nm::leg;
+  const auto full = [](leg first, leg second) { return nm::history_kind{nm::storage::full, {first, second}}; };
   const auto R = rotation_z(30.0);
-  const auto S = symmetric_sample();
   const auto F = non_symmetric_sample();
   const auto v = vector_sample();
 
   tensor1 Rv;
   Rv = R * v;
-  tensor2 RSRt, RF, FRt;
-  RSRt = R * S * tmech::trans(R);
+  tensor2 RFRt, RF, FRt;
+  RFRt = R * F * tmech::trans(R);
   RF = R * F;
   FRt = F * tmech::trans(R);
 
-  EXPECT_LT(distance<1>(nm::rotated(nm::spatial_vector<T>{v}, R), Rv), 1e-14);
-  EXPECT_EQ(distance<1>(nm::rotated(nm::material_vector<T>{v}, R), v), 0.0);
-  EXPECT_LT(distance<2>(nm::rotated(nm::stress_like<T>{S}, R), RSRt), 1e-14);
-  EXPECT_EQ(distance<2>(nm::rotated(nm::reference_strain<T>{S}, R), S), 0.0);
-  EXPECT_LT(distance<2>(nm::rotated(nm::two_point<T>{F}, R), RF), 1e-14);
-  using material_spatial = nm::kinded<T, nm::voigt::none, nm::leg::material, nm::leg::spatial>;
-  EXPECT_LT(distance<2>(nm::rotated(material_spatial{F}, R), FRt), 1e-14);
-  EXPECT_EQ(distance<2>(nm::rotated(nm::material_tensor<T>{F}, R), F), 0.0);
+  // A vector uses the first leg only.
+  EXPECT_LT(distance<1>(full(leg::spatial, leg::material).rotated(v, R), Rv), 1e-14);
+  EXPECT_EQ(distance<1>(full(leg::material, leg::spatial).rotated(v, R), v), 0.0);
+  EXPECT_LT(distance<2>(full(leg::spatial, leg::spatial).rotated(F, R), RFRt), 1e-14);
+  EXPECT_LT(distance<2>(full(leg::spatial, leg::material).rotated(F, R), RF), 1e-14);
+  EXPECT_LT(distance<2>(full(leg::material, leg::spatial).rotated(F, R), FRt), 1e-14);
+  EXPECT_EQ(distance<2>(full(leg::material, leg::material).rotated(F, R), F), 0.0);
+  EXPECT_GT(distance<2>(RF, F), 0.1) << "the rotation must be observable";
+}
+
+TEST(HistoryKind, ValidForAndRotatesFollowTheLegsARankUses) {
+  using nm::leg;
+  using nm::storage;
+  constexpr nm::history_kind full_ms{storage::full, {leg::material, leg::spatial}};
+  constexpr nm::history_kind plain_sm{storage::plain, {leg::spatial, leg::material}};
+  constexpr nm::history_kind engineering_ms{storage::engineering, {leg::material, leg::spatial}};
+  static_assert(kinds::strain.valid_for(2) && !kinds::strain.valid_for(1));
+
+  // A vector: all components only.
+  EXPECT_TRUE(kinds::spatial_vector.valid_for(1));
+  EXPECT_TRUE(kinds::material_vector.valid_for(1));
+  EXPECT_FALSE(kinds::strain.valid_for(1));
+  EXPECT_FALSE(kinds::stress_like.valid_for(1));
+  // A rank-2 tensor: six slots need both legs alike.
+  EXPECT_TRUE(kinds::strain.valid_for(2));
+  EXPECT_TRUE(kinds::reference_strain.valid_for(2));
+  EXPECT_TRUE(kinds::material_moduli.valid_for(2));
+  EXPECT_TRUE(kinds::two_point.valid_for(2));
+  EXPECT_TRUE(full_ms.valid_for(2));
+  EXPECT_FALSE(plain_sm.valid_for(2));
+  EXPECT_FALSE(engineering_ms.valid_for(2));
+  // Nothing else takes a kind.
+  EXPECT_FALSE(kinds::two_point.valid_for(0));
+  EXPECT_FALSE(kinds::two_point.valid_for(4));
+
+  EXPECT_TRUE(kinds::strain.rotates(2));
+  EXPECT_TRUE(kinds::two_point.rotates(2));
+  EXPECT_TRUE(full_ms.rotates(2));
+  EXPECT_FALSE(kinds::reference_strain.rotates(2));
+  EXPECT_FALSE(kinds::material_tensor.rotates(2));
+  EXPECT_TRUE(kinds::spatial_vector.rotates(1));
+  EXPECT_FALSE(kinds::material_vector.rotates(1));
+  EXPECT_FALSE(full_ms.rotates(1)) << "a vector uses the first leg only";
+}
+
+TEST(HistoryKind, NamedKindsAndDefaults) {
+  EXPECT_EQ(kinds::spatial_moduli, kinds::stress_like);
+  EXPECT_EQ(kinds::stress_like.store, nm::storage::plain);
+  EXPECT_EQ(kinds::reference_strain.store, nm::storage::engineering);
+  EXPECT_EQ(kinds::two_point.legs[1], nm::leg::material);
+  EXPECT_EQ(nm::default_history_kind<tensor2>, kinds::strain);
+  EXPECT_EQ(nm::default_history_kind<tensor1>, kinds::spatial_vector);
+  EXPECT_FALSE(nm::default_history_kind<T>.has_value());
+  EXPECT_FALSE((nm::default_history_kind<tmech::tensor<T, 3, 4>>.has_value()));
+}
+
+TEST(HistoryKind, AnInvalidKindThrowsWhenTheHistoryIsDeclared) {
+  const auto vector_error = declaration_error<invalid_kind_probe<policy, 0>>();
+  EXPECT_NE(vector_error.find("probe::v"), std::string::npos) << vector_error;
+  EXPECT_NE(vector_error.find("engineering"), std::string::npos) << vector_error;
+
+  const auto two_point_error = declaration_error<invalid_kind_probe<policy, 1>>();
+  EXPECT_NE(two_point_error.find("probe::fe"), std::string::npos) << two_point_error;
+  EXPECT_NE(two_point_error.find("plain"), std::string::npos) << two_point_error;
+
+  const auto scalar_error = declaration_error<invalid_kind_probe<policy, 2>>();
+  EXPECT_NE(scalar_error.find("probe::d"), std::string::npos) << scalar_error;
+}
+
+/// The kind lives at the declaration, so a consumer reads the history as the plain tensor it is.
+TEST(HistoryKind, AConsumerReadsAReferenceStrainThroughAPlainTensorInput) {
+  ctx_type ctx;
+  param_type p;
+  p.insert<std::string>("name", "probe");
+  auto& probe = ctx.create<frame_probe<policy>>(p);
+  param_type q;
+  q.insert<std::string>("name", "reader");
+  auto& reader = ctx.create<reference_reader<policy>>(q);
+  ASSERT_NO_THROW(ctx.finalize());
+
+  probe.a_ref.new_value() = symmetric_sample();
+  ctx.update();
+  EXPECT_EQ(distance<2>(reader.copy, symmetric_sample()), 0.0);
 }
 
 // ---------------------------------------------------------------------------
@@ -329,4 +481,31 @@ TEST(StatevMapKinds, MaterialAndScalarHistoryIsNotRotatable) {
   map.rotate_history(rotation_z(30.0));
   EXPECT_EQ(distance<2>(p.fp.new_value(), F), 0.0);
   EXPECT_NE(map.describe()[2].find("[stress] [reference]"), std::string::npos) << map.describe()[2];
+}
+
+TEST(StatevMapKinds, HistoryWithoutAKindIsASpatialStrainOrASpatialVector) {
+  probe_fixture<default_kind_probe<policy>> f;
+  auto& p = *f.probe;
+  const map_type map(f.ctx, {});
+  const std::vector<std::string> expected{"0..5  probe::strain  [engineering shear]", "6..8  probe::vec  [vector]"};
+  EXPECT_EQ(map.describe(), expected);
+  ASSERT_TRUE(map.has_rotatable_history());
+
+  const auto R = rotation_z(30.0);
+  const auto S = symmetric_sample();
+  const auto v = vector_sample();
+  set_history(p.strain, S);
+  set_history(p.vec, v);
+  map.rotate_history(R);
+  tensor1 Rv;
+  Rv = R * v;
+  tensor2 RSRt;
+  RSRt = R * S * tmech::trans(R);
+  EXPECT_LT(distance<2>(p.strain.old_value(), RSRt), 1e-14);
+  EXPECT_LT(distance<1>(p.vec.new_value(), Rv), 1e-14);
+
+  std::vector<T> statev(map.nstatv(), 0.0);
+  map.pack(statev.data());
+  EXPECT_DOUBLE_EQ(statev[3], 2.0 * RSRt(0, 1));
+  EXPECT_DOUBLE_EQ(statev[6 + 2], Rv(2));
 }
