@@ -2,18 +2,16 @@
 #define STATEV_MAP_H
 
 #include <algorithm>
-#include <cmath>
 #include <cstddef>
-#include <functional>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include <tmech/tmech.h>
+#include "numsim-materials/core/history_slot.h"
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/umat/errors.h"
-#include "numsim-materials/core/stress_like.h"
 #include "numsim-materials/umat/tensor_conversion.h"
 
 /// Flat STATEV <-> the context's history properties.
@@ -37,10 +35,8 @@ namespace numsim::materials::umat {
 /// seeded through *INITIAL CONDITIONS, TYPE=SOLUTION, would otherwise be out by
 /// a factor of two in shear, silently.
 ///
-/// Note this assumes tensor-valued history is STRAIN-like, which is true of
-/// every state variable the framework currently carries. A stress-like tensor
-/// state variable (a back stress, say) would want the unscaled convention, and
-/// would need this decision made per property rather than globally.
+/// Each history is stored and rotated by the codec it was declared with
+/// (core/history_codec.h), else by its value type's default_codec.
 ///
 /// One `(material, property)` pair the host owns and STATEV must NOT contain.
 using statev_exclusion = std::pair<std::string, std::string>;
@@ -50,11 +46,6 @@ class statev_map {
 public:
   using value_type = typename Traits::value_type;
   using tensor2 = tmech::tensor<value_type, 3, 2>;
-  using tensor4 = tmech::tensor<value_type, 3, 4>;
-  using hist_scalar = numsim_core::history_property<value_type, property_traits>;
-  using hist_tensor2 = numsim_core::history_property<tensor2, property_traits>;
-  using hist_stress2 = numsim_core::history_property<stress_like<value_type>, property_traits>;
-  using hist_tensor4 = numsim_core::history_property<tensor4, property_traits>;
 
   /// Build the map over every history property in @p ctx except those named in
   /// @p exclusions.
@@ -106,7 +97,7 @@ public:
                                             : ia.name < ib.name;
               });
 
-    for (auto* prop : history) add_entry(prop);
+    for (auto* prop : history) add_entry(ctx, prop);
   }
 
   /// Number of doubles this map occupies in STATEV.
@@ -127,12 +118,12 @@ public:
   /// state, and `new` starts there too so an unconverged or elastic step that
   /// never writes `new` still reports t_n rather than a stale iterate.
   void unpack(const value_type* statev) const {
-    for (const auto& e : m_entries) e.unpack(statev + e.offset);
+    for (const auto& e : m_entries) e.slot->unpack(statev + e.offset);
   }
 
   /// Store the updated history (the `new` side) back into STATEV.
   void pack(value_type* statev) const {
-    for (const auto& e : m_entries) e.pack(statev + e.offset);
+    for (const auto& e : m_entries) e.slot->pack(statev + e.offset);
   }
 
   /// Rotate every tensor-valued state variable into the current configuration.
@@ -143,30 +134,27 @@ public:
   /// (plastic strain, back stress) in a stale frame, and the error accumulates
   /// silently over the rotation history with no diagnostic anywhere.
   ///
-  /// Scalars are frame-indifferent and untouched. Every tensor entry is
-  /// rotated, which assumes tensor state is objective — true for the state
-  /// variables constitutive models actually carry.
+  /// Scalars are frame-indifferent and untouched, and so is reference-frame
+  /// history (Cp, Fp): only a codec with a rotate() turns its history.
   void rotate_history(const tensor2& R) const {
-    for (const auto& e : m_entries)
-      if (e.rotate) e.rotate(R);
+    for (const auto& e : m_entries) e.slot->rotate(R);
   }
 
   /// Whether this map holds any state that a rotation would affect.
   [[nodiscard]] bool has_rotatable_history() const noexcept {
-    for (const auto& e : m_entries)
-      if (e.rotate) return true;
-    return false;
+    return std::ranges::any_of(m_entries, [](const auto& e) { return e.slot->rotates(); });
   }
 
   /// Human-readable layout, for diagnostics and for documenting *DEPVAR.
   [[nodiscard]] std::vector<std::string> describe() const {
     std::vector<std::string> out;
     out.reserve(m_entries.size());
-    for (const auto& e : m_entries)
+    for (const auto& e : m_entries) {
+      const std::string tag{e.slot->tag()};
       out.push_back(std::to_string(e.offset) + ".." +
-                    std::to_string(e.offset + e.width - 1) + "  " + e.owner +
-                    "::" + e.name +
-                    (e.stress ? "  [stress]" : e.width == canonical_width ? "  [engineering shear]" : ""));
+                    std::to_string(e.offset + e.slot->width() - 1) + "  " + e.owner +
+                    "::" + e.name + (tag.empty() ? "" : "  " + tag));
+    }
     return out;
   }
 
@@ -175,140 +163,20 @@ private:
     std::string owner;
     std::string name;
     std::size_t offset;
-    std::size_t width;
-    std::function<void(const value_type*)> unpack;
-    std::function<void(value_type*)> pack;
-    /// Empty for scalars, which no rotation affects.
-    std::function<void(const tensor2&)> rotate;
-    bool stress{false}; ///< stored without the engineering-shear factor
+    const history_slot<value_type>* slot;
   };
 
-  /// A rank-2 history variable is stored in 6 slots, which can only represent a
-  /// symmetric tensor. That is right for every state variable in practice
-  /// (plastic strain, back stress), but silently wrong for one that is not —
-  /// a deformation gradient, say. So the skew part is checked rather than
-  /// assumed, and a violation is reported instead of quietly discarded.
-  static void require_symmetric(const tensor2& t, const std::string& who) {
-    // One pass: track the magnitude and the worst skew together. This runs on
-    // every pack, i.e. once per state variable per Gauss point per iteration.
-    value_type scale{0};
-    value_type skew{0};
-    for (int i = 0; i < 3; ++i)
-      for (int j = 0; j < 3; ++j) {
-        scale = std::max(scale, std::abs(t(i, j)));
-        if (j > i) skew = std::max(skew, std::abs(t(i, j) - t(j, i)));
-      }
-    const value_type tol = value_type{1e-12} * std::max(scale, value_type{1});
-
-    if (skew > tol)
-      throw fatal_error(
-          "statev_map: history property '" + who +
-          "' holds a non-symmetric rank-2 tensor, which cannot be stored in 6 "
-          "STATEV slots without losing the skew part");
-  }
-
-  static void require_minor_symmetric(const tensor4& c, const std::string& who) {
-    value_type scale{0};
-    for (int i = 0; i < 3; ++i)
-      for (int j = 0; j < 3; ++j)
-        for (int k = 0; k < 3; ++k)
-          for (int l = 0; l < 3; ++l)
-            scale = std::max(scale, std::abs(c(i, j, k, l)));
-    const value_type tol = value_type{1e-12} * std::max(scale, value_type{1});
-
-    for (int i = 0; i < 3; ++i)
-      for (int j = 0; j < 3; ++j)
-        for (int k = 0; k < 3; ++k)
-          for (int l = 0; l < 3; ++l)
-            if (std::abs(c(i, j, k, l) - c(j, i, k, l)) > tol ||
-                std::abs(c(i, j, k, l) - c(i, j, l, k)) > tol)
-              throw fatal_error(
-                  "statev_map: history property '" + who +
-                  "' holds a rank-4 tensor without minor symmetry, which "
-                  "cannot be stored in 36 STATEV slots without loss");
-  }
-
-  void add_entry(property_base* prop) {
+  void add_entry(const material_context<Traits>& ctx, const property_base* prop) {
     const auto& id = prop->traits().id;
-    const std::string who = id.owner + "::" + id.name;
-    const std::size_t offset = m_width;
-
-    if (auto* h = dynamic_cast<hist_scalar*>(prop)) {
-      m_entries.push_back(
-          {id.owner, id.name, offset, 1,
-           [h](const value_type* src) {
-             h->old_value() = *src;
-             h->new_value() = *src;
-           },
-           [h](value_type* dst) { *dst = h->new_value(); },
-           nullptr});
-      m_width += 1;
-      return;
-    }
-
-    if (auto* h = dynamic_cast<hist_stress2*>(prop)) {
-      m_entries.push_back(
-          {id.owner, id.name, offset, canonical_width,
-           [h](const value_type* src) {
-             h->old_value() = stress_from_buffer<value_type>(src);
-             h->new_value() = h->old_value();
-           },
-           [h, who](value_type* dst) {
-             require_symmetric(h->new_value(), who);
-             stress_to_buffer<value_type>(h->new_value(), dst);
-           },
-           [h](const tensor2& R) {
-             h->old_value() = rotate(h->old_value(), R);
-             h->new_value() = rotate(h->new_value(), R);
-           },
-           true});
-      m_width += canonical_width;
-      return;
-    }
-
-    if (auto* h = dynamic_cast<hist_tensor2*>(prop)) {
-      m_entries.push_back(
-          {id.owner, id.name, offset, canonical_width,
-           [h](const value_type* src) {
-             h->old_value() = strain_from_buffer<value_type>(src);
-             h->new_value() = h->old_value();
-           },
-           [h, who](value_type* dst) {
-             require_symmetric(h->new_value(), who);
-             strain_to_buffer<value_type>(h->new_value(), dst);
-           },
-           [h](const tensor2& R) {
-             h->old_value() = rotate(h->old_value(), R);
-             h->new_value() = rotate(h->new_value(), R);
-           }});
-      m_width += canonical_width;
-      return;
-    }
-
-    if (auto* h = dynamic_cast<hist_tensor4*>(prop)) {
-      constexpr std::size_t w = canonical_width * canonical_width;
-      m_entries.push_back(
-          {id.owner, id.name, offset, w,
-           [h](const value_type* src) {
-             h->old_value() = tangent_from_buffer<value_type>(src);
-             h->new_value() = h->old_value();
-           },
-           [h, who](value_type* dst) {
-             require_minor_symmetric(h->new_value(), who);
-             tangent_to_buffer<value_type>(h->new_value(), dst);
-           },
-           [h](const tensor2& R) {
-             h->old_value() = rotate(h->old_value(), R);
-             h->new_value() = rotate(h->new_value(), R);
-           }});
-      m_width += w;
-      return;
-    }
-
-    throw fatal_error(
-        "statev_map: history property '" + who +
-        "' has a type that cannot be stored in STATEV — supported types are "
-        "the scalar value_type, tensor<T,3,2> and tensor<T,3,4>");
+    const auto* owner = ctx.find(id.owner);
+    const auto* slot = owner ? owner->history_slot_of(prop) : nullptr;
+    if (!slot)
+      throw fatal_error(
+          "statev_map: history property '" + id.owner + "::" + id.name +
+          "' has a type that cannot be stored in STATEV — declare it with a "
+          "codec (core/history_codec.h)");
+    m_entries.push_back({id.owner, id.name, m_width, slot});
+    m_width += slot->width();
   }
 
   std::vector<entry> m_entries;

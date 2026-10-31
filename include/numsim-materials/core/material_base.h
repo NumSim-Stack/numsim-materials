@@ -86,6 +86,13 @@ protected:
     return base::template add_history<T>(property_name, std::move(initial));
   }
 
+  /// As above, stored and rotated by a host as `codec` says (core/history_codec.h).
+  template<typename T, typename Codec>
+    requires history_codec_for<Codec, T, value_type>
+  history_property<T>& add_history_output(std::string const& property_name, Codec codec, T initial = T{}) {
+    return base::template add_history<T>(property_name, std::move(initial), codec);
+  }
+
   template<typename T>
   [[deprecated("bind the callback with add_callback(&callback, output).reads(...)")]]
   T& add_output(std::string const& property_name, void (Derived::*callback)()) {
