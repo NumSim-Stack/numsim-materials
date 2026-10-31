@@ -92,8 +92,9 @@ system over `{Δλ, Δβ}` solved by a `vector_newton`:
 | `gamma` | recovery; `0` (the default) is Prager hardening |
 
 Outputs: `stress`, `tangent`, and the history `plastic_strain`,
-`equivalent_plastic_strain`, `back_stress`. The back stress is stress-like;
-`statev_map` exports it with the strain shear factor until #91 lands.
+`equivalent_plastic_strain`, `back_stress`. The back stress is stress-like:
+STATEV holds its shear as is (`codecs::stress`), not doubled like the plastic
+strain.
 
 With `gamma = 0` the return is radial in the shifted space and Newton lands on
 the closed form `Δλ = (q_tr − σ_0 − H_n)/(3G + C + H')` in one step from the
