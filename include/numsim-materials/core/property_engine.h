@@ -268,8 +268,10 @@ public:
     slot->unpack(zero.data());
     auto& value{slot->value};
     plan.slot = std::move(slot);
-    for (auto const& step : plan.steps)
+    for (auto const& step : plan.steps) {
       step.material->request_partials(step.callback, true);
+      step.material->request_partial(m_blocks[step.block].first);
+    }
     m_plans.push_back(std::move(plan));
     reactivate(); // a constant callback fills its partials once more
     if (m_evaluated)

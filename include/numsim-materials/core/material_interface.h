@@ -296,6 +296,7 @@ public:
     void const* output_value;      ///< the addresses partial() is called with
     void const* read_value;
     std::unique_ptr<derivatives::partial_block<value_type>> block;
+    bool requested{false}; ///< a requested derivative reads the block
   };
   const std::vector<partial_declaration>& partials() const noexcept { return m_partials; }
 
@@ -344,20 +345,44 @@ public:
     return std::ranges::contains(m_partials_requested, callback);
   }
 
+  /// Marks the partial held by `block` as read by a requested derivative: want_partial() is true for it.
+  void request_partial(derivatives::partial_block<value_type> const* block) {
+    if (auto const it{std::ranges::find(m_partials, block, [](auto const& p) { return p.block.get(); })}; it != m_partials.end())
+      it->requested = true;
+  }
+  /// Makes want_partial() true for every partial of the requested callbacks, as the finite-difference check needs.
+  void request_all_partials(bool on) noexcept { m_all_partials = on; }
+
   /// Runs `run`, the update of `callback`, with want_partials() as requested for it; the engine wraps those callbacks.
   template <typename Run>
   void run_callback(property_base_type const* callback, Run const& run) {
     struct restore {
-      bool& flag;
+      material_interface& self;
       bool outer;
-      ~restore() { flag = outer; }
-    } const guard{m_want_partials, std::exchange(m_want_partials, partials_requested(callback))};
+      property_base_type const* outer_callback;
+      ~restore() {
+        self.m_want_partials = outer;
+        self.m_running = outer_callback;
+      }
+    } const guard{*this, std::exchange(m_want_partials, partials_requested(callback)), std::exchange(m_running, callback)};
     run();
   }
 
 protected:
   /// True while the running callback is to fill its declared partials: a requested derivative passes through it.
   bool want_partials() const noexcept { return m_want_partials; }
+
+  /// True while the running callback is requested and a requested derivative reads d output / d read; a partial
+  /// that is not requested is not read by any plan, so the callback may skip it.
+  template <typename Out, typename In>
+  bool want_partial(Out const& output, In const& read) const noexcept {
+    if (!m_want_partials)
+      return false;
+    return std::ranges::any_of(m_partials, [&](auto const& p) {
+      return p.callback == m_running && (p.requested || m_all_partials) && p.output_value == static_cast<void const*>(&output) &&
+             p.read_value == static_cast<void const*>(&read);
+    });
+  }
 
   /// The partial d output / d read the callback fills, declared by partials(): rank(output) + rank(read).
   template <typename Out, typename In>
@@ -643,6 +668,8 @@ private:
   std::vector<independent_declaration> m_independent;
   std::vector<property_base_type const*> m_partials_requested; ///< callbacks filling their partials
   bool m_want_partials{false};
+  bool m_all_partials{false};
+  property_base_type const* m_running{nullptr}; ///< the callback run_callback() runs
   std::size_t* m_revision{nullptr};
   std::vector<property_base_type const*> m_reads_all; ///< callbacks reading every input (declare_reads_all)
 };
