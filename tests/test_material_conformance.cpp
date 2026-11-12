@@ -5,8 +5,10 @@
 #include <regex>
 #include <set>
 #include <string>
+#include "numsim-materials/core/partial_check.h"
 #include "numsim-materials/default_materials.h"
 #include "numsim-materials/io/json_material_factory.h"
+#include "numsim-materials/umat/external_state_source.h"
 
 /// Generic conformance checks over every material, so a new one is covered
 /// without a bespoke test file.
@@ -151,6 +153,64 @@ TEST(MaterialConformance, MissingRequiredParametersThrow) {
         << type << " accepted a document with only \"name\": a required "
                    "parameter was silently defaulted";
   }
+}
+
+/// Materials whose callbacks declare partials or independence (.partials(), .independent_of()), checked by finite differences below.
+const std::set<std::string> kPartialsChecked = {"linear_elasticity", "thermal_eigenstrain"};
+
+/// Header stems under materials/ and solvers/ that declare partials or independent reads.
+std::set<std::string> headers_declaring_partials() {
+  namespace fs = std::filesystem;
+  std::set<std::string> out;
+  for (const char* directory : {NUMSIM_MATERIALS_INCLUDE_DIR, NUMSIM_SOLVERS_INCLUDE_DIR})
+    for (const auto& e : fs::directory_iterator(fs::path{directory})) {
+      if (e.path().extension() != ".h") continue;
+      std::ifstream in(e.path());
+      const std::string src{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+      if (src.find(".partials(") != std::string::npos || src.find(".independent_of(") != std::string::npos)
+        out.insert(e.path().stem().string());
+    }
+  return out;
+}
+
+TEST(MaterialConformance, EveryMaterialDeclaringPartialsIsChecked) {
+  EXPECT_EQ(headers_declaring_partials(), kPartialsChecked)
+      << "a material declaring partials or independent reads joins kPartialsChecked and the model of DeclaredPartialsMatchFiniteDifferences";
+}
+
+/// Every declared partial against central differences of its own callback, at a state off every symmetry.
+TEST(MaterialConformance, DeclaredPartialsMatchFiniteDifferences) {
+  nm::material_context<policy> ctx;
+  for (const auto* source : {"strain", "temperature"}) {
+    policy::ParameterHandler p;
+    p.insert<std::string>("name", source);
+    if (std::string{source} == "strain")
+      ctx.create<nm::external_strain_source<policy>>(p);
+    else
+      ctx.create<nm::external_scalar_source<policy>>(p);
+  }
+  for (const auto* document : {
+           R"({"type": "constant_scalar", "name": "alpha", "value": 1.2e-5})",
+           R"({"type": "thermal_eigenstrain", "name": "thermal_eigenstrain", "alpha_source": "alpha::value", "reference_temperature": 20.0})",
+           R"({"type": "linear_elasticity", "name": "linear_elasticity", "strain_producer_name": "strain", "eigenstrain_source": "thermal_eigenstrain", "K": 150.0, "G": 70.0})"}) {
+    const nlohmann::json j = nlohmann::json::parse(document);
+    nm::create_from_json<policy>(ctx, j);
+  }
+  ctx.finalize();
+  tmech::tensor<double, 3, 2> strain;
+  strain(0, 0) = 1e-3, strain(1, 1) = -4e-4, strain(2, 2) = 2e-4;
+  strain(0, 1) = strain(1, 0) = 3e-4, strain(0, 2) = strain(2, 0) = -1e-4, strain(1, 2) = strain(2, 1) = 5e-4;
+  dynamic_cast<nm::external_strain_source<policy>*>(ctx.find("strain"))->bind({}, strain);
+  dynamic_cast<nm::external_scalar_source<policy>*>(ctx.find("temperature"))->bind(20, 75);
+  ctx.update();
+  std::set<std::string> checked;
+  for (const auto* material : ctx.materials())
+    if (!material->partials().empty()) {
+      checked.insert(material->name());
+      for (const auto& mismatch : nm::check_partials(ctx, material->name()))
+        ADD_FAILURE() << mismatch;
+    }
+  EXPECT_EQ(checked, kPartialsChecked);
 }
 
 }  // namespace
