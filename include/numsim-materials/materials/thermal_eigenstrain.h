@@ -30,7 +30,7 @@ public:
         m_T_ref(base::template get_parameter<value_type>("reference_temperature")),
         m_T(base::template add_input_history<value_type>(
             connection_source{base::template get_parameter<std::string>("temperature_source"), "state"}, EdgeKind::Global)) {
-    base::add_callback(&thermal_eigenstrain::compute, m_eigenstrain).reads(m_alpha, m_T);
+    base::add_callback(&thermal_eigenstrain::compute, m_eigenstrain).reads(m_alpha, m_T).partials(m_eigenstrain, m_alpha, m_T);
   }
 
   static input_parameter_controller parameters() {
@@ -41,7 +41,13 @@ public:
     return para;
   }
 
-  void compute() noexcept { m_eigenstrain = m_alpha.get() * (m_T.new_value() - m_T_ref) * tmech::eye<value_type, Dim, 2>(); }
+  void compute() {
+    m_eigenstrain = m_alpha.get() * (m_T.new_value() - m_T_ref) * tmech::eye<value_type, Dim, 2>();
+    if (base::want_partials()) {
+      base::partial(m_eigenstrain, m_alpha) = (m_T.new_value() - m_T_ref) * tmech::eye<value_type, Dim, 2>();
+      base::partial(m_eigenstrain, m_T) = m_alpha.get() * tmech::eye<value_type, Dim, 2>();
+    }
+  }
 
 private:
   tensor2 &m_eigenstrain;

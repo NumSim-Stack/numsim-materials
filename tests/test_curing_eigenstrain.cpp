@@ -4,6 +4,7 @@
 #include "numsim-materials/core/isotropize.h"
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/materials/constant_scalar.h"
+#include "numsim-materials/materials/elastic_strain.h"
 #include "numsim-materials/materials/eshelby_sphere.h"
 #include "numsim-materials/materials/isotropic_moduli.h"
 #include "numsim-materials/materials/isotropic_tangent.h"
@@ -98,9 +99,13 @@ std::unique_ptr<ctx_type> build() {
   p.insert<std::string>("alpha_source", "beta::value");
   ctx.create<nm::thermal_eigenstrain<policy>>(p);
   p.clear();
+  p.insert<std::string>("name", "elastic_strain");
+  p.insert<std::string>("strain_source", "strain");
+  p.insert<std::vector<std::string>>("eigenstrain_sources", {"shrinkage"});
+  ctx.create<nm::elastic_strain<policy>>(p);
+  p.clear();
   p.insert<std::string>("name", "elastic");
-  p.insert<std::string>("strain_producer_name", "strain");
-  p.insert<std::string>("eigenstrain_source", "shrinkage");
+  p.insert<std::string>("strain_producer_name", "elastic_strain");
   p.insert<T>("K", Km);
   p.insert<T>("G", Gm);
   ctx.create<nm::linear_elasticity<policy>>(p);
