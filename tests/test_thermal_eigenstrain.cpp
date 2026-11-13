@@ -3,6 +3,7 @@
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/materials/constant_scalar.h"
+#include "numsim-materials/materials/elastic_strain.h"
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/materials/thermal_eigenstrain.h"
 #include "numsim-materials/driver/external_state_source.h"
@@ -39,9 +40,13 @@ std::unique_ptr<ctx_type> build() {
   p.insert<T>("reference_temperature", T0);
   ctx.create<nm::thermal_eigenstrain<policy>>(p);
   p.clear();
+  p.insert<std::string>("name", "elastic_strain");
+  p.insert<std::string>("strain_source", "strain");
+  p.insert<std::vector<std::string>>("eigenstrain_sources", {"thermal"});
+  ctx.create<nm::elastic_strain<policy>>(p);
+  p.clear();
   p.insert<std::string>("name", "elastic");
-  p.insert<std::string>("strain_producer_name", "strain");
-  p.insert<std::string>("eigenstrain_source", "thermal");
+  p.insert<std::string>("strain_producer_name", "elastic_strain");
   p.insert<T>("K", K);
   p.insert<T>("G", G);
   ctx.create<nm::linear_elasticity<policy>>(p);
@@ -92,7 +97,8 @@ TEST(ThermalEigenstrain, FromJson) {
     {"type": "external_scalar_source", "name": "temperature"},
     {"type": "constant_scalar", "name": "alpha", "value": 1e-5},
     {"type": "thermal_eigenstrain", "name": "thermal", "alpha_source": "alpha::value", "reference_temperature": 20.0},
-    {"type": "linear_elasticity", "name": "elastic", "strain_producer_name": "strain", "eigenstrain_source": "thermal", "K": 100.0, "G": 40.0}]})")(ctx, {});
+    {"type": "elastic_strain", "name": "elastic_strain", "strain_source": "strain", "eigenstrain_sources": ["thermal"]},
+    {"type": "linear_elasticity", "name": "elastic", "strain_producer_name": "elastic_strain", "K": 100.0, "G": 40.0}]})")(ctx, {});
   load(ctx, tensor2{}, 120);
   EXPECT_NEAR(ctx.get<tensor2>("elastic", "stress")(2, 2), -3 * 100 * 1e-5 * 100, 1e-12);
 }

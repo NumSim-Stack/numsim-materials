@@ -16,6 +16,7 @@
 #include "numsim-materials/core/tensor_identities.h"
 #include "numsim-materials/driver/material_point.h"
 #include "numsim-materials/materials/constant_scalar.h"
+#include "numsim-materials/materials/elastic_strain.h"
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/materials/thermal_eigenstrain.h"
 #include "numsim-materials/umat/external_state_source.h"
@@ -724,9 +725,13 @@ struct thermoelastic {
     p.insert<T>("reference_temperature", T_ref);
     ctx.create<nm::thermal_eigenstrain<policy>>(p);
     p.clear();
+    p.insert<std::string>("name", "elastic_strain");
+    p.insert<std::string>("strain_source", "strain");
+    p.insert<std::vector<std::string>>("eigenstrain_sources", {"thermal"});
+    ctx.create<nm::elastic_strain<policy>>(p);
+    p.clear();
     p.insert<std::string>("name", "elastic");
-    p.insert<std::string>("strain_producer_name", "strain");
-    p.insert<std::string>("eigenstrain_source", "thermal");
+    p.insert<std::string>("strain_producer_name", "elastic_strain");
     p.insert<T>("K", K);
     p.insert<T>("G", G);
     ctx.create<nm::linear_elasticity<policy>>(p);
@@ -776,16 +781,16 @@ TEST(PartialDerivatives, TheMaterialPointNamesUnknownInputs) {
 TEST(PartialDerivatives, ThermoelasticPartialsPassTheFiniteDifferenceCheck) {
   thermoelastic m;
   m.evaluate(sym(1e-3, -2e-4, 5e-4, 1e-4, -3e-4, 2e-4), 60);
-  for (auto const *name : {"thermal", "elastic"})
+  for (auto const *name : {"thermal", "elastic_strain", "elastic"})
     for (auto const &mismatch : nm::check_partials(m.ctx, name))
       ADD_FAILURE() << mismatch;
 }
 
 // --- a declared partial is filled only when a requested derivative uses it ---
 
-// Largest component of the packed partial d `output` / d `read` that elastic declares for read_name.
-T filled(thermoelastic &m, std::string const &read_name) {
-  auto *mat{m.ctx.find("elastic")};
+// Largest component of the packed partial d `output` / d `read` that `material` declares for read_name.
+T filled(thermoelastic &m, std::string const &read_name, std::string const &material = "elastic") {
+  auto *mat{m.ctx.find(material)};
   for (auto const &p : mat->partials()) {
     bool const own{p.own && p.own->traits().id.name == read_name};
     bool const in{p.input && p.input->source_name() == read_name};
@@ -810,7 +815,8 @@ TEST(PartialDerivatives, APartialNoRequestedDerivativeUsesIsNotFilled) {
   EXPECT_LT(tmech::norm(tensor4{ddsdde - tangent}), 1e-12 * tmech::norm(tangent));
   EXPECT_GT(filled(m, "strain"), 0);
   EXPECT_EQ(filled(m, "tangent"), 0) << "d stress / d C is not on a requested path";
-  EXPECT_EQ(filled(m, "eigenstrain"), 0) << "nor d stress / d eigenstrain";
+  EXPECT_GT(filled(m, "strain", "elastic_strain"), 0);
+  EXPECT_EQ(filled(m, "eigenstrain", "elastic_strain"), 0) << "nor d elastic strain / d eigenstrain";
 }
 
 TEST(PartialDerivatives, ADerivativeThroughTheTangentFillsItsPartial) {

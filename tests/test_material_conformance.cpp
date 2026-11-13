@@ -156,7 +156,7 @@ TEST(MaterialConformance, MissingRequiredParametersThrow) {
 }
 
 /// Materials whose callbacks declare partials or independence (.partials(), .independent_of()), checked by finite differences below.
-const std::set<std::string> kPartialsChecked = {"linear_elasticity", "thermal_eigenstrain"};
+const std::set<std::string> kPartialsChecked = {"elastic_strain", "linear_elasticity", "thermal_eigenstrain"};
 
 /// Header stems under materials/ and solvers/ that declare partials or independent reads.
 std::set<std::string> headers_declaring_partials() {
@@ -192,7 +192,8 @@ TEST(MaterialConformance, DeclaredPartialsMatchFiniteDifferences) {
   for (const auto* document : {
            R"({"type": "constant_scalar", "name": "alpha", "value": 1.2e-5})",
            R"({"type": "thermal_eigenstrain", "name": "thermal_eigenstrain", "alpha_source": "alpha::value", "reference_temperature": 20.0})",
-           R"({"type": "linear_elasticity", "name": "linear_elasticity", "strain_producer_name": "strain", "eigenstrain_source": "thermal_eigenstrain", "K": 150.0, "G": 70.0})"}) {
+           R"({"type": "elastic_strain", "name": "elastic_strain", "strain_source": "strain", "eigenstrain_sources": ["thermal_eigenstrain"]})",
+           R"({"type": "linear_elasticity", "name": "linear_elasticity", "strain_producer_name": "elastic_strain", "K": 150.0, "G": 70.0})"}) {
     const nlohmann::json j = nlohmann::json::parse(document);
     nm::create_from_json<policy>(ctx, j);
   }
