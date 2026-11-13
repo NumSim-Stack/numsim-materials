@@ -12,6 +12,7 @@ namespace numsim::materials {
 /// Push-forward of a Kirchhoff stress tau of the logarithmic strain to the first Piola-Kirchhoff stress
 /// P = tau F^-T and its consistent dP/dF. Reads tau ("stress_source"), d tau / d eps_e ("tangent_source"),
 /// d ln V / dF ("strain_source": a log_strain) and F^-1 ("deformation_gradient_source"). Outputs "stress", "tangent".
+/// Valid for an isotropic stress law only; this is not checked (docs/finite-strain.md).
 template <typename Traits>
 class kirchhoff_to_first_piola final : public material_base<kirchhoff_to_first_piola<Traits>, Traits> {
 public:
