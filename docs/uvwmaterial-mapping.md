@@ -9,11 +9,11 @@ is a `*_source` parameter. `tools/convert_uvwmaterial_card.py` converts the old 
 
 | uvwmaterial | numsim-materials | parameters | status |
 |---|---|---|---|
-| `linear_elasticity` (E, ν) | `linear_elasticity` | `K`, `G` (= E/(3(1−2ν)), E/(2(1+ν))), `strain_producer_name`, optional `eigenstrain_source` | existing; eigenstrain #135 |
+| `linear_elasticity` (E, ν) | `linear_elasticity` | `K`, `G` (= E/(3(1−2ν)), E/(2(1+ν))), `strain_producer_name`; an eigenstrain goes through `elastic_strain` (`eigenstrain_sources`) | existing; eigenstrain #135 |
 | `linear_elastic_incremental`, `incremental_solid_material` | `incremental_linear_elasticity` | `strain_source`, `tangent_source` | #134 |
 | `saint_venant_kirchhoff` (K, G) | `saint_venant_kirchhoff` | `K`, `G`, `deformation_gradient_source` | existing |
 | `neo_hookean_incompressible` | — | | #112 (formulation open) |
-| `hencky_strains_linear_elastic` (K, G), `_thermo_elastic`, `_thermo_chemo_elastic` | `hencky_elasticity` (+ `thermal_eigenstrain`) | `tangent_source` (an `isotropic_tangent` of produced K, G), `deformation_gradient_source`, optional `eigenstrain_source`; outputs P and dP/dF instead of S(ln C) and dS/dC | #141 |
+| `hencky_strains_linear_elastic` (K, G), `_thermo_elastic`, `_thermo_chemo_elastic` | `log_strain` → `elastic_strain` (+ `thermal_eigenstrain`) → `linear_stress` → `kirchhoff_to_first_piola` | `deformation_gradient_source`, `eigenstrain_sources`, `tangent_source` (an `isotropic_tangent` of produced K, G; `linear_elasticity` for fixed K, G); outputs P and dP/dF instead of S(ln C) and dS/dC | #141 |
 | `incremental_saint_venant_kirchhoff` | — | | #113 |
 | `small_strain_rule_of_mixture_composite` (`kernal` voigt / reuss / vrh) | `mean_field_composite_global` + `linear_stress` | `phases` (phase nodes), `kernel` {`type`: voigt / reuss / hill}; a tangent producer, the stress is a `linear_stress` on it; nonlinear phases go through `mean_field_strain` (same kernels) and `mean_field_composite_local_linear` (Voigt) or `_nonlinear` | #130 |
 | `eshelby_tensor_solid_sphere`, `_cylinder_x1/x2/x3`, `_cylinder`, `_cylindrical_ellipsoid`, `_general_geometry` | `eshelby_sphere`, `eshelby_cylinder`, `eshelby_spheroid`, `eshelby_ellipsoid` | `nu_source` / `nu_property` (Poisson's ratio as a produced property: `poisson_ratio_from_moduli` of K and G, or `isotropic_moduli` of a tangent), `direction`, `aspect_ratio`, `semi_axes`; output `tensor` | #128 |
