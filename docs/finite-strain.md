@@ -30,8 +30,8 @@ push-forward, must be isotropic too. The chain does not check this: a transverse
 accepted and gives results that depend on the rigid rotation. An anisotropic
 material needs the strain in the reference configuration, E = ½ ln(FᵀF), with
 the stress pulled back instead of pushed forward. That producer does not exist
-yet (#241); its tangent needs the second derivative of the tensor logarithm,
-which tmech does not provide.
+yet (#241); its tangent needs the second derivative of the tensor logarithm
+(tmech's `second_derivative()`).
 
 **Stress and tangent come from the same law.** The push-forward reads τ and
 dτ/dε_e through two parameters. Both must name the same stress law: the
