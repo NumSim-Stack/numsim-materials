@@ -46,20 +46,32 @@ With the strain in the reference configuration the chain is objective for any
 stress law, isotropic or not:
 
 ```
-F source ─► lagrangian_log_strain ─► elastic_strain ─► linear_stress ─► lagrangian_stress_to_first_piola
-            E = ½ ln C, dE/dF         E_e = E − Σ E*      T = ℂ : E_e      P = T : dE/dF = F S, dP/dF
+F source ─► seth_hill_strain ─► elastic_strain ─► linear_stress ─► lagrangian_stress_to_first_piola
+            E(C), dE/dC,          E_e = E − Σ E*     T = ℂ : E_e      P = F S, S = 2 T : dE/dC, dP/dF
+            d²E/dC²
 ```
 
 | Node | Reads | Outputs |
 |---|---|---|
-| `lagrangian_log_strain` | `deformation_gradient_source` | `strain` = E = ½ ln(FᵀF), `d_strain_d_deformation_gradient` |
-| `lagrangian_stress_to_first_piola` | `stress_source`, `tangent_source`, `strain_source` (the `lagrangian_log_strain`), `deformation_gradient_source` | `stress` = P, `tangent` = dP/dF |
+| `seth_hill_strain` | `m`, `deformation_gradient_source` | `strain` = E = (C^{m/2} − I)/m, `d_strain_d_right_cauchy_green`, `d2_strain_d_right_cauchy_green2` (on demand) |
+| `lagrangian_stress_to_first_piola` | `stress_source`, `tangent_source`, `strain_source` (the `seth_hill_strain`), `deformation_gradient_source` | `stress` = P, `tangent` = dP/dF |
 
-T is the stress work-conjugate to E; the second Piola-Kirchhoff stress is
-S = T : d ln C/dC and P = F S. The tangent contains T : d² ln C/dC², which tmech's
-`second_derivative()` gives also at repeated stretches. ℂ is constant in the
-material frame: a fibre direction is a direction of the reference configuration.
-For an isotropic law both chains give the same P and dP/dF.
+`m` selects the measure: 0 Hencky (½ ln C), 1 Biot (U − I), 2 Green–Lagrange
+(½ (C − I)), −2 the Lagrangian Almansi-type strain ½ (I − C⁻¹); any real `m` is
+accepted. The strain node owns the eigendecomposition of C and gives dE/dC and
+d²E/dC² with it; the pull-back is the same chain rule for every measure:
+
+- S = 2 T : dE/dC and P = F S;
+- dP/dF = dEᵀ : ℂ : dE + dCᵀ : (T : d²E/dC²) : dC + I ⊗ S, where dE = dE/dC : dC and dC = dC/dF.
+
+T is the stress work-conjugate to E. ℂ is constant in the material frame: a fibre
+direction is a direction of the reference configuration. For an isotropic law with
+m = 0 both chains give the same P and dP/dF. With m = 2 and `linear_stress` the
+chain is `saint_venant_kirchhoff`.
+
+d²E/dC² is a rank-6 output computed only while a node reads it (`on_demand()` in
+the engine). A deck that reads `strain` without the pull-back skips it, and a
+direct `get` of it then throws.
 
 The rule for stress and tangent from the same law holds here as well. Eigenstrains
 are reference-configuration strains and must not depend on F.
@@ -70,6 +82,7 @@ One update with stress and tangent costs the same as the former single
 `hencky_elasticity` material (about 1.9 µs, g++-14 -O2): the tensor logarithm and
 its derivative dominate, and the extra nodes are negligible.
 
-The Lagrangian chain costs about 4.5 times the Eulerian one (11.2 µs against 2.5 µs
-on the same machine). Most of the difference is tmech's `second_derivative()`, which
-builds the full rank-6 d² ln C/dC² although only its contraction with T is needed.
+The Lagrangian chain with m = 0 or 1 costs about 4.4 times the Eulerian one (10.8 µs
+against 2.5 µs on the same machine). Most of the difference is the rank-6
+d²E/dC² from tmech's `second_derivative()`; the pull-back only contracts it with T.
+Green–Lagrange (m = 2) needs no eigendecomposition and costs 2.8 µs.

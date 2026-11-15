@@ -259,6 +259,10 @@ public:
   const auto& callback_order() const noexcept { return m_callback_order; }
   /// The outputs declared stateful().
   const auto& stateful_outputs() const noexcept { return m_stateful; }
+  /// The outputs declared on_demand().
+  const auto& on_demand_outputs() const noexcept { return m_on_demand; }
+  /// Set by the engine at finalize(): the on-demand outputs no node reads.
+  void set_unread(std::vector<property_base_type const*> unread) { m_unread = std::move(unread); }
 
   /// Throws when an output read by a callback of this material has no writer; at finalize(), when all are bound.
   void check_reads() const {
@@ -369,6 +373,13 @@ public:
   }
 
 protected:
+  /// False for an output declared on_demand() that no node reads: its callback may leave it unfilled.
+  template <typename Out>
+  bool is_read(Out const& output) const noexcept {
+    auto const it{m_outputs.find(static_cast<void const*>(&output))};
+    return it == m_outputs.end() || !std::ranges::contains(m_unread, it->second.property);
+  }
+
   /// True while the running callback is to fill its declared partials: a requested derivative passes through it.
   bool want_partials() const noexcept { return m_want_partials; }
 
@@ -557,6 +568,9 @@ protected:
     }
   }
 
+  /// The output is filled only while a node reads it (is_read()).
+  void declare_on_demand(void const* output) { m_on_demand.push_back(output_entry_of("on_demand", output).property); }
+
   void declare_written_by(void const* output, void const* writer) {
     auto const& out{output_entry_of("written_by", output)};
     auto const& by{output_entry_of("written_by", writer)};
@@ -611,6 +625,8 @@ private:
   std::vector<property_base_type const*> m_read_declared; ///< callbacks with declared reads
   std::vector<read_declaration> m_declared_reads;
   std::vector<property_base_type const*> m_stateful;      ///< outputs never constant
+  std::vector<property_base_type const*> m_on_demand;     ///< outputs filled only when read
+  std::vector<property_base_type const*> m_unread;        ///< on-demand outputs no node reads
   std::vector<std::pair<property_base_type const*, property_base_type const*>> m_written_by, m_callback_order;
 
   /// The entry of an output of this material; declarations end at finalize(), when the engine reads them.

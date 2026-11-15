@@ -85,6 +85,7 @@ The handle then declares what the callback reads besides its parameters:
 | `.reads(..., own outputs...)` | outputs of other callbacks of this material | orders it after those callbacks |
 | `.reads_all_inputs()` | every input the material has at `finalize()` | as `.reads(all inputs)` |
 | `.stateful()` | also state of its own, or acts outside its outputs | runs it on every update |
+| `.on_demand(outputs...)` | — (further outputs of the callback) | marks those no node reads; `is_read()` is false for them and a direct `get` throws |
 
 The callback is the node of the graph. Order and constness follow from the reads:
 - **Order:** `compute_stress` runs after the stiffness and thermal callbacks, because it reads their outputs. It runs after the strain source, because it reads the strain.
@@ -121,6 +122,19 @@ base::add_callback(&property_recorder::update, tick).reads(m_scalar_inputs).stat
 ```
 
 Without `.stateful()`, a stepper that reads nothing would run once. A recorder of constant sources would also record once.
+
+## 4a. Expensive outputs few decks read: `.on_demand()`
+
+An output that only some consumers need, such as the rank-6 d²E/dC² of `seth_hill_strain`, can be declared on demand. At `finalize()` the engine marks it unread when no node reads it. The callback then skips it:
+
+```cpp
+base::add_callback(&seth_hill_strain::compute, m_E, m_dE, m_d2E).reads(m_F).on_demand(m_d2E);
+...
+if (base::is_read(m_d2E))
+  m_d2E = E.second_derivative();
+```
+
+The first output of a callback cannot be on demand. A host `get` of an unread on-demand output throws instead of returning a stale value.
 
 ## 5. Checking the declarations
 

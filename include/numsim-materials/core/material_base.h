@@ -169,6 +169,20 @@ protected:
       return *this;
     }
 
+    /// These outputs (not the first) are filled only while a node reads them: is_read() tells the callback, and a
+    /// direct get() of one that no node reads throws.
+    template <typename... Outputs>
+    callback_handle& on_demand(Outputs const&... outputs) {
+      std::vector<void const*> named;
+      (collect(named, outputs), ...);
+      for (auto const* output : named) {
+        if (output == m_outputs.front() || !std::ranges::contains(m_outputs, output))
+          throw std::logic_error("on_demand(): material '" + m_owner.name() + "' names a value that is not a further output of the callback");
+        m_owner.declare_on_demand(output);
+      }
+      return *this;
+    }
+
     /// The callback fills d output / d read for each of `reads` (as in reads()) through partial() while
     /// want_partials() is true. After reads().
     template <typename Output, typename... Reads>
