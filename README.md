@@ -29,7 +29,7 @@ Abaqus or CalculiX.
 | [docs/plasticity.md](docs/plasticity.md) | Using the plasticity materials: parameters, wiring, worked decks |
 | [docs/plasticity-theory.md](docs/plasticity-theory.md) | J2 and Drucker-Prager from kinematics to the consistent tangent |
 | [docs/mean_field.md](docs/mean_field.md) | Composites: phase nodes, tangent homogenisation, strain localisation, the self-consistent and nonlinear fixed points |
-| [docs/finite-strain.md](docs/finite-strain.md) | The Hencky chain (log strain → elastic strain → linear elasticity → push-forward) and what the user must ensure: an isotropic law, stress and tangent from one node |
+| [docs/finite-strain.md](docs/finite-strain.md) | The Hencky chains: Eulerian (ln V, push-forward) for isotropic laws, Lagrangian (½ ln C, pull-back) for anisotropic ones, and what the user must ensure: stress and tangent from one node |
 
 ## Architecture
 
