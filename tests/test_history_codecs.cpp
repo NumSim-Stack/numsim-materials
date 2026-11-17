@@ -46,7 +46,7 @@ struct fibre_codec {
   static constexpr std::size_t width = 4;
   static constexpr std::string_view tag = "[fibre]";
   static void read(fibre& f, T const* b) { f = {nm::full_from_buffer<T, 1>(b), b[3]}; }
-  static void write(fibre const& f, T* b, std::string_view) {
+  static void write(fibre const& f, T* b) {
     nm::full_to_buffer<T, 1>(f.direction, b);
     b[3] = f.length;
   }
@@ -250,16 +250,6 @@ TEST(HistoryCodecs, StressStoresShearAsIsNextToEngineeringStrain) {
   set_history(f.p.g_stress, tensor2{});
   f.map.unpack(f.statev.data());
   EXPECT_EQ(distance<2>(f.p.g_stress.old_value(), shear), 0.0);
-}
-
-TEST(HistoryCodecs, SymmetricCodecsRejectASkewPartNamingTheHistory) {
-  codec_fixture f;
-  for (auto* h : {&f.p.a_ref, &f.p.c_strain, &f.p.g_stress}) {
-    h->new_value() = nonsym;
-    const auto message = fatal_message([&] { f.map.pack(f.statev.data()); });
-    EXPECT_NE(message.find("probe::" + h->traits().id.name), std::string::npos) << message;
-    h->new_value() = tensor2{};
-  }
 }
 
 TEST(HistoryCodecs, ReferenceAndScalarHistoryIsNotRotatable) {

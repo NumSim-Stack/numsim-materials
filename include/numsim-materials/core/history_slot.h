@@ -3,7 +3,6 @@
 
 #include <cstddef>
 #include <memory>
-#include <string>
 #include <string_view>
 
 #include <tmech/tmech.h>
@@ -44,13 +43,13 @@ private:
   struct model final : concept_ {
     static constexpr bool turns{requires(V const& v, tensor2 const& R) { Codec::rotate(v, R); }};
 
-    explicit model(history_property<V>& h) : history{h}, who{h.traits().id.owner + "::" + h.traits().id.name} {}
+    explicit model(history_property<V>& h) : history{h} {}
     std::size_t width() const override { return Codec::width; }
     void unpack(T const* src) const override {
       Codec::read(history.old_value(), src);
       history.new_value() = history.old_value();
     }
-    void pack(T* dst) const override { Codec::write(history.new_value(), dst, who); }
+    void pack(T* dst) const override { Codec::write(history.new_value(), dst); }
     void rotate([[maybe_unused]] tensor2 const& R) const override {
       if constexpr (turns) {
         history.old_value() = Codec::rotate(history.old_value(), R);
@@ -66,7 +65,6 @@ private:
     }
 
     history_property<V>& history;
-    std::string who;
   };
 
   std::unique_ptr<concept_> m_self;
