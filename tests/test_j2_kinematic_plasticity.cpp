@@ -16,6 +16,7 @@
 #include "numsim-materials/solvers/vector_newton.h"
 #include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/umat/errors.h"
+#include "numsim-materials/umat/statev_map.h"
 
 namespace {
 
@@ -394,6 +395,18 @@ TEST(J2Kinematic, ReverseYieldIsShiftedByTheBackStress) {
   r.step(shear(-e_forward));
   EXPECT_GT(r.kappa(), kappa_n)
       << "the mirror of the forward limit is well past reverse yield";
+}
+
+/// The back stress is stress-like: STATEV holds beta_12 as is, not doubled like a strain.
+TEST(J2Kinematic, BackStressIsStoredAsAStress) {
+  rig r(0.0);
+  r.step(strain_a());
+  ASSERT_GT(std::abs(r.beta()(0, 1)), 1e-6) << "the step must yield with shear";
+  const nm::umat::statev_map<policy> map{r.ctx, {{"stepper", "strain"}}};
+  ASSERT_EQ(map.describe()[0], "0..5  kin::back_stress  [stress]");
+  std::vector<T> statev(map.nstatv());
+  map.pack(statev.data());
+  EXPECT_EQ(statev[3], r.beta()(0, 1));
 }
 
 }  // namespace

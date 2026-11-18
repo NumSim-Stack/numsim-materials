@@ -86,7 +86,7 @@ public:
   template <typename... Args>
   explicit external_deformation_gradient_source(Args&&... args)
       : base(std::forward<Args>(args)...),
-        m_F(base::template add_history_output<tensor2>("deformation_gradient")),
+        m_F(base::template add_history_output<tensor2>("deformation_gradient", codecs::two_point{})),
         m_F_inv(base::template add_output<tensor2>("inverse")),
         m_J(base::template add_output<value_type>("determinant")) {
     m_F.old_value() = tmech::eye<value_type, Dim, 2>();
