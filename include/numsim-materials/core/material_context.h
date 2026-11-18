@@ -34,6 +34,7 @@ public:
   using material_handler = typename Traits::MaterialHandler;
   using parameter_handler = typename Traits::ParameterHandler;
   using material_interface_type = material_interface<Traits>;
+  using checkpoint_type = history_checkpoint<Traits>;
 
   material_context() = default;
 
@@ -105,6 +106,18 @@ public:
   void revert() {
     check_finalized("revert");
     m_engine.revert();
+  }
+
+  /// The history within a step: restore() returns to it after any number of commits (substeps, cutbacks).
+  [[nodiscard]] checkpoint_type checkpoint() const {
+    check_finalized("checkpoint");
+    return m_engine.checkpoint();
+  }
+
+  /// Back to a checkpoint of this context; clears a failed update like revert().
+  void restore(checkpoint_type const& cp) {
+    check_finalized("restore");
+    m_engine.restore(cp);
   }
 
   // --- Checkpoint / Restart ---
