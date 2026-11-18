@@ -17,6 +17,7 @@
 #include "numsim-materials/io/json_material_factory.h"
 #include "numsim-materials/umat/json_model.h"
 #include "numsim-materials/umat/material_point_evaluator.h"
+#include "numsim-materials/umat/statev_map.h"
 
 namespace {
 
@@ -262,4 +263,19 @@ TEST(ExternalDeformationGradientSource, InverseAndDeterminantAreNotHistory) {
   u::material_point_evaluator<policy> ev{
       ctx, {.strain_source = {}, .stress_source = "model", .deformation_gradient_source = "F"}};
   EXPECT_EQ(ev.nstatv(), 0u);
+}
+
+TEST(ExternalDeformationGradientSource, IsStoredAsATwoPointTensor) {
+  // a host excludes it, but a map that keeps F keeps all nine components
+  ctx_type ctx;
+  auto& src = add_model<nm::neo_hooke<policy>>(ctx);
+  const tensor2 F{test_deformation()};
+  src.bind(F, F);
+  const u::statev_map<policy> map{ctx, {}};
+  ASSERT_EQ(map.describe(), std::vector<std::string>{"0..8  F::deformation_gradient  [full] [two-point]"});
+  std::vector<T> statev(map.nstatv());
+  map.pack(statev.data());
+  src.bind(tmech::eye<T, 3, 2>(), tmech::eye<T, 3, 2>());
+  map.unpack(statev.data());
+  EXPECT_EQ(tmech::norm(tensor2{src.deformation_gradient().new_value() - F}), 0.0);
 }
