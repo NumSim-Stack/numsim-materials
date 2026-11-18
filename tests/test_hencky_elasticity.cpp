@@ -1,13 +1,10 @@
 #include <gtest/gtest.h>
 #include <cmath>
 #include <memory>
+#include <string>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/elastic_constants.h"
 #include "numsim-materials/core/material_context.h"
-#include "numsim-materials/materials/constant_scalar.h"
-#include "numsim-materials/materials/hencky_elasticity.h"
-#include "numsim-materials/materials/isotropic_tangent.h"
-#include "numsim-materials/materials/thermal_eigenstrain.h"
 #include "numsim-materials/driver/deformation_gradient_driver.h"
 #include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/umat/json_model.h"
@@ -25,7 +22,7 @@ using tensor2 = tmech::tensor<T, 3, 2>;
 using driver = nm::deformation_gradient_driver<policy>;
 using control = nm::deformation_control<T>;
 
-/// The driver on "F" -> "hencky".
+/// The driver on "F" -> "hencky" (the push-forward at the end of the chain).
 policy::ParameterHandler point() {
   policy::ParameterHandler p;
   p.insert<std::string>("deformation_gradient_source", "F");
@@ -36,41 +33,33 @@ policy::ParameterHandler point() {
 constexpr T K{166.67}, G{76.92}, alpha{1e-4}, T0{20};
 constexpr T E{9 * K * G / (3 * K + G)}, nu{(3 * K - 2 * G) / (2 * (3 * K + G))};
 
-std::unique_ptr<ctx_type> build(bool with_eigenstrain = false) {
+/// The Hencky chain as a JSON deck: F -> log_strain -> elastic_strain -> stress -> kirchhoff_to_first_piola.
+/// `fixed` takes linear_elasticity with K and G, otherwise a linear_stress on a produced isotropic_tangent.
+std::string deck(bool eigenstrain, bool fixed = false) {
+  std::string const stress{fixed ? R"({"type": "linear_elasticity", "name": "tau", "strain_producer_name": "elastic_strain", "K": 166.67, "G": 76.92})"
+                                 : R"({"type": "linear_stress", "name": "tau", "tangent_source": "stiffness", "strain_source": "elastic_strain"})"};
+  // a history source adds statev slots the evaluator tests do not provide: only with an eigenstrain
+  std::string const thermal{eigenstrain ? R"({"type": "external_scalar_source", "name": "temperature"},
+    {"type": "constant_scalar", "name": "alpha", "value": 1e-4},
+    {"type": "thermal_eigenstrain", "name": "thermal", "alpha_source": "alpha::value", "reference_temperature": 20.0},)"
+                                        : ""};
+  return R"({"materials": [
+    {"type": "external_deformation_gradient_source", "name": "F"},
+    {"type": "constant_scalar", "name": "K", "value": 166.67},
+    {"type": "constant_scalar", "name": "G", "value": 76.92},
+    {"type": "isotropic_tangent", "name": "stiffness", "K_source": "K", "G_source": "G"},
+)" + thermal + R"(
+    {"type": "log_strain", "name": "log_strain", "deformation_gradient_source": "F"},
+    {"type": "elastic_strain", "name": "elastic_strain", "strain_source": "log_strain",
+     "eigenstrain_sources": [)" + std::string{eigenstrain ? R"("thermal")" : ""} + R"(]},
+    )" + stress + R"(,
+    {"type": "kirchhoff_to_first_piola", "name": "hencky", "stress_source": "tau", "tangent_source": ")" +
+         std::string{fixed ? "tau" : "stiffness"} + R"(", "strain_source": "log_strain", "deformation_gradient_source": "F"}]})";
+}
+
+std::unique_ptr<ctx_type> build(bool with_eigenstrain = false, bool fixed = false) {
   auto owner{std::make_unique<ctx_type>()};
-  auto &ctx{*owner};
-  param_type p;
-  p.insert<std::string>("name", "F");
-  ctx.create<nm::external_deformation_gradient_source<policy>>(p);
-  for (auto const &[name, value] : {std::pair{"K", K}, std::pair{"G", G}, std::pair{"alpha", alpha}}) {
-    p.clear();
-    p.insert<std::string>("name", name);
-    p.insert<T>("value", value);
-    ctx.create<nm::constant_scalar<policy>>(p);
-  }
-  p.clear();
-  p.insert<std::string>("name", "stiffness");
-  p.insert<std::string>("K_source", "K");
-  p.insert<std::string>("G_source", "G");
-  ctx.create<nm::isotropic_tangent<policy>>(p);
-  if (with_eigenstrain) {
-    p.clear();
-    p.insert<std::string>("name", "temperature");
-    ctx.create<nm::external_scalar_source<policy>>(p);
-    p.clear();
-    p.insert<std::string>("name", "thermal");
-    p.insert<std::string>("alpha_source", "alpha::value");
-    p.insert<T>("reference_temperature", T0);
-    ctx.create<nm::thermal_eigenstrain<policy>>(p);
-  }
-  p.clear();
-  p.insert<std::string>("name", "hencky");
-  p.insert<std::string>("deformation_gradient_source", "F");
-  p.insert<std::string>("tangent_source", "stiffness");
-  if (with_eigenstrain)
-    p.insert<std::string>("eigenstrain_source", "thermal");
-  ctx.create<nm::hencky_elasticity<policy>>(p);
-  ctx.finalize();
+  nm::umat::make_json_builder<policy>(deck(with_eigenstrain, fixed))(*owner, {});
   return owner;
 }
 
@@ -89,7 +78,7 @@ TEST(Hencky, DilatationIsExact) {
   ev.evaluate_deformation_gradient(nullptr, tmech::eye<T, 3, 2>(), stretch(l, l, l), 0, 1);
   EXPECT_NEAR(ev.stress()(0, 0), 3 * K * std::log(l) / l, 1e-10); // P = tau F^-T, tau = 3 K ln(l) I
   EXPECT_NEAR(ev.stress()(0, 1), 0, 1e-14);
-  EXPECT_NEAR(ctx->get<tensor2>("hencky", "log_strain")(1, 1), std::log(l), 1e-14);
+  EXPECT_NEAR(ctx->get<tensor2>("log_strain", "strain")(1, 1), std::log(l), 1e-14);
 }
 
 TEST(Hencky, SmallStrainLimitIsLinearElasticity) {
@@ -164,15 +153,43 @@ TEST(Hencky, EigenstrainShiftsTheLogStrain) {
   EXPECT_NEAR(tmech::norm(ctx->get<tensor2>("hencky", "stress")), 0, 1e-10);
 }
 
-TEST(Hencky, FromJson) {
-  ctx_type ctx;
-  nm::umat::make_json_builder<policy>(R"({"materials": [
-    {"type": "external_deformation_gradient_source", "name": "F"},
-    {"type": "constant_scalar", "name": "K", "value": 166.67},
-    {"type": "constant_scalar", "name": "G", "value": 76.92},
-    {"type": "isotropic_tangent", "name": "stiffness", "K_source": "K", "G_source": "G"},
-    {"type": "hencky_elasticity", "name": "h", "deformation_gradient_source": "F", "tangent_source": "stiffness"}]})")(ctx, {});
-  EXPECT_NE(ctx.find("h"), nullptr);
+TEST(Hencky, TangentMatchesFiniteDifferencesAtAGeneralFWithAnEigenstrain) {
+  tmech::tensor<T, 3, 1> axis;
+  axis(0) = 1, axis(1) = 2, axis(2) = 2;
+  tensor2 U{stretch(1.25, 0.9, 1.1)};
+  U(0, 1) = U(1, 0) = 0.15;
+  tensor2 F{nm::rotation(tmech::tensor<T, 3, 1>{axis / 3}, T{0.7}) * U};
+  F(0, 1) += 0.2;
+  for (bool const fixed : {false, true}) {
+    auto ctx{build(true, fixed)};
+    dynamic_cast<nm::external_scalar_source<policy> *>(ctx->find("temperature"))->bind(T0, T0 + 40);
+    driver d(*ctx, point());
+    auto const res{d.step(F, tensor2{}, control::deformation(), 0, 1)};
+    ASSERT_TRUE(res.converged);
+    EXPECT_LT(d.tangent_error(res), 1e-6) << fixed;
+  }
+}
+
+TEST(Hencky, LinearElasticityOnTheSameConstantsGivesTheSameStress) {
+  auto produced{build()};
+  auto fixed{build(false, true)};
+  tensor2 F{stretch(1.2, 0.95, 1.05)};
+  F(0, 1) = 0.3;
+  for (auto *ctx : {produced.get(), fixed.get()}) {
+    dynamic_cast<nm::external_deformation_gradient_source<policy> *>(ctx->find("F"))->bind(tmech::eye<T, 3, 2>(), F);
+    ctx->update();
+  }
+  EXPECT_LE(tmech::norm(tensor2{produced->get<tensor2>("hencky", "stress") - fixed->get<tensor2>("hencky", "stress")}), 1e-12);
+}
+
+// the chain as a deck: the template a user starts from
+TEST(Hencky, TheJsonDeckBuildsAndEvaluates) {
+  auto ctx{build(true)};
+  EXPECT_NE(ctx->find("hencky"), nullptr);
+  dynamic_cast<nm::external_deformation_gradient_source<policy> *>(ctx->find("F"))->bind(tmech::eye<T, 3, 2>(), tmech::eye<T, 3, 2>());
+  dynamic_cast<nm::external_scalar_source<policy> *>(ctx->find("temperature"))->bind(T0, T0 + 100);
+  ctx->update();
+  EXPECT_NEAR(ctx->get<tensor2>("hencky", "stress")(1, 1), -3 * K * alpha * 100, 1e-10);
 }
 
 } // namespace
