@@ -8,6 +8,7 @@
 #include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/umat/json_model.h"
 #include "numsim-materials/umat/material_point_evaluator.h"
+#include "numsim-materials/umat/statev_map.h"
 
 namespace {
 
@@ -155,6 +156,20 @@ TEST(IncrementalElasticity, FromJson) {
     {"type": "linear_elasticity", "name": "total", "strain_producer_name": "strain", "K": 100.0, "G": 40.0},
     {"type": "incremental_linear_elasticity", "name": "inc", "strain_source": "strain", "tangent_source": "total"}]})")(ctx, {});
   EXPECT_NE(ctx.find("inc"), nullptr);
+}
+
+// The stress history is stored as a stress: STATEV holds sigma_12 as is, not doubled like a strain.
+TEST(IncrementalElasticity, StressIsStoredAsAStress) {
+  auto ctx{build()};
+  auto d{driver_for(*ctx)};
+  tensor2 eps;
+  eps(0, 1) = eps(1, 0) = 1e-3;
+  ASSERT_TRUE(d.step(eps, tensor2{}, nm::load_control<T>::strain(), 0, 1).converged);
+  const u::statev_map<policy> map{*ctx, {{"strain", "strain"}}};
+  ASSERT_EQ(map.describe(), std::vector<std::string>{"0..5  inc::stress  [stress]"});
+  std::vector<T> statev(map.nstatv());
+  map.pack(statev.data());
+  EXPECT_EQ(statev[3], ctx->get<tensor2>("inc", "stress")(0, 1));
 }
 
 } // namespace
