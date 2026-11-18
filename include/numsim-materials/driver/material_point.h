@@ -44,7 +44,8 @@ public:
     optional<std::vector<std::string>>(para, "inputs", {});
     // further "material::property" history kept out of load_history() / store_history()
     optional<std::vector<std::string>>(para, "host_owned", {});
-    // "material::property": evaluate() updates again until its magnitude is at most the tolerance
+    // deprecated, removed later: "material::property" evaluate() updates again until its magnitude is at most the
+    // tolerance; a material declaring converges() is converged after the one update
     optional<std::string>(para, "residual_source", std::string{});
     optional<value_type>(para, "residual_tolerance", value_type{1e-10});
     optional<int>(para, "max_passes", 100);
@@ -142,7 +143,8 @@ public:
 
   // --- Evaluation ---
 
-  /// One graph update, repeated to the fixed point when a residual is configured.
+  /// One graph update; with the deprecated residual_source, repeated until that residual is converged (a graph
+  /// whose fixed point is declared with converges() is converged after the first).
   void evaluate() {
     if (!m_props_readers.empty() && !m_props_bound)
       throw fatal_error("material_point: this model reads its material constants per call — call bind_props() "

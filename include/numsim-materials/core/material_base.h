@@ -176,6 +176,14 @@ protected:
       return *this;
     }
 
+    /// update() reruns the callbacks downstream of a local edge and upstream of `residual` (an output of this
+    /// callback) until |residual| <= the parameter `tolerance`; cutback_error after the parameter `max_passes`.
+    callback_handle& converges(value_type const& residual, std::string const& tolerance, std::string const& max_passes) {
+      m_owner.declare_converges(m_outputs, residual, m_owner.template get_parameter<value_type>(tolerance),
+                                m_owner.template get_parameter<int>(max_passes));
+      return *this;
+    }
+
   private:
     friend class material_base;
     template <typename A>
