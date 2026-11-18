@@ -4,6 +4,7 @@
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_base.h"
 #include "numsim-materials/core/parameter_helpers.h"
+#include "numsim-materials/core/tensor_identities.h"
 
 namespace numsim::materials {
 
@@ -34,7 +35,7 @@ public:
         m_eps(base::template add_input<tensor2>(
             base::template get_parameter<std::string>("strain_source"),
             base::template get_parameter<std::string>("strain_property"), EdgeKind::Global)) {
-    base::add_callback(&linear_stress::update_stress, m_sig).reads(m_C, m_eps);
+    base::add_callback(&linear_stress::update_stress, m_sig).reads(m_C, m_eps).partials(m_sig, m_C, m_eps);
   }
 
   static input_parameter_controller parameters() {
@@ -45,7 +46,13 @@ public:
     return para;
   }
 
-  void update_stress() { m_sig = tmech::dcontract(m_C.get(), m_eps.get()); }
+  void update_stress() {
+    m_sig = tmech::dcontract(m_C.get(), m_eps.get());
+    if (base::want_partials()) {
+      base::partial(m_sig, m_eps) = m_C.get();
+      base::partial(m_sig, m_C) = tmech::otimes(sym_identity<value_type, Dim>(), m_eps.get());
+    }
+  }
 
 private:
   tensor2& m_sig;

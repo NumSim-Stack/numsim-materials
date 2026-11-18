@@ -6,6 +6,7 @@
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_base.h"
 #include "numsim-materials/core/parameter_helpers.h"
+#include "numsim-materials/core/tensor_identities.h"
 
 namespace numsim::materials {
 
@@ -35,7 +36,9 @@ public:
         m_C(base::template add_input<tensor4>(base::template get_parameter<std::string>("tangent_source"),
                                               base::template get_parameter<std::string>("tangent_property"), EdgeKind::Global)) {
     base::add_callback(&incremental_linear_elasticity::copy_tangent, m_tangent).reads(m_C);
-    base::add_callback(&incremental_linear_elasticity::update, m_stress).reads(m_strain, m_tangent);
+    base::add_callback(&incremental_linear_elasticity::update, m_stress)
+        .reads(m_strain, m_tangent)
+        .partials(m_stress, m_strain, m_tangent);
   }
 
   static input_parameter_controller parameters() {
@@ -49,8 +52,13 @@ public:
 
   void copy_tangent() noexcept { m_tangent = m_C.get(); }
 
-  void update() noexcept {
-    m_stress.new_value() = m_stress.old_value() + tmech::dcontract(m_tangent, tensor2{m_strain.new_value() - m_strain.old_value()});
+  void update() {
+    tensor2 const step{m_strain.new_value() - m_strain.old_value()};
+    m_stress.new_value() = m_stress.old_value() + tmech::dcontract(m_tangent, step);
+    if (base::want_partials()) {
+      base::partial(m_stress, m_strain) = m_tangent;
+      base::partial(m_stress, m_tangent) = tmech::otimes(sym_identity<value_type, Dim>(), step);
+    }
   }
 
 private:

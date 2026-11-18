@@ -176,6 +176,31 @@ void load(ctx_type &ctx, tensor2 const &eps, int steps) {
 }
 
 
+T relative(tensor4 const &a, tensor4 const &b) { return tmech::norm(tensor4{a - b}) / tmech::norm(b); }
+
+// the phase derivatives accumulated from their partials are the hand-written phase tangents at the local strains
+TEST(MeanFieldDamage, AccumulatedPhaseTangentsAreTheHandWrittenOnes) {
+  auto ctx{build(true)};
+  auto const &damaged{ctx->derivative<tensor4>("damage", "damaged_stress", "mt_strain", "strain_matrix")};
+  auto const &stiff{ctx->derivative<tensor4>("stiff", "stress", "mt_strain", "strain_spheres")};
+  auto &strain{*dynamic_cast<nm::external_strain_source<policy> *>(ctx->find("strain"))};
+  T previous{0};
+  int damaging{0}, unloading{0};
+  for (T const e : {0.002, 0.004, 0.006, 0.008, 0.006, 0.003, -0.002, 0.005, 0.01}) {
+    strain.bind(uniaxial(previous), uniaxial(e));
+    converge(*ctx);
+    bool const yielding{ctx->get<int>("yield", "is_yielding") != 0};
+    damaging += yielding;
+    unloading += !yielding && ctx->get<T>("law", "damage") > 0;
+    EXPECT_LE(relative(damaged, ctx->get<tensor4>("damage", "damaged_tangent")), 1e-12) << e;
+    EXPECT_LE(relative(stiff, ctx->get<tensor4>("C_i", "tangent")), 1e-12) << e;
+    ctx->commit();
+    previous = e;
+  }
+  EXPECT_GT(damaging, 2);
+  EXPECT_GT(unloading, 2);
+}
+
 TEST(MeanFieldDamage, BelowTheThresholdTheDamageChainReproducesTheLinearComposite) {
   auto nonlinear{build(true)}, linear{build(false)};
   tensor2 const eps{uniaxial(1e-4)}; // the matrix strain stays below kappa_0

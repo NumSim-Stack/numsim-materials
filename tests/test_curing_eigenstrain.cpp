@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include <memory>
+#include <utility>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/isotropize.h"
 #include "numsim-materials/core/material_context.h"
@@ -127,6 +128,29 @@ TEST(CuringEigenstrain, ChemicalShrinkageIsAnEigenstrainOfTheDegreeOfCure) {
   EXPECT_NEAR(sig(0, 0), -3 * Km * beta * 0.5, 1e-12);
   EXPECT_NEAR(sig(1, 1), sig(0, 0), 1e-12);
   EXPECT_NEAR(ctx->get<tensor2>("shrinkage", "eigenstrain")(2, 2), beta * 0.5, 1e-15);
+}
+
+// the stress accumulated from the partials: d sigma / d eps is the tangent, d sigma / d xi = -C : beta I
+TEST(CuringEigenstrain, AccumulatedDerivativesOfTheStress) {
+  auto ctx{build()};
+  auto const &by_strain{ctx->derivative<tensor4>("elastic", "stress", "strain", "strain")};
+  auto const &by_cure{ctx->derivative<tensor2>("elastic", "stress", "cure", "state")};
+  auto &strain{*dynamic_cast<nm::external_strain_source<policy> *>(ctx->find("strain"))};
+  tensor2 eps;
+  eps(0, 0) = 1e-3, eps(1, 2) = eps(2, 1) = -4e-4;
+  T previous{0};
+  for (auto const &[load, cure] : {std::pair{1.0, 0.2}, std::pair{2.0, 0.5}, std::pair{0.5, 0.7}, std::pair{-1.0, 0.9}}) {
+    strain.bind(tensor2{previous * eps}, tensor2{load * eps});
+    ctx->get_mutable<T>("cure", "state") = cure;
+    ctx->update();
+    auto const &C{ctx->get<tensor4>("elastic", "tangent")};
+    EXPECT_LE(tmech::norm(tensor4{by_strain - C}), 1e-12 * tmech::norm(C)) << load;
+    tensor2 const expected{-beta * tmech::dcontract(C, tmech::eye<T, 3, 2>())};
+    EXPECT_LE(tmech::norm(tensor2{by_cure - expected}), 1e-12 * tmech::norm(expected)) << cure;
+    EXPECT_NEAR(by_cure(0, 0), -3 * Km * beta, 1e-12);
+    ctx->commit();
+    previous = load;
+  }
 }
 
 TEST(CuringEigenstrain, FromJson) {

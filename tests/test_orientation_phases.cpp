@@ -5,6 +5,7 @@
 #include <array>
 #include <cmath>
 #include <string>
+#include <utility>
 #include <vector>
 #include <nlohmann/json.hpp>
 #include <tmech/tmech.h>
@@ -392,6 +393,40 @@ TEST(NonlinearFibres, TangentMatchesFiniteDifferencesOnASmallStep) {
   auto const res{d.step(uniaxial(10 * 6e-4 + 1e-6), tensor2{}, nm::load_control<T>::strain(), 10, 1)};
   ASSERT_TRUE(res.converged);
   EXPECT_LT(d.tangent_error(res), 1e-2);
+}
+
+// every fibre's derivative accumulated from its partials is its hand-written damaged tangent, linear and nonlinear
+// localisation, along a load reversal
+TEST(DamagingFibres, AccumulatedTangentsAreTheHandWrittenOnes) {
+  for (bool const nonlinear_ : {false, true}) {
+    auto ctx{build(deck(injection, damaging_fibres(), true, nonlinear_))};
+    policy::ParameterHandler p;
+    p.insert<std::string>("strain_source", "strain");
+    p.insert<std::string>("stress_source", "sf");
+    if (nonlinear_) {
+      p.insert<std::string>("residual_source", "sf::residual");
+      p.insert<int>("max_passes", 200);
+    }
+    nm::material_point_driver<policy> d(*ctx, p);
+    std::vector<std::pair<tensor4 const *, tensor4 const *>> fibres;
+    for (std::size_t q{0}; ctx->find("fibre_" + std::to_string(q)); ++q)
+      fibres.emplace_back(&d.point().derivative<tensor4>("fibre_" + std::to_string(q) + "::damaged_stress",
+                                                         "sf_strain::strain_sf_" + std::to_string(q)),
+                          &ctx->get<tensor4>("fibre_" + std::to_string(q), "damaged_tangent"));
+    ASSERT_EQ(fibres.size(), 25u);
+    std::vector<T> path; // steps of 6e-4: up, back to 40 %, up past the previous maximum
+    for (int k : {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 9, 8, 7, 6, 5, 4, 5, 6, 7, 8, 9, 10, 11, 12})
+      path.push_back(6e-4 * k);
+    int n{0};
+    for (T const e : path) {
+      ASSERT_TRUE(d.step(uniaxial(e), tensor2{}, nm::load_control<T>::strain(), n, 1).converged) << e;
+      for (std::size_t q{0}; q < fibres.size(); ++q)
+        EXPECT_LE(relative(*fibres[q].first, *fibres[q].second), 1e-12) << "nonlinear " << nonlinear_ << " e " << e << " fibre " << q;
+      d.accept();
+      ++n;
+    }
+    EXPECT_GT(along_and_across(*ctx).first, 0);
+  }
 }
 
 TEST(OrientationPhases, RejectsAMalformedEntry) {
