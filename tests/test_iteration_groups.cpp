@@ -104,11 +104,10 @@ public:
     auto handle{base::add_callback(&relaxer::compute, m_x, m_residual, m_check).reads(m_used, m_target)};
     if (base::template get_parameter<bool>("stateful"))
       handle.stateful();
-    auto const &tolerance{base::template get_parameter<T>("tolerance")};
-    auto const &max_passes{base::template get_parameter<int>("max_passes")};
-    handle.converges(m_residual, tolerance, max_passes);
+    auto const &tolerance{base::template get_parameter<std::string>("tolerance_key")};
+    handle.converges(m_residual, tolerance, "max_passes");
     if (base::template get_parameter<bool>("twice"))
-      handle.converges(m_check, tolerance, max_passes);
+      handle.converges(m_check, tolerance, "max_passes");
   }
 
   static input_parameter_controller parameters() {
@@ -119,6 +118,7 @@ public:
     nm::optional<int>(para, "max_passes", 100);
     nm::optional<bool>(para, "stateful", false);
     nm::optional<bool>(para, "twice", false);
+    nm::optional<std::string>(para, "tolerance_key", std::string{"tolerance"});
     return para;
   }
 
@@ -154,7 +154,7 @@ public:
       : base(std::forward<Args>(args)...), m_residual(base::template add_output<T>("residual")) {
     base::add_callback(&lonely::compute, m_residual)
         .reads()
-        .converges(m_residual, base::template get_parameter<T>("tolerance"), base::template get_parameter<int>("max_passes"));
+        .converges(m_residual, "tolerance", "max_passes");
   }
 
   static input_parameter_controller parameters() {
@@ -227,16 +227,12 @@ public:
     m_calls += 1;
   }
 
-  // a deleted overload keeps the pointers the declaration stores from dangling
+  // converges() names parameters: the engine reads them in the material's handler, set_parameter() included
   using handle = typename base::template callback_handle<true>;
   template <typename H = handle>
-  static constexpr bool accepts_references = requires(H &h, T &r, T const &tol, int const &n) { h.converges(r, tol, n); };
+  static constexpr bool accepts_keys = requires(H &h, T &r) { h.converges(r, "tolerance", "max_passes"); };
   template <typename H = handle>
-  static constexpr bool accepts_literals = requires(H &h, T &r) { h.converges(r, 1e-10, 100); };
-  template <typename H = handle>
-  static constexpr bool accepts_literal_tolerance = requires(H &h, T &r, int const &n) { h.converges(r, 1e-10, n); };
-  template <typename H = handle>
-  static constexpr bool accepts_literal_passes = requires(H &h, T &r, T const &tol) { h.converges(r, tol, 100); };
+  static constexpr bool accepts_values = requires(H &h, T &r, T const &tol, int const &n) { h.converges(r, tol, n); };
 
 private:
   T &m_out;
@@ -244,9 +240,7 @@ private:
   nm::input_property<T, nm::property_traits> const &m_in;
 };
 
-static_assert(half<policy>::accepts_references<>);
-static_assert(!half<policy>::accepts_literals<> && !half<policy>::accepts_literal_tolerance<> && !half<policy>::accepts_literal_passes<>,
-              "converges() keeps pointers to its arguments: a temporary would dangle");
+static_assert(half<policy>::accepts_keys<> && !half<policy>::accepts_values<>, "converges() takes parameter keys, not values");
 
 /// converges() on the callback of "out" names "residual", which another callback fills.
 template <typename Traits>
@@ -262,7 +256,7 @@ public:
     base::add_callback(&misnamed::compute_residual, m_residual).reads();
     base::add_callback(&misnamed::compute_out, m_out)
         .reads()
-        .converges(m_residual, base::template get_parameter<T>("tolerance"), base::template get_parameter<int>("max_passes"));
+        .converges(m_residual, "tolerance", "max_passes");
   }
 
   static input_parameter_controller parameters() {
@@ -589,7 +583,7 @@ TEST(IterationGroups, AnInfiniteResidualIsNotConvergedByAnInfiniteTolerance) {
   EXPECT_NE(message.find("in 1 pass "), std::string::npos) << "stops at the first pass: " << message;
 }
 
-TEST(IterationGroups, SettingsChangedAfterFinalizeAreCheckedAtEveryUpdate) {
+TEST(IterationGroups, SettingsChangedAfterFinalizeAreCheckedAtTheNextUpdate) {
   auto ctx{build()};
   auto &relax{dynamic_cast<relaxer<policy> &>(*ctx->find("relax"))};
   relax.set_parameter<T>("tolerance", -1);
@@ -651,6 +645,15 @@ TEST(IterationGroups, ConvergesNamesAnOutputOfItsCallback) {
   auto const message{thrown<std::logic_error>([&] { ctx.create<misnamed<policy>>(p); })};
   EXPECT_NE(message.find("misnamed::residual"), std::string::npos) << message;
   EXPECT_NE(message.find("not an output of the callback"), std::string::npos) << message;
+}
+
+TEST(IterationGroups, ConvergesNamingAMissingParameterThrowsAtConstruction) {
+  ctx_type ctx;
+  param_type p;
+  p.insert<std::string>("name", "relax");
+  p.insert<std::string>("tolerance_key", "tolerence");
+  auto const message{thrown<std::invalid_argument>([&] { ctx.create<relaxer<policy>>(p); })};
+  EXPECT_NE(message.find("'tolerence'"), std::string::npos) << message;
 }
 
 } // namespace

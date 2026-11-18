@@ -596,6 +596,8 @@ private:
 
   void refresh_constants() {
     if (*m_revision != m_seen_revision) {
+      for (auto const& s : m_stages | std::views::filter(&stage::group))
+        check_settings(*s.group); // set_parameter() may have changed them
       reactivate();
       m_seen_revision = *m_revision;
     }
@@ -699,7 +701,6 @@ private:
 
   /// Reruns the group until |residual| <= tolerance; a residual that is not finite never converges.
   static void iterate(stage const& s) {
-    check_settings(*s.group);
     auto const& [residual, value, tolerance, max_passes]{*s.group};
     for (int pass{1};; ++pass) {
       run(s.callbacks);

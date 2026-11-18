@@ -39,7 +39,7 @@ public:
       throw std::invalid_argument(base::where() + "no phase names the 'used_tangent' its strain was localised with");
     base::register_outputs(m_residual)
         .reads(base::m_A, base::m_sigma, base::m_C, base::m_c, m_used | std::views::values)
-        .converges(m_residual, base::template get_parameter<value_type>("tolerance"), base::template get_parameter<int>("max_passes"));
+        .converges(m_residual, "tolerance", "max_passes");
   }
 
   static typename base::input_parameter_controller parameters() {

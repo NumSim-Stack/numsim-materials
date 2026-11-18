@@ -170,15 +170,12 @@ protected:
     }
 
     /// update() reruns the callbacks downstream of a local edge and upstream of `residual` (an output of this
-    /// callback) until |residual| <= tolerance; cutback_error after max_passes. Both reference parameters.
-    callback_handle& converges(value_type const& residual, value_type const& tolerance, int const& max_passes) {
-      m_owner.declare_converges(m_outputs, residual, tolerance, max_passes);
+    /// callback) until |residual| <= the parameter `tolerance`; cutback_error after the parameter `max_passes`.
+    callback_handle& converges(value_type const& residual, std::string const& tolerance, std::string const& max_passes) {
+      m_owner.declare_converges(m_outputs, residual, m_owner.template get_parameter<value_type>(tolerance),
+                                m_owner.template get_parameter<int>(max_passes));
       return *this;
     }
-    // the declaration keeps pointers to tolerance and max_passes: a temporary would dangle
-    callback_handle& converges(value_type const&, value_type&&, int const&) = delete;
-    callback_handle& converges(value_type const&, value_type const&, int&&) = delete;
-    callback_handle& converges(value_type const&, value_type&&, int&&) = delete;
 
   private:
     friend class material_base;

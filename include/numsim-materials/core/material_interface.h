@@ -395,7 +395,7 @@ protected:
     }
   }
 
-  /// `residual` is one of `outputs` (a callback's); `tolerance` and `max_passes` are read on every update.
+  /// `residual` is one of `outputs` (a callback's); `tolerance` and `max_passes` live in the parameter handler.
   void declare_converges(std::vector<void const*> const& outputs, value_type const& residual, value_type const& tolerance,
                          int const& max_passes) {
     auto const& entry{output_entry_of("converges", &residual)};
