@@ -27,7 +27,7 @@ public:
   template <typename... Args>
   explicit incremental_linear_elasticity(Args &&...args)
       : base(std::forward<Args>(args)...),
-        m_stress(base::template add_history_output<tensor2>("stress")),
+        m_stress(base::template add_history_output<tensor2>("stress", codecs::stress{})),
         m_tangent(base::template add_output<tensor4>("tangent")),
         m_strain(base::template add_input_history<tensor2>(
             connection_source{base::template get_parameter<std::string>("strain_source"), base::template get_parameter<std::string>("strain_property")},

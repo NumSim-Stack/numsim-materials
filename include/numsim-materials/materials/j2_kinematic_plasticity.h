@@ -68,8 +68,8 @@ namespace numsim::materials {
 /// Parameters: strain_source, hardening_source, solver_source, K, G, sigma_0,
 ///             C (kinematic modulus), gamma (recovery, default 0).
 /// Outputs: stress, tangent; history plastic_strain, equivalent_plastic_strain,
-///          back_stress. back_stress is stress-like: statev_map exports it with
-///          the strain shear factor until #91 lands.
+///          back_stress. back_stress is stress-like: STATEV holds its shear
+///          as is (codecs::stress), not doubled like the plastic strain.
 template <typename Traits>
 class j2_kinematic_plasticity final
     : public material_base<j2_kinematic_plasticity<Traits>, Traits> {
@@ -98,7 +98,7 @@ public:
         m_eps_p(base::template add_history_output<tensor2>("plastic_strain")),
         m_kappa(base::template add_history_output<value_type>(
             "equivalent_plastic_strain")),
-        m_beta(base::template add_history_output<tensor2>("back_stress")),
+        m_beta(base::template add_history_output<tensor2>("back_stress", codecs::stress{})),
         m_K(base::template get_parameter<value_type>("K")),
         m_G(base::template get_parameter<value_type>("G")),
         m_sigma_0(base::template get_parameter<value_type>("sigma_0")),

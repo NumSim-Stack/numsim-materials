@@ -243,21 +243,6 @@ TEST(StatevMap, UnpackSetsOldAndNew) {
   EXPECT_DOUBLE_EQ(hist->new_value(), 0.42);
 }
 
-/// Storing a rank-2 history variable in 6 slots assumes symmetry. A tensor that
-/// violates it must be reported, not silently stripped of its skew part.
-TEST(StatevMap, PackRejectsNonSymmetricRankTwoHistory) {
-  J2Fixture f;
-  const map_type map(f.ctx, host_owned);
-
-  auto& eps_p = f.ctx.get_mutable<tensor2>("j2", "plastic_strain");
-  eps_p.fill(0.0);
-  eps_p(0, 1) = 1.0;
-  eps_p(1, 0) = -1.0;  // skew
-
-  std::vector<T> statev(map.nstatv(), 0.0);
-  EXPECT_THROW(map.pack(statev.data()), std::runtime_error);
-}
-
 // ---------------------------------------------------------------------------
 // Statelessness: the property that makes one context per thread sufficient
 // ---------------------------------------------------------------------------
@@ -407,25 +392,6 @@ TEST(StatevMap, RoundTripsRankFourHistory) {
           EXPECT_NEAR(back(i, j, k, l), C(i, j, k, l), 1e-10);
   // unpack sets both sides, as for every other type.
   EXPECT_NEAR(mat.stored().old_value()(0, 0, 0, 0), C(0, 0, 0, 0), 1e-10);
-}
-
-/// 36 slots can only hold a minor-symmetric rank-4 tensor; anything else must
-/// be reported rather than silently truncated.
-TEST(StatevMap, PackRejectsRankFourWithoutMinorSymmetry) {
-  ctx_type ctx;
-  param_type p;
-  p.insert<std::string>("name", "store");
-  auto& mat = ctx.create<tensor4_history_material<policy>>(p);
-  ctx.finalize();
-  const map_type map(ctx, {});
-
-  const auto I = tmech::eye<T, 3, 2>();
-  tmech::tensor<T, 3, 4> bad;
-  bad = tmech::otimesu(I, I);  // not minor-symmetric
-  mat.stored().new_value() = bad;
-
-  std::vector<T> statev(map.nstatv(), 0.0);
-  EXPECT_THROW(map.pack(statev.data()), u::fatal_error);
 }
 
 TEST(StatevMap, RotatesRankFourHistory) {

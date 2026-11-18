@@ -24,6 +24,7 @@
 #include "numsim-materials/core/property_traits.h"
 #include "numsim-materials/core/property.h"
 #include "numsim-materials/core/history_property.h"
+#include "numsim-materials/core/history_slot.h"
 #include "numsim-materials/core/input_types.h"
 #include "numsim-materials/core/property_registry_interface.h"
 #include "numsim-materials/core/material_ref.h"
@@ -455,9 +456,31 @@ protected:
         return std::function<double()>{[&value, copy = value.new_value()] { return detail::relative_deviation(copy, value.new_value()); }};
       };
     m_outputs[&value] = {*m_property_handler.find(name(), property_name), {}, std::move(deviation)}; // never constant
+    if constexpr (history_codec_for<default_codec<T>, T, value_type>)
+      m_history_slots.insert_or_assign(&value, history_slot<value_type>{value, default_codec<T>{}});
     return value;
   }
 
+  /// A history a host stores and rotates as `codec` says (core/history_codec.h).
+  template <typename T, typename Codec>
+    requires history_codec_for<Codec, T, value_type>
+  history_property<T>& add_history(std::string const& property_name, T&& data, Codec codec) {
+    auto& value{add_history<T>(property_name, std::forward<T>(data))};
+    m_history_slots.insert_or_assign(&value, history_slot<value_type>{value, codec});
+    return value;
+  }
+
+public:
+  /// How a host stores and rotates `history`; null when its value has no codec.
+  history_slot<value_type> const* history_slot_of(property_base_type const* history) const {
+    auto const it{m_history_slots.find(history)};
+    return it == m_history_slots.end() ? nullptr : &it->second;
+  }
+
+private:
+  std::unordered_map<property_base_type const*, history_slot<value_type>> m_history_slots;
+
+protected:
   template <typename T>
   input_property<T, property_traits>& add_input(
       std::string source_material, std::string source_property,
