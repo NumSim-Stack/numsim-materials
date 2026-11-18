@@ -95,7 +95,7 @@ public:
   }
 
   /// Run the callbacks still to run, in topological order: a constant one only until it has run. An iteration
-  /// group (material_base::converges) reruns until its residual converges, between what it reads and the rest.
+  /// group (callback_handle::converges) reruns until its residual converges, between what it reads and the rest.
   void update() {
     guarded("update", [this] {
       refresh_constants();

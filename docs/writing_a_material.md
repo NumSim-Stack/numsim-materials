@@ -156,10 +156,12 @@ Without `.stateful()`, a stepper that reads nothing would run once. A recorder o
   The engine then runs the solver after everything the driven callbacks read globally (the time step, the temperature), whatever order the deck creates them in. Reads of the solver's own outputs (a function reading the current unknown) add no edge: the solver fills those itself.
 - **What a driven callback must be:** a repeatable trial evaluation. Every call computes from the same committed history and its current inputs, and writes outputs only. It must not commit, count or record, because the solver calls it once per iteration.
 - **Driving any output of a group:** an output filled by another output's callback reruns that callback through `update_source()`.
-- **A fixed point over a local edge:** a node that reads another over a local edge sees the previous pass. A material that measures how far two passes disagree declares that output with `converges()`, with the tolerance and the pass limit as parameters:
+- **A fixed point over a local edge:** a node that reads another over a local edge sees the previous pass. A material that measures how far two passes disagree declares that output with `converges()` on the handle of the callback filling it, with the tolerance and the pass limit as parameters:
 
   ```cpp
-  base::converges(m_residual, base::template get_parameter<value_type>("tolerance"), base::template get_parameter<int>("max_passes"));
+  base::add_callback(&my_material::compute, m_residual)
+      .reads(m_in)
+      .converges(m_residual, base::template get_parameter<value_type>("tolerance"), base::template get_parameter<int>("max_passes"));
   ```
 
   At `finalize()` the engine forms an iteration group: the callbacks downstream of the consumer of a local edge and upstream of the residual. `update()` runs:

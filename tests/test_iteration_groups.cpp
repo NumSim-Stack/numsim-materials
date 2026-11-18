@@ -106,9 +106,9 @@ public:
       handle.stateful();
     auto const &tolerance{base::template get_parameter<T>("tolerance")};
     auto const &max_passes{base::template get_parameter<int>("max_passes")};
-    base::converges(m_residual, tolerance, max_passes);
+    handle.converges(m_residual, tolerance, max_passes);
     if (base::template get_parameter<bool>("twice"))
-      base::converges(m_check, tolerance, max_passes);
+      handle.converges(m_check, tolerance, max_passes);
   }
 
   static input_parameter_controller parameters() {
@@ -152,8 +152,9 @@ public:
   template <typename... Args>
   explicit lonely(Args &&...args)
       : base(std::forward<Args>(args)...), m_residual(base::template add_output<T>("residual")) {
-    base::add_callback(&lonely::compute, m_residual).reads();
-    base::converges(m_residual, base::template get_parameter<T>("tolerance"), base::template get_parameter<int>("max_passes"));
+    base::add_callback(&lonely::compute, m_residual)
+        .reads()
+        .converges(m_residual, base::template get_parameter<T>("tolerance"), base::template get_parameter<int>("max_passes"));
   }
 
   static input_parameter_controller parameters() {
@@ -227,18 +228,15 @@ public:
   }
 
   // a deleted overload keeps the pointers the declaration stores from dangling
-  template <typename Self = half>
-  static constexpr bool accepts_references = requires(Self &s, T &r, T const &tol, int const &n) { s.converges(r, tol, n); };
-  template <typename Self = half>
-  static constexpr bool accepts_literals = requires(Self &s, T &r) { s.converges(r, 1e-10, 100); };
-  template <typename Self = half>
-  static constexpr bool accepts_literal_tolerance = requires(Self &s, T &r, int const &n) { s.converges(r, 1e-10, n); };
-  template <typename Self = half>
-  static constexpr bool accepts_literal_passes = requires(Self &s, T &r, T const &tol) { s.converges(r, tol, 100); };
-  template <typename Self = half>
-  static constexpr bool declares_literals = requires(Self &s, T &r) { s.declare_converges(r, 1e-10, 100); };
-  template <typename Self = half>
-  static constexpr bool declares_references = requires(Self &s, T &r, T const &tol, int const &n) { s.declare_converges(r, tol, n); };
+  using handle = typename base::template callback_handle<true>;
+  template <typename H = handle>
+  static constexpr bool accepts_references = requires(H &h, T &r, T const &tol, int const &n) { h.converges(r, tol, n); };
+  template <typename H = handle>
+  static constexpr bool accepts_literals = requires(H &h, T &r) { h.converges(r, 1e-10, 100); };
+  template <typename H = handle>
+  static constexpr bool accepts_literal_tolerance = requires(H &h, T &r, int const &n) { h.converges(r, 1e-10, n); };
+  template <typename H = handle>
+  static constexpr bool accepts_literal_passes = requires(H &h, T &r, T const &tol) { h.converges(r, tol, 100); };
 
 private:
   T &m_out;
@@ -246,10 +244,41 @@ private:
   nm::input_property<T, nm::property_traits> const &m_in;
 };
 
-static_assert(half<policy>::accepts_references<> && half<policy>::declares_references<>);
+static_assert(half<policy>::accepts_references<>);
 static_assert(!half<policy>::accepts_literals<> && !half<policy>::accepts_literal_tolerance<> && !half<policy>::accepts_literal_passes<>,
               "converges() keeps pointers to its arguments: a temporary would dangle");
-static_assert(!half<policy>::declares_literals<>);
+
+/// converges() on the callback of "out" names "residual", which another callback fills.
+template <typename Traits>
+class misnamed final : public nm::material_base<misnamed<Traits>, Traits> {
+public:
+  using base = nm::material_base<misnamed<Traits>, Traits>;
+  using input_parameter_controller = typename base::input_parameter_controller;
+
+  template <typename... Args>
+  explicit misnamed(Args &&...args)
+      : base(std::forward<Args>(args)...), m_out(base::template add_output<T>("out")),
+        m_residual(base::template add_output<T>("residual")) {
+    base::add_callback(&misnamed::compute_residual, m_residual).reads();
+    base::add_callback(&misnamed::compute_out, m_out)
+        .reads()
+        .converges(m_residual, base::template get_parameter<T>("tolerance"), base::template get_parameter<int>("max_passes"));
+  }
+
+  static input_parameter_controller parameters() {
+    input_parameter_controller para{base::parameters()};
+    nm::optional<T>(para, "tolerance", T{1e-8});
+    nm::optional<int>(para, "max_passes", 10);
+    return para;
+  }
+
+  void compute_out() { m_out = 1; }
+  void compute_residual() { m_residual = 0; }
+
+private:
+  T &m_out;
+  T &m_residual;
+};
 
 void constant(ctx_type &ctx, std::string const &name, T value) {
   param_type p;
@@ -613,6 +642,15 @@ TEST(IterationGroups, InvalidSettingsThrowAtFinalize) {
   relax.insert<int>("max_passes", 0);
   auto ctx{build(relax, false, false)};
   EXPECT_NE(thrown<std::invalid_argument>([&] { ctx->finalize(); }).find("relax::residual"), std::string::npos);
+}
+
+TEST(IterationGroups, ConvergesNamesAnOutputOfItsCallback) {
+  ctx_type ctx;
+  param_type p;
+  p.insert<std::string>("name", "misnamed");
+  auto const message{thrown<std::logic_error>([&] { ctx.create<misnamed<policy>>(p); })};
+  EXPECT_NE(message.find("misnamed::residual"), std::string::npos) << message;
+  EXPECT_NE(message.find("not an output of the callback"), std::string::npos) << message;
 }
 
 } // namespace
