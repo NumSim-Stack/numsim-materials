@@ -577,9 +577,13 @@ protected:
     }
   }
 
-  /// `residual` is the value add_property() returned; `tolerance` and `max_passes` are read on every update.
-  void declare_converges(value_type const& residual, value_type const& tolerance, int const& max_passes) {
+  /// `residual` is one of `outputs` (a callback's); `tolerance` and `max_passes` live in the parameter handler.
+  void declare_converges(std::vector<void const*> const& outputs, value_type const& residual, value_type const& tolerance,
+                         int const& max_passes) {
     auto const& entry{output_entry_of("converges", &residual)};
+    if (!std::ranges::contains(outputs, static_cast<void const*>(&residual)))
+      throw std::logic_error("converges(): '" + key_of(entry) + "' is not an output of the callback of '" +
+                             key_of(output_entry_of("converges", outputs.front())) + "'");
     if (std::ranges::contains(m_systems, entry.property, &system_declaration::own_residual))
       throw std::logic_error("converges(): '" + key_of(entry) + "' is declared twice");
     m_systems.push_back({system_method::picard, {}, {}, {}, entry.property, &tolerance, &max_passes, nullptr});
@@ -596,9 +600,6 @@ protected:
       properties.push_back(output_entry_of("system", unknown).property);
     m_systems.push_back({method, std::move(properties), std::move(seeds), std::move(residuals), nullptr, &tolerance, &max_iter, &report});
   }
-  void declare_converges(value_type const&, value_type&&, int const&) = delete;
-  void declare_converges(value_type const&, value_type const&, int&&) = delete;
-  void declare_converges(value_type const&, value_type&&, int&&) = delete;
 
   void declare_written_by(void const* output, void const* writer) {
     auto const& out{output_entry_of("written_by", output)};

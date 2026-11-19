@@ -100,7 +100,7 @@ public:
   }
 
   /// Run the callbacks still to run, in topological order: a constant one only until it has run. A residual system
-  /// (solvers/system.h, material_base::converges) is solved between what it reads and the rest.
+  /// (solvers/system.h, callback_handle::converges) is solved between what it reads and the rest.
   void update() {
     guarded("update", [this] {
       refresh_constants();
@@ -665,6 +665,8 @@ private:
 
   void refresh_constants() {
     if (*m_revision != m_seen_revision) {
+      for (auto const& s : m_systems)
+        check_settings(*s); // set_parameter() may have changed them
       reactivate();
       m_seen_revision = *m_revision;
     }
@@ -777,7 +779,6 @@ private:
   void solve(system_stage& s, std::vector<property_base*> const& callbacks) {
     auto const& d{*s.declared};
     auto const limit{d.own_residual ? *d.max_iter - 1 : *d.max_iter};
-    check_settings(s);
     start(s);
     for (int it{0};; ++it) {
       if (d.report)

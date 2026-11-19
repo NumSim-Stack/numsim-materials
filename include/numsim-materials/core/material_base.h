@@ -191,6 +191,14 @@ protected:
       return *this;
     }
 
+    /// update() reruns the callbacks downstream of a local edge and upstream of `residual` (an output of this
+    /// callback) until |residual| <= the parameter `tolerance`; cutback_error after the parameter `max_passes`.
+    callback_handle& converges(value_type const& residual, std::string const& tolerance, std::string const& max_passes) {
+      m_owner.declare_converges(m_outputs, residual, m_owner.template get_parameter<value_type>(tolerance),
+                                m_owner.template get_parameter<int>(max_passes));
+      return *this;
+    }
+
   private:
     friend class material_base;
     template <typename A, typename F>
@@ -236,16 +244,6 @@ protected:
       base::declare_written_by(output, handle.m_outputs.front());
     return handle;
   }
-
-  /// update() reruns the callbacks downstream of a local edge and upstream of `residual` (an output) until
-  /// |residual| <= tolerance, and throws cutback_error after max_passes. Both are references to parameters.
-  void converges(value_type const& residual, value_type const& tolerance, int const& max_passes) {
-    base::declare_converges(residual, tolerance, max_passes);
-  }
-  // the declaration keeps pointers to tolerance and max_passes: a temporary would dangle
-  void converges(value_type const&, value_type&&, int const&) = delete;
-  void converges(value_type const&, value_type const&, int&&) = delete;
-  void converges(value_type const&, value_type&&, int&&) = delete;
 
   /// `output` has no callback of its own: the callback of `writer` fills it. Lets the engine skip a constant
   /// callback while another callback of the material keeps running.
