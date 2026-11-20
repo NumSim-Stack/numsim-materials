@@ -176,8 +176,50 @@ protected:
       return *this;
     }
 
+    /// These outputs (not the first) are filled only while a node reads them: is_read() tells the callback, and a
+    /// direct get() of one that no node reads throws.
+    template <typename... Outputs>
+    callback_handle& on_demand(Outputs const&... outputs) {
+      std::vector<void const*> named;
+      (collect(named, outputs), ...);
+      for (auto const* output : named) {
+        if (output == m_outputs.front() || !std::ranges::contains(m_outputs, output))
+          throw std::logic_error("on_demand(): material '" + m_owner.name() + "' names a value that is not a further output of the callback");
+        m_owner.declare_on_demand(output);
+      }
+      return *this;
+    }
+
+    /// The callback fills d output / d read for each of `reads` (as in reads()) through partial() while
+    /// want_partials() is true. After reads().
+    template <typename Output, typename... Reads>
+    callback_handle& partials(Output const& output, Reads const&... reads) {
+      (each_read(reads, [&](auto const& read) { m_owner.declare_partial(m_outputs.front(), output, read); }), ...);
+      return *this;
+    }
+
+    /// The outputs of the callback do not depend on `reads`: their partials are zero. After reads().
+    template <typename... Reads>
+    callback_handle& independent_of(Reads const&... reads) {
+      (each_read(reads, [&](auto const& read) { m_owner.declare_independent(m_outputs.front(), read); }), ...);
+      return *this;
+    }
+
   private:
     friend class material_base;
+    template <typename A, typename F>
+    static void each_read(A const& read, F const& f) {
+      if constexpr (std::is_pointer_v<A>) {
+        if (read)
+          f(*read);
+      } else if constexpr (detail::pointer_range<A>) {
+        for (auto const* p : read)
+          if (p)
+            f(*p);
+      } else {
+        f(read);
+      }
+    }
     template <typename A>
     static void sort_read(std::vector<input_wire_base const*>& inputs, std::vector<void const*>& outputs, A const& read) {
       if constexpr (std::derived_from<detail::output_t<A>, input_wire_base>)

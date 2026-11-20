@@ -45,8 +45,8 @@ include(NumSimWarnings)
 
 set(NUMSIM_MATERIALS_NUMSIM_CORE_TAG "v1.0.0" CACHE STRING
     "numsim-core version (tag or commit) to fetch")
-set(NUMSIM_MATERIALS_TMECH_TAG "46d8fdd3b919e823c4caa10cbffeb2acc5cd0329" CACHE STRING
-    "tmech version (tag or commit) to fetch; main after tmech#38 (eigen decomposition at repeated eigenvalues)")
+set(NUMSIM_MATERIALS_TMECH_TAG "f8c8000d21d7f01d05c91b7562bc1b2fa29c34d8" CACHE STRING
+    "tmech version (tag or commit) to fetch; tmech master after #43 (isotropic tensor functions of a functor object)")
 
 numsim_dependency(numsim-core
   TARGET numsim-core::numsim-core
