@@ -45,8 +45,8 @@ include(NumSimWarnings)
 
 set(NUMSIM_MATERIALS_NUMSIM_CORE_TAG "v1.0.0" CACHE STRING
     "numsim-core version (tag or commit) to fetch")
-set(NUMSIM_MATERIALS_TMECH_TAG "5d45254b8f6fd43f78ebd9b77a7762bb48e23f50" CACHE STRING
-    "tmech version (tag or commit) to fetch; tmech#43 (isotropic tensor functions of a functor object)")
+set(NUMSIM_MATERIALS_TMECH_TAG "f8c8000d21d7f01d05c91b7562bc1b2fa29c34d8" CACHE STRING
+    "tmech version (tag or commit) to fetch; tmech master after #43 (isotropic tensor functions of a functor object)")
 
 numsim_dependency(numsim-core
   TARGET numsim-core::numsim-core
