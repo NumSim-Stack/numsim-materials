@@ -11,7 +11,7 @@
 namespace numsim::materials {
 
 /// What the consumers of a deformation gradient share, computed once: "inverse" F^-1 and "determinant" det F
-/// of "deformation_gradient_source". A singular F gives a NaN inverse; the consumers check det F.
+/// of "deformation_gradient_source". A singular F gives a NaN inverse; neo_hooke checks det F, the Hencky chain does not.
 template <typename Traits>
 class deformation_gradient_kinematics final : public material_base<deformation_gradient_kinematics<Traits>, Traits> {
 public:

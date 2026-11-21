@@ -135,7 +135,7 @@ private:
 
   std::string const &text(std::string const &key) const { return m_parameters.template get<std::string>(key); }
 
-  /// The point's inputs (the kinematics source and the optional time source) and residual settings.
+  /// The point's inputs (the F source and the optional time source) and residual settings.
   parameter_handler point_parameters() const {
     std::vector<std::string> inputs{text("deformation_gradient_source")};
     if (!text("time_source").empty())

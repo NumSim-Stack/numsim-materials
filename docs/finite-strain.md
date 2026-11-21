@@ -33,6 +33,10 @@ push-forward, must be isotropic too. The chain does not check this: a transverse
 accepted and gives results that depend on the rigid rotation. An anisotropic
 material needs the Lagrangian chain below.
 
+**F and its kinematics name the same source.** `log_strain` and `neo_hooke` read F, while
+`kirchhoff_to_first_piola` and `neo_hooke` read F⁻¹ and det F from a `deformation_gradient_kinematics`.
+That node's `deformation_gradient_source` must be the F the model reads; another F gives a wrong P without an error.
+
 **Stress and tangent come from the same law.** The push-forward reads τ and
 dτ/dε_e through two parameters. Both must name the same stress law: the
 `isotropic_tangent` that `linear_stress` reads, or the `linear_elasticity` node

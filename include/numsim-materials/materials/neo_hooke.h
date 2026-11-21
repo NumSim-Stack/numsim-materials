@@ -28,12 +28,11 @@ public:
         m_A(base::template add_output<tensor4>("tangent")),
         m_K(base::template get_parameter<value_type>("K")),
         m_G(base::template get_parameter<value_type>("G")),
-        m_F_name(base::template get_parameter<std::string>("deformation_gradient_source")),
-        m_F(base::template add_input<tensor2>(m_F_name, "deformation_gradient", EdgeKind::Global)),
-        m_F_inv(base::template add_input<tensor2>(base::template get_parameter<std::string>("kinematics_source"), "inverse",
-                                                  EdgeKind::Global)),
-        m_J(base::template add_input<value_type>(base::template get_parameter<std::string>("kinematics_source"), "determinant",
-                                                 EdgeKind::Global)) {
+        m_F(base::template add_input<tensor2>(base::template get_parameter<std::string>("deformation_gradient_source"),
+                                              "deformation_gradient", EdgeKind::Global)),
+        m_kinematics(base::template get_parameter<std::string>("kinematics_source")),
+        m_F_inv(base::template add_input<tensor2>(m_kinematics, "inverse", EdgeKind::Global)),
+        m_J(base::template add_input<value_type>(m_kinematics, "determinant", EdgeKind::Global)) {
     base::add_callback(&neo_hooke::update, m_P, m_A).reads(m_F, m_F_inv, m_J);
   }
 
@@ -66,8 +65,8 @@ private:
   tensor4& m_A;
   const value_type& m_K;
   const value_type& m_G;
-  const std::string& m_F_name;
   const input_property<tensor2, property_traits>& m_F;
+  const std::string& m_kinematics;
   const input_property<tensor2, property_traits>& m_F_inv;
   const input_property<value_type, property_traits>& m_J;
 };

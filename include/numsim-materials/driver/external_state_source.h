@@ -1,7 +1,6 @@
 #ifndef NUMSIM_MATERIALS_DRIVER_EXTERNAL_STATE_SOURCE_H
 #define NUMSIM_MATERIALS_DRIVER_EXTERNAL_STATE_SOURCE_H
 
-
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_base.h"
 

@@ -1,10 +1,12 @@
 #include <gtest/gtest.h>
 #include <cmath>
 #include <string>
+#include <vector>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/materials/deformation_gradient_kinematics.h"
+#include "numsim-materials/materials/neo_hooke.h"
 #include "numsim-materials/umat/statev_map.h"
 
 /// deformation_gradient_kinematics: F^-1 and det F of a deformation gradient, produced in the graph.
@@ -74,7 +76,7 @@ TEST(DeformationGradientKinematics, ASingularFHasANaNInverse) {
   F(2, 2) = 0;
   k.F->bind(tmech::eye<T, 3, 2>(), F);
   k.ctx.update();
-  EXPECT_EQ(k.determinant(), 0.0) << "the consumers check det F";
+  EXPECT_EQ(k.determinant(), 0.0) << "neo_hooke checks det F";
   EXPECT_TRUE(std::isnan(k.inverse()(0, 0)));
 }
 
@@ -85,6 +87,42 @@ TEST(DeformationGradientKinematics, AreNotHistoryAndTheSourceHoldsOnlyF) {
   nm::umat::statev_map<policy> const map{k.ctx, {}};
   ASSERT_EQ(map.describe(), std::vector<std::string>{"0..8  F::deformation_gradient  [full] [two-point]"})
       << "plain properties of the current F: nothing in STATEV";
+}
+
+/// F, its kinematics and a neo_hooke reading both.
+struct hyperelastic {
+  ctx_type ctx;
+  nm::external_deformation_gradient_source<policy> *F{nullptr};
+
+  hyperelastic() {
+    param_type p;
+    p.insert<std::string>("name", "F");
+    F = &ctx.create<nm::external_deformation_gradient_source<policy>>(p);
+    p.clear();
+    p.insert<std::string>("name", "kinematics");
+    p.insert<std::string>("deformation_gradient_source", "F");
+    ctx.create<nm::deformation_gradient_kinematics<policy>>(p);
+    p.clear();
+    p.insert<std::string>("name", "nh");
+    p.insert<std::string>("deformation_gradient_source", "F");
+    p.insert<std::string>("kinematics_source", "kinematics");
+    p.insert<T>("K", T{0.833});
+    p.insert<T>("G", T{0.386});
+    ctx.create<nm::neo_hooke<policy>>(p);
+    ctx.finalize();
+  }
+
+  tensor2 const &stress() { return ctx.get<tensor2>("nh", "stress"); }
+};
+
+TEST(DeformationGradientKinematics, AConsumerFollowsAnFWrittenWithoutBind) {
+  hyperelastic bound, written;
+  bound.F->bind(tmech::eye<T, 3, 2>(), deformation());
+  bound.ctx.update();
+  written.ctx.update();
+  written.ctx.get_mutable<tensor2>("F", "deformation_gradient") = deformation();
+  written.ctx.update();
+  EXPECT_EQ(tmech::norm(tensor2{written.stress() - bound.stress()}), 0.0);
 }
 
 } // namespace
