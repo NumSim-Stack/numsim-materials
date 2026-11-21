@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <stdexcept>
 #include <unordered_set>
+#include "numsim-materials/core/derivative_check.h"
 #include "numsim-materials/core/material_base.h"
 #include "numsim-materials/core/material_property_info.h"
 #include "numsim-materials/core/object_store.h"
@@ -105,6 +106,13 @@ public:
   void revert() {
     check_finalized("revert");
     m_engine.revert();
+  }
+
+  /// d(output)/d(input) by finite differences along the host path: per perturbation revert(), the input set,
+  /// update(). Parameters: derivative_check_parameters(). Leaves the state evaluated at the input.
+  derivative_check<value_type> check_derivative(parameter_handler parameters) {
+    check_finalized("check_derivative");
+    return detail::derivative::run<Traits>(*this, std::move(parameters));
   }
 
   // --- Checkpoint / Restart ---

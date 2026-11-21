@@ -12,7 +12,6 @@
 #include "numsim-materials/materials/j2_rk_plasticity.h"
 #include "numsim-materials/solvers/local_newton.h"
 #include "numsim-materials/solvers/butcher_tableau.h"
-#include "numsim-materials/driver/derivative_check.h"
 #include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/umat/errors.h"
 
@@ -285,10 +284,12 @@ void advance(ctx_type& ctx, numsim::materials::external_strain_source<policy>& s
 }
 
 /// Relative error of the DP tangent, differentiated along the host path.
-T dp_tangent_error(ctx_type& ctx, numsim::materials::external_strain_source<policy>& strain) {
-  auto const& old{strain.strain().old_value()};
-  return numsim::materials::check_derivative<tensor2>(ctx, "dp::stress", "dp::tangent", strain.strain().new_value(),
-                                                     [&](tensor2 const& e) { strain.bind(old, e); }).rel_error;
+T dp_tangent_error(ctx_type& ctx) {
+  param_type p;
+  p.insert<std::string>("output", "dp::stress");
+  p.insert<std::string>("input", "stepper::strain");
+  p.insert<std::string>("analytical", "dp::tangent");
+  return ctx.check_derivative(std::move(p)).rel_error;
 }
 
 /// increment * e_00, the path of a tensor_component_stepper on (0, 0).
@@ -360,7 +361,7 @@ TEST_F(DPTangentTest, ConsistentTangent) {
   T max_rel_error = 0;
   for (int i = 0; i < 15; ++i) {
     advance(ctx, *strain, uniaxial_increment(T{0.02}));
-    auto rel = dp_tangent_error(ctx, *strain);
+    auto rel = dp_tangent_error(ctx);
     auto alpha = ctx.get<T>("dp", "equivalent_plastic_strain");
     numsim_core::println("  DP step {:2d}: rel={:.2e} alpha={:.4e}", i, rel, alpha);
     if (rel > max_rel_error) max_rel_error = rel;
@@ -416,7 +417,7 @@ T run_dp_max_tangent_error(T increment, int steps) {
   T max_rel = 0;
   for (int i = 0; i < steps; ++i) {
     advance(ctx, strain, uniaxial_increment(increment));
-    auto rel = dp_tangent_error(ctx, strain);
+    auto rel = dp_tangent_error(ctx);
     if (rel > max_rel) max_rel = rel;
     ctx.commit();
   }
@@ -493,7 +494,7 @@ T max_tangent_error(std::vector<double> const& direction, T increment, int steps
     // Only plastic steps are interesting: an elastic step returns C_e, which
     // every path reproduces trivially.
     if (ctx.get<T>("dp", "equivalent_plastic_strain") > T{1e-10})
-      worst = std::max(worst, dp_tangent_error(ctx, strain));
+      worst = std::max(worst, dp_tangent_error(ctx));
     ctx.commit();
   }
   return worst;

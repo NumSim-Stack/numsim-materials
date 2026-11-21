@@ -271,8 +271,9 @@ has a singular stiffness whatever the hardening.
 
 ## 5. Verification
 
-`check_derivative()` compares the analytical tangent against a central difference
-along the host path: per perturbation `revert()`, bind the strain, `update()`.
+`ctx.check_derivative()` compares the analytical tangent against a central
+difference along the host path: per perturbation `revert()`, set the strain,
+`update()`.
 Coverage:
 
 | path | purpose |

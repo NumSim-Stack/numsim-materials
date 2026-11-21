@@ -163,9 +163,10 @@ The types registered by `register_default_materials<policy>()`.
 **Postprocessing** — `property_console_logger` and `property_plot` (not
 factory-registered; Qt6 optional for the latter)
 
-**Driver** — `check_derivative()` (`driver/derivative_check.h`): an analytical
-derivative against central differences along the host path (revert, set the
-input, `update()`)
+**Derivative check** — `ctx.check_derivative(parameters)`: name the output, the
+input and the analytical derivative; the graph perturbs the input along the
+directions of its history codec and evaluates as a host does (revert, set the
+input, `update()`). See `docs/writing_a_material.md` §5.
 
 ## JSON-driven configuration
 

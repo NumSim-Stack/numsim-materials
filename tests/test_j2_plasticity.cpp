@@ -11,7 +11,6 @@
 #include "numsim-materials/materials/j2_rk_plasticity.h"
 #include "numsim-materials/solvers/local_newton.h"
 #include "numsim-materials/solvers/butcher_tableau.h"
-#include "numsim-materials/driver/derivative_check.h"
 #include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/umat/errors.h"
 
@@ -150,10 +149,12 @@ void step(ctx_type& ctx, numsim::materials::external_strain_source<policy>& stra
 }
 
 /// Relative error of the J2 tangent, differentiated along the host path.
-T tangent_error(ctx_type& ctx, numsim::materials::external_strain_source<policy>& strain) {
-  auto const& old{strain.strain().old_value()};
-  return numsim::materials::check_derivative<tensor2>(ctx, "j2::stress", "j2::tangent", strain.strain().new_value(),
-                                                     [&](tensor2 const& e) { strain.bind(old, e); }).rel_error;
+T tangent_error(ctx_type& ctx) {
+  param_type p;
+  p.insert<std::string>("output", "j2::stress");
+  p.insert<std::string>("input", "stepper::strain");
+  p.insert<std::string>("analytical", "j2::tangent");
+  return ctx.check_derivative(std::move(p)).rel_error;
 }
 
 class J2TangentTest : public ::testing::Test {
@@ -213,7 +214,7 @@ TEST_F(J2TangentTest, ConsistentTangentAllSteps) {
   int plastic_steps = 0;
   for (int i = 0; i < 20; ++i) {
     step(ctx, *m_strain);
-    const auto rel = tangent_error(ctx, *m_strain);
+    const auto rel = tangent_error(ctx);
     const auto alpha = ctx.get<T>("j2", "equivalent_plastic_strain");
     const bool was_plastic = alpha_before > T{1e-10};
     const bool is_plastic = alpha > T{1e-10};
@@ -397,7 +398,7 @@ TEST_F(RKPlasticityTest, ImplicitEulerMatchesMonolithic) {
   int plastic_steps = 0;
   for (int i = 0; i < 20; ++i) {
     step(ctx, *m_strain);
-    const auto rel = tangent_error(ctx, *m_strain);
+    const auto rel = tangent_error(ctx);
     const auto alpha = ctx.get<T>("j2", "equivalent_plastic_strain");
     const bool was_plastic = alpha_before > T{1e-10};
     const bool is_plastic = alpha > T{1e-10};
@@ -441,7 +442,7 @@ TEST_F(RKPlasticityTest, SDIRK3TangentCheck) {
   int plastic_steps = 0;
   for (int i = 0; i < 20; ++i) {
     step(ctx, *m_strain);
-    const auto rel = tangent_error(ctx, *m_strain);
+    const auto rel = tangent_error(ctx);
     const auto alpha = ctx.get<T>("j2", "equivalent_plastic_strain");
     const bool was_plastic = alpha_before > T{1e-10};
     const bool is_plastic = alpha > T{1e-10};

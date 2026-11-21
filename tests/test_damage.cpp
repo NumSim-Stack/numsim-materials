@@ -7,7 +7,6 @@
 #include "numsim-materials/materials/strain_threshold_yield.h"
 #include "numsim-materials/materials/exponential_damage_law.h"
 #include "numsim-materials/materials/isotropic_damage.h"
-#include "numsim-materials/driver/derivative_check.h"
 #include "numsim-materials/driver/external_state_source.h"
 
 namespace {
@@ -187,10 +186,11 @@ protected:
 
   /// Relative error of the damaged tangent, differentiated along the host path.
   T tangent_error() {
-    auto const& old{strain->strain().old_value()};
-    return numsim::materials::check_derivative<tensor2>(ctx, "damaged::damaged_stress", "damaged::damaged_tangent",
-                                                       strain->strain().new_value(),
-                                                       [&](tensor2 const& e) { strain->bind(old, e); }).rel_error;
+    param_type p;
+    p.insert<std::string>("output", "damaged::damaged_stress");
+    p.insert<std::string>("input", "stepper::strain");
+    p.insert<std::string>("analytical", "damaged::damaged_tangent");
+    return ctx.check_derivative(std::move(p)).rel_error;
   }
 };
 

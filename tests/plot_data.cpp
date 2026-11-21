@@ -8,7 +8,6 @@
 #include "numsim-materials/materials/drucker_prager_plasticity.h"
 #include "numsim-materials/materials/j2_plasticity.h"
 #include "numsim-materials/solvers/local_newton.h"
-#include "numsim-materials/driver/derivative_check.h"
 #include "numsim-materials/driver/external_state_source.h"
 
 using policy = numsim::materials::material_policy_default;
@@ -58,11 +57,12 @@ void step(ctx_type& ctx, numsim::materials::external_strain_source<policy>& stra
 }
 
 /// Relative error of `material`'s tangent, differentiated along the host path.
-T tangent_error(ctx_type& ctx, numsim::materials::external_strain_source<policy>& strain, std::string const& material) {
-  auto const& old{strain.strain().old_value()};
-  return numsim::materials::check_derivative<tensor2>(ctx, material + "::stress", material + "::tangent",
-                                                     strain.strain().new_value(),
-                                                     [&](tensor2 const& e) { strain.bind(old, e); }).rel_error;
+T tangent_error(ctx_type& ctx, std::string const& material) {
+  param_type p;
+  p.insert<std::string>("output", material + "::stress");
+  p.insert<std::string>("input", "stepper::strain");
+  p.insert<std::string>("analytical", material + "::tangent");
+  return ctx.check_derivative(std::move(p)).rel_error;
 }
 
 run_result run_j2(T increment, int steps,
@@ -111,7 +111,7 @@ run_result run_j2(T increment, int steps,
            strain.strain().new_value(),
            ctx.get<tensor2>("j2", "stress"),
            ctx.get<T>("j2", "equivalent_plastic_strain"),
-           tangent_error(ctx, strain, "j2"),
+           tangent_error(ctx, "j2"),
            ci, cj);
     ctx.commit();
   }
@@ -167,7 +167,7 @@ run_result run_dp(T increment, int steps,
            strain.strain().new_value(),
            ctx.get<tensor2>("dp", "stress"),
            ctx.get<T>("dp", "equivalent_plastic_strain"),
-           tangent_error(ctx, strain, "dp"),
+           tangent_error(ctx, "dp"),
            ci, cj);
     ctx.commit();
   }

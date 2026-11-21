@@ -141,6 +141,18 @@ Without `.stateful()`, a stepper that reads nothing would run once. A recorder o
   - `update()` throws.
   - `update_property()` re-evaluates the upstream callbacks, constants included, and leaves the running update untouched.
   - A callback must not suspend or move to another thread while it runs: with the debug checks on, the read check's scope is per thread.
+- **Derivatives:** `ctx.check_derivative(parameters)` compares an analytical derivative with finite differences, evaluated as a host does: per perturbation `revert()`, the input set, `update()`. It leaves the state evaluated at the input, so the host commits as usual.
+
+  ```cpp
+  param_type p;
+  p.insert<std::string>("output", "j2::stress");
+  p.insert<std::string>("input", "stepper::strain");   // host-bound: no callback fills it
+  p.insert<std::string>("analytical", "j2::tangent");  // output indices first
+  auto const check{ctx.check_derivative(std::move(p))}; // check.rel_error, check.directions
+  ```
+
+  - The input's history codec sets the directions: one for a scalar, three for a vector, six for a symmetric tensor (`codecs::strain`), nine for a full one (`codecs::two_point`).
+  - Optional: `step` (1e-7), `step_kind` (`absolute`, or `relative`: step · max(|x_k|, 1)), `scheme` (`central` or `forward`), `components` (index pairs (i, j) of a tensor, indices of a vector), `report_threshold` (1e-2: prints the mismatching components above it).
 - **Inspecting the graph:**
   - `ctx.dump()` prints the execution order and marks the constant outputs;
   - `ctx.is_constant(material, property)` asks for one output.
