@@ -2,14 +2,14 @@
 #include <numsim-core/print.h>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_context.h"
-#include "numsim-materials/materials/tensor_component_stepper.h"
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/materials/linear_isotropic_hardening.h"
 #include "numsim-materials/materials/drucker_prager_yield_function.h"
 #include "numsim-materials/materials/drucker_prager_plasticity.h"
 #include "numsim-materials/materials/j2_plasticity.h"
 #include "numsim-materials/solvers/local_newton.h"
-#include "numsim-materials/postprocessing/numerical_diff_checker.h"
+#include "numsim-materials/driver/derivative_check.h"
+#include "numsim-materials/driver/external_state_source.h"
 
 using policy = numsim::materials::material_policy_default;
 using T = policy::value_type;
@@ -48,6 +48,23 @@ void record(run_result& r, int i, const tensor2& eps, const tensor2& sig,
   r.tangent_rel_error.push_back(rel);
 }
 
+/// The stepper's path, bound by the host: component (ci, cj) grows by increment, then one evaluation.
+void step(ctx_type& ctx, numsim::materials::external_strain_source<policy>& strain, T increment, std::size_t ci,
+          std::size_t cj) {
+  tensor2 e{strain.strain().old_value()};
+  e(ci, cj) += increment;
+  strain.bind(strain.strain().old_value(), e);
+  ctx.update();
+}
+
+/// Relative error of `material`'s tangent, differentiated along the host path.
+T tangent_error(ctx_type& ctx, numsim::materials::external_strain_source<policy>& strain, std::string const& material) {
+  auto const& old{strain.strain().old_value()};
+  return numsim::materials::check_derivative<tensor2>(ctx, material + "::stress", material + "::tangent",
+                                                     strain.strain().new_value(),
+                                                     [&](tensor2 const& e) { strain.bind(old, e); }).rel_error;
+}
+
 run_result run_j2(T increment, int steps,
                   std::size_t ci, std::size_t cj) {
   ctx_type ctx;
@@ -55,9 +72,7 @@ run_result run_j2(T increment, int steps,
 
   p.clear();
   p.insert<std::string>("name", "stepper");
-  p.insert<T>("increment", increment);
-  p.insert<std::vector<std::size_t>>("indices", {ci, cj});
-  ctx.create<numsim::materials::tensor_component_stepper<2, policy>>(p);
+  auto& strain{ctx.create<numsim::materials::external_strain_source<policy>>(p)};
 
   p.clear();
   p.insert<std::string>("name", "elastic");
@@ -86,27 +101,17 @@ run_result run_j2(T increment, int steps,
   p.insert<T>("sigma_0", sigma_0);
   ctx.create<j2_plasticity>(p);
 
-  p.clear();
-  p.insert<std::string>("name", "checker");
-  p.insert<ctx_type*>("context", &ctx);
-  p.insert<std::string>("output_source", "j2::stress");
-  p.insert<std::string>("input_source", "stepper::strain");
-  p.insert<std::string>("analytical_source", "j2::tangent");
-  p.insert<std::vector<std::string>>("history_sources",
-      {"j2::plastic_strain", "j2::equivalent_plastic_strain"});
-  p.insert<T>("epsilon", T{1e-7});
-  ctx.create<numsim::materials::tangent_checker<policy>>(p);
 
   ctx.finalize();
 
   run_result r;
   for (int i = 0; i < steps; ++i) {
-    ctx.update();
+    step(ctx, strain, increment, ci, cj);
     record(r, i,
-           ctx.get<tensor2>("stepper", "strain"),
+           strain.strain().new_value(),
            ctx.get<tensor2>("j2", "stress"),
            ctx.get<T>("j2", "equivalent_plastic_strain"),
-           ctx.get<T>("checker", "rel_error"),
+           tangent_error(ctx, strain, "j2"),
            ci, cj);
     ctx.commit();
   }
@@ -120,9 +125,7 @@ run_result run_dp(T increment, int steps,
 
   p.clear();
   p.insert<std::string>("name", "stepper");
-  p.insert<T>("increment", increment);
-  p.insert<std::vector<std::size_t>>("indices", {ci, cj});
-  ctx.create<numsim::materials::tensor_component_stepper<2, policy>>(p);
+  auto& strain{ctx.create<numsim::materials::external_strain_source<policy>>(p)};
 
   p.clear();
   p.insert<std::string>("name", "elastic");
@@ -154,27 +157,17 @@ run_result run_dp(T increment, int steps,
   p.insert<T>("K_bulk", K_val);
   ctx.create<dp_plasticity>(p);
 
-  p.clear();
-  p.insert<std::string>("name", "checker");
-  p.insert<ctx_type*>("context", &ctx);
-  p.insert<std::string>("output_source", "dp::stress");
-  p.insert<std::string>("input_source", "stepper::strain");
-  p.insert<std::string>("analytical_source", "dp::tangent");
-  p.insert<std::vector<std::string>>("history_sources",
-      {"dp::plastic_strain", "dp::equivalent_plastic_strain"});
-  p.insert<T>("epsilon", T{1e-7});
-  ctx.create<numsim::materials::tangent_checker<policy>>(p);
 
   ctx.finalize();
 
   run_result r;
   for (int i = 0; i < steps; ++i) {
-    ctx.update();
+    step(ctx, strain, increment, ci, cj);
     record(r, i,
-           ctx.get<tensor2>("stepper", "strain"),
+           strain.strain().new_value(),
            ctx.get<tensor2>("dp", "stress"),
            ctx.get<T>("dp", "equivalent_plastic_strain"),
-           ctx.get<T>("checker", "rel_error"),
+           tangent_error(ctx, strain, "dp"),
            ci, cj);
     ctx.commit();
   }

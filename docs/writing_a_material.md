@@ -139,7 +139,7 @@ Without `.stateful()`, a stepper that reads nothing would run once. A recorder o
 - **After a throw:** the context is partly updated, so it is failed. `update()`, `update_property()` and `commit()` throw until the host calls `revert()`, which restores the history and clears the failure.
 - **From inside a callback:**
   - `update()` throws.
-  - `update_property()` re-evaluates the upstream callbacks, constants included, and leaves the running update untouched (as `numerical_diff_checker` does).
+  - `update_property()` re-evaluates the upstream callbacks, constants included, and leaves the running update untouched.
   - A callback must not suspend or move to another thread while it runs: with the debug checks on, the read check's scope is per thread.
 - **Inspecting the graph:**
   - `ctx.dump()` prints the execution order and marks the constant outputs;

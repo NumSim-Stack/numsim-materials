@@ -271,8 +271,9 @@ has a singular stiffness whatever the hardening.
 
 ## 5. Verification
 
-`tangent_checker` compares the analytical tangent against a central difference
-through the graph. Coverage:
+`check_derivative()` compares the analytical tangent against a central difference
+along the host path: per perturbation `revert()`, bind the strain, `update()`.
+Coverage:
 
 | path | purpose |
 |---|---|
@@ -293,7 +294,7 @@ Two coverage lessons worth keeping:
   the apex branch, the analytical tangent and the central difference both stay
   inside that branch, so they agree perfectly while the stress is wrong — and
   the wrong stress still satisfies `F = 0` to 4e-14, because it is *on* the
-  yield surface, just the wrong projection onto it. `tangent_checker` validates
+  yield surface, just the wrong projection onto it. `check_derivative()` validates
   the derivative of whatever the code does. The branch choice needs its own
   test, which is now `DPBranch.*`.
 - **A tolerance set by the worst step licenses errors in all the others.**

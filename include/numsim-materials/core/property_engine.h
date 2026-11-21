@@ -119,7 +119,7 @@ public:
   }
 
   /// Update a single property (by pointer) and all its upstream dependencies.
-  /// From a callback (numerical_diff_checker), a reevaluation: every upstream callback runs, constants included,
+  /// From a callback, a reevaluation: every upstream callback runs, constants included,
   /// and the running update keeps its state.
   void update_property(const property_base* target,
                        const std::unordered_set<const property_base*>& exclude = {}) {

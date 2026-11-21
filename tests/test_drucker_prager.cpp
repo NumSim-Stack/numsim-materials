@@ -12,7 +12,8 @@
 #include "numsim-materials/materials/j2_rk_plasticity.h"
 #include "numsim-materials/solvers/local_newton.h"
 #include "numsim-materials/solvers/butcher_tableau.h"
-#include "numsim-materials/postprocessing/numerical_diff_checker.h"
+#include "numsim-materials/driver/derivative_check.h"
+#include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/umat/errors.h"
 
 namespace {
@@ -277,6 +278,37 @@ TEST(DruckerPragerPressure, YieldsEarlierInTensionThanInCompression) {
 
 // --- Tangent checker for DP ---
 
+/// The host's increment: old + increment bound as the new strain, then one evaluation.
+void advance(ctx_type& ctx, numsim::materials::external_strain_source<policy>& strain, tensor2 const& increment) {
+  strain.bind(strain.strain().old_value(), strain.strain().old_value() + increment);
+  ctx.update();
+}
+
+/// Relative error of the DP tangent, differentiated along the host path.
+T dp_tangent_error(ctx_type& ctx, numsim::materials::external_strain_source<policy>& strain) {
+  auto const& old{strain.strain().old_value()};
+  return numsim::materials::check_derivative<tensor2>(ctx, "dp::stress", "dp::tangent", strain.strain().new_value(),
+                                                     [&](tensor2 const& e) { strain.bind(old, e); }).rel_error;
+}
+
+/// increment * e_00, the path of a tensor_component_stepper on (0, 0).
+tensor2 uniaxial_increment(T increment) {
+  tensor2 d{tmech::zeros<T, 3, 2>()};
+  d(0, 0) = increment;
+  return d;
+}
+
+/// increment * direction, the path of a multiaxial_stepper.
+tensor2 multiaxial_increment(std::vector<double> const& dir, T increment) {
+  tensor2 d{tmech::zeros<T, 3, 2>()};
+  d(0, 0) = dir[0];
+  d(1, 1) = dir[1];
+  d(2, 2) = dir[2];
+  d(0, 1) = dir[3];
+  d(1, 0) = dir[3];
+  return increment * d;
+}
+
 class DPTangentTest : public ::testing::Test {
 protected:
   void SetUp() override {
@@ -284,9 +316,7 @@ protected:
 
     p.clear();
     p.insert<std::string>("name", "stepper");
-    p.insert<T>("increment", T{0.02});
-    p.insert<std::vector<std::size_t>>("indices", {0, 0});
-    ctx.create<numsim::materials::tensor_component_stepper<2, policy>>(p);
+    strain = &ctx.create<numsim::materials::external_strain_source<policy>>(p);
 
     p.clear();
     p.insert<std::string>("name", "elastic");
@@ -318,28 +348,19 @@ protected:
     p.insert<T>("K_bulk", T{166.67});
     ctx.create<dp_plasticity>(p);
 
-    p.clear();
-    p.insert<std::string>("name", "checker");
-    p.insert<ctx_type*>("context", &ctx);
-    p.insert<std::string>("output_source", "dp::stress");
-    p.insert<std::string>("input_source", "stepper::strain");
-    p.insert<std::string>("analytical_source", "dp::tangent");
-    p.insert<std::vector<std::string>>("history_sources",
-        {"dp::plastic_strain", "dp::equivalent_plastic_strain"});
-    p.insert<T>("epsilon", T{1e-7});
-    ctx.create<numsim::materials::tangent_checker<policy>>(p);
 
     ctx.finalize();
   }
 
   ctx_type ctx;
+  numsim::materials::external_strain_source<policy>* strain{nullptr};
 };
 
 TEST_F(DPTangentTest, ConsistentTangent) {
   T max_rel_error = 0;
   for (int i = 0; i < 15; ++i) {
-    ctx.update();
-    auto rel = ctx.get<T>("checker", "rel_error");
+    advance(ctx, *strain, uniaxial_increment(T{0.02}));
+    auto rel = dp_tangent_error(ctx, *strain);
     auto alpha = ctx.get<T>("dp", "equivalent_plastic_strain");
     numsim_core::println("  DP step {:2d}: rel={:.2e} alpha={:.4e}", i, rel, alpha);
     if (rel > max_rel_error) max_rel_error = rel;
@@ -357,9 +378,7 @@ T run_dp_max_tangent_error(T increment, int steps) {
 
   p.clear();
   p.insert<std::string>("name", "stepper");
-  p.insert<T>("increment", increment);
-  p.insert<std::vector<std::size_t>>("indices", {0, 0});
-  ctx.create<numsim::materials::tensor_component_stepper<2, policy>>(p);
+  auto& strain{ctx.create<numsim::materials::external_strain_source<policy>>(p)};
 
   p.clear();
   p.insert<std::string>("name", "elastic");
@@ -391,23 +410,13 @@ T run_dp_max_tangent_error(T increment, int steps) {
   p.insert<T>("K_bulk", T{166.67});
   ctx.create<dp_plasticity>(p);
 
-  p.clear();
-  p.insert<std::string>("name", "checker");
-  p.insert<ctx_type*>("context", &ctx);
-  p.insert<std::string>("output_source", "dp::stress");
-  p.insert<std::string>("input_source", "stepper::strain");
-  p.insert<std::string>("analytical_source", "dp::tangent");
-  p.insert<std::vector<std::string>>("history_sources",
-      {"dp::plastic_strain", "dp::equivalent_plastic_strain"});
-  p.insert<T>("epsilon", T{1e-7});
-  ctx.create<numsim::materials::tangent_checker<policy>>(p);
 
   ctx.finalize();
 
   T max_rel = 0;
   for (int i = 0; i < steps; ++i) {
-    ctx.update();
-    auto rel = ctx.get<T>("checker", "rel_error");
+    advance(ctx, strain, uniaxial_increment(increment));
+    auto rel = dp_tangent_error(ctx, strain);
     if (rel > max_rel) max_rel = rel;
     ctx.commit();
   }
@@ -440,14 +449,12 @@ TEST(DPConvergence, TangentErrorIsBounded) {
 // ---------------------------------------------------------------------------
 
 /// Max relative tangent error over a multiaxial path, using the repo's own
-/// tangent_checker. Returns -1 if the path never yielded.
-T max_tangent_error(std::vector<double> direction, T increment, int steps) {
+/// check_derivative(). Returns -1 if the path never yielded.
+T max_tangent_error(std::vector<double> const& direction, T increment, int steps) {
   ctx_type ctx;
   param_type p;
   p.insert<std::string>("name", "stepper");
-  p.insert<T>("increment", increment);
-  p.insert<std::vector<double>>("direction", std::move(direction));
-  ctx.create<multiaxial_stepper<policy>>(p);
+  auto& strain{ctx.create<numsim::materials::external_strain_source<policy>>(p)};
 
   p.clear();
   p.insert<std::string>("name", "elastic");
@@ -478,25 +485,15 @@ T max_tangent_error(std::vector<double> direction, T increment, int steps) {
   p.insert<T>("K_bulk", T{166.67});
   ctx.create<dp_plasticity>(p);
 
-  p.clear();
-  p.insert<std::string>("name", "checker");
-  p.insert<ctx_type*>("context", &ctx);
-  p.insert<std::string>("output_source", "dp::stress");
-  p.insert<std::string>("input_source", "stepper::strain");
-  p.insert<std::string>("analytical_source", "dp::tangent");
-  p.insert<std::vector<std::string>>("history_sources",
-      {"dp::plastic_strain", "dp::equivalent_plastic_strain"});
-  p.insert<T>("epsilon", T{1e-7});
-  ctx.create<numsim::materials::tangent_checker<policy>>(p);
   ctx.finalize();
 
   T worst = -1;
   for (int i = 0; i < steps; ++i) {
-    ctx.update();
+    advance(ctx, strain, multiaxial_increment(direction, increment));
     // Only plastic steps are interesting: an elastic step returns C_e, which
     // every path reproduces trivially.
     if (ctx.get<T>("dp", "equivalent_plastic_strain") > T{1e-10})
-      worst = std::max(worst, ctx.get<T>("checker", "rel_error"));
+      worst = std::max(worst, dp_tangent_error(ctx, strain));
     ctx.commit();
   }
   return worst;

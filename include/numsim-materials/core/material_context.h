@@ -191,7 +191,7 @@ public:
   }
 
   /// Mutable access to a property value — bypasses the property graph.
-  /// WARNING: Only for diagnostic/privileged code (e.g., numerical_diff_checker).
+  /// WARNING: Only for diagnostic/privileged code.
   /// Writing to a property without triggering update_property leaves the graph
   /// in an inconsistent state. Caller is responsible for restoring consistency.
   template<typename T>
