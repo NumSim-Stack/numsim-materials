@@ -5,13 +5,14 @@
   "derived": {"E": "9 * K * G / (3 * K + G)", "nu": "(3 * K - 2 * G) / (2 * (3 * K + G))"},
   "model": {"materials": [
     {"type": "external_deformation_gradient_source", "name": "F"},
+    {"type": "deformation_gradient_kinematics", "name": "kinematics", "deformation_gradient_source": "F"},
     {"type": "constant_scalar", "name": "K", "value": "$K"},
     {"type": "constant_scalar", "name": "G", "value": "$G"},
     {"type": "isotropic_tangent", "name": "stiffness", "K_source": "K", "G_source": "G"},
     {"type": "log_strain", "name": "log_strain", "deformation_gradient_source": "F"},
     {"type": "elastic_strain", "name": "elastic_strain", "strain_source": "log_strain"},
     {"type": "linear_stress", "name": "tau", "tangent_source": "stiffness", "strain_source": "elastic_strain"},
-    {"type": "kirchhoff_to_first_piola", "name": "hencky", "stress_source": "tau", "tangent_source": "stiffness", "strain_source": "log_strain", "deformation_gradient_source": "F"}]},
+    {"type": "kirchhoff_to_first_piola", "name": "hencky", "stress_source": "tau", "tangent_source": "stiffness", "strain_source": "log_strain", "kinematics_source": "kinematics"}]},
   "point": {"deformation_gradient_source": "F", "stress_source": "hencky"},
   "record": {"eps": "log_strain::strain"},
   "checks": [

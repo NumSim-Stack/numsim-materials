@@ -3,6 +3,7 @@
 // small-strain limit, and the evaluator's deformation-gradient path (from C++
 // and from a JSON document).
 #include <gtest/gtest.h>
+#include <type_traits>
 #include <tmech/tmech.h>
 #include <nlohmann/json.hpp>
 
@@ -11,6 +12,7 @@
 
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/materials/linear_elasticity.h"
+#include "numsim-materials/materials/deformation_gradient_kinematics.h"
 #include "numsim-materials/materials/neo_hooke.h"
 #include "numsim-materials/materials/saint_venant_kirchhoff.h"
 #include "numsim-materials/driver/external_state_source.h"
@@ -40,8 +42,14 @@ nm::external_deformation_gradient_source<policy>& add_model(ctx_type& ctx) {
   p.insert<std::string>("name", "F");
   auto& src = ctx.create<nm::external_deformation_gradient_source<policy>>(p);
   p.clear();
+  p.insert<std::string>("name", "kinematics");
+  p.insert<std::string>("deformation_gradient_source", "F");
+  ctx.create<nm::deformation_gradient_kinematics<policy>>(p);
+  p.clear();
   p.insert<std::string>("name", "model");
   p.insert<std::string>("deformation_gradient_source", "F");
+  if constexpr (std::is_same_v<Model, nm::neo_hooke<policy>>)
+    p.insert<std::string>("kinematics_source", "kinematics");
   p.insert<T>("K", K);
   p.insert<T>("G", G);
   ctx.create<Model>(p);
@@ -200,7 +208,8 @@ TEST(JsonModel, BuildsAFiniteStrainModel) {
   const nlohmann::json doc = nlohmann::json::parse(R"({
     "materials": [
       {"type": "external_deformation_gradient_source", "name": "F"},
-      {"type": "neo_hooke", "name": "model", "deformation_gradient_source": "F",
+      {"type": "deformation_gradient_kinematics", "name": "kinematics", "deformation_gradient_source": "F"},
+      {"type": "neo_hooke", "name": "model", "deformation_gradient_source": "F", "kinematics_source": "kinematics",
        "K": 0.833, "G": 0.386}
     ]
   })");
@@ -232,37 +241,6 @@ TEST(ExternalDeformationGradientSource, BindsRowMajorBuffers) {
   src.bind(old9, new9);
   EXPECT_EQ(tmech::norm(tensor2{src.deformation_gradient().new_value() - F}), 0.0);
   EXPECT_EQ(tmech::norm(tensor2{src.deformation_gradient().old_value() - F_old}), 0.0);
-}
-
-TEST(ExternalDeformationGradientSource, PublishesTheInverseAndTheDeterminant) {
-  ctx_type ctx;
-  auto& src = add_model<nm::neo_hooke<policy>>(ctx);
-  const auto& F_inv = ctx.get<tensor2>("F", "inverse");
-  const auto& J = ctx.get<T>("F", "determinant");
-  // the initial state is the identity
-  EXPECT_EQ(J, 1.0);
-  EXPECT_EQ(tmech::norm(tensor2{F_inv - tmech::eye<T, 3, 2>()}), 0.0);
-  // both bind() forms keep them in step with the new deformation gradient
-  const tensor2 F{test_deformation()};
-  src.bind(tmech::eye<T, 3, 2>(), F);
-  EXPECT_DOUBLE_EQ(J, tmech::det(F));
-  EXPECT_LT(tmech::norm(tensor2{F_inv * F - tmech::eye<T, 3, 2>()}), 1e-15);
-  const tensor2 F2{tmech::trans(F)};
-  T old9[9], new9[9];
-  tmech::adaptor<T, 3, 2, tmech::full<3>>{old9} = F;
-  tmech::adaptor<T, 3, 2, tmech::full<3>>{new9} = F2;
-  src.bind(old9, new9);
-  EXPECT_DOUBLE_EQ(J, tmech::det(F2));
-  EXPECT_LT(tmech::norm(tensor2{F_inv * F2 - tmech::eye<T, 3, 2>()}), 1e-15);
-}
-
-TEST(ExternalDeformationGradientSource, InverseAndDeterminantAreNotHistory) {
-  // plain properties of the current F: they add nothing to STATEV
-  ctx_type ctx;
-  add_model<nm::neo_hooke<policy>>(ctx);
-  u::material_point_evaluator<policy> ev{
-      ctx, {.strain_source = {}, .stress_source = "model", .deformation_gradient_source = "F"}};
-  EXPECT_EQ(ev.nstatv(), 0u);
 }
 
 TEST(ExternalDeformationGradientSource, IsStoredAsATwoPointTensor) {

@@ -11,6 +11,7 @@
 #include "numsim-materials/materials/constant_scalar.h"
 #include "numsim-materials/materials/elastic_strain.h"
 #include "numsim-materials/materials/isotropic_tangent.h"
+#include "numsim-materials/materials/deformation_gradient_kinematics.h"
 #include "numsim-materials/materials/kirchhoff_to_first_piola.h"
 #include "numsim-materials/materials/lagrangian_stress_to_first_piola.h"
 #include "numsim-materials/materials/linear_stress.h"
@@ -105,10 +106,14 @@ std::unique_ptr<ctx_type> chain(T m, pull_back kind, bool anisotropic = false) {
     pp.insert<std::string>("stress_source", "stress");
     pp.insert<std::string>("tangent_source", "stiffness");
     pp.insert<std::string>("strain_source", "strain");
-    pp.insert<std::string>("deformation_gradient_source", "F");
     if (kind == pull_back::lagrangian) {
+      pp.insert<std::string>("deformation_gradient_source", "F");
       ctx->create<nm::lagrangian_stress_to_first_piola<policy>>(pp);
     } else {
+      auto pk{named("kinematics")};
+      pk.insert<std::string>("deformation_gradient_source", "F");
+      ctx->create<nm::deformation_gradient_kinematics<policy>>(pk);
+      pp.insert<std::string>("kinematics_source", "kinematics");
       ctx->create<nm::kirchhoff_to_first_piola<policy>>(pp);
     }
   }

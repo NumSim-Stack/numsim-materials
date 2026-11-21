@@ -9,7 +9,8 @@
 namespace numsim::materials {
 
 /// Compressible neo-Hooke: W = G/2 (tr(F^T F) - 3) - G ln J + lambda/2 (ln J)^2.
-/// "stress": P, "tangent": dP/dF.
+/// "stress": P, "tangent": dP/dF. F from "deformation_gradient_source", F^-1 and det F from "kinematics_source"
+/// (a deformation_gradient_kinematics).
 template <typename Traits>
 class neo_hooke : public material_base<neo_hooke<Traits>, Traits> {
 public:
@@ -29,8 +30,10 @@ public:
         m_G(base::template get_parameter<value_type>("G")),
         m_F_name(base::template get_parameter<std::string>("deformation_gradient_source")),
         m_F(base::template add_input<tensor2>(m_F_name, "deformation_gradient", EdgeKind::Global)),
-        m_F_inv(base::template add_input<tensor2>(m_F_name, "inverse", EdgeKind::Global)),
-        m_J(base::template add_input<value_type>(m_F_name, "determinant", EdgeKind::Global)) {
+        m_F_inv(base::template add_input<tensor2>(base::template get_parameter<std::string>("kinematics_source"), "inverse",
+                                                  EdgeKind::Global)),
+        m_J(base::template add_input<value_type>(base::template get_parameter<std::string>("kinematics_source"), "determinant",
+                                                 EdgeKind::Global)) {
     base::add_callback(&neo_hooke::update, m_P, m_A).reads(m_F, m_F_inv, m_J);
   }
 
@@ -39,6 +42,7 @@ public:
     para.template insert<value_type>("K").template add<is_required>();
     para.template insert<value_type>("G").template add<is_required>();
     para.template insert<std::string>("deformation_gradient_source").template add<is_required>();
+    para.template insert<std::string>("kinematics_source").template add<is_required>();
     return para;
   }
 

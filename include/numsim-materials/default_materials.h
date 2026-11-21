@@ -46,6 +46,7 @@
 #include "numsim-materials/materials/saturation_damage_law.h"
 #include "numsim-materials/materials/peerlings_damage_law.h"
 #include "numsim-materials/materials/elastic_strain.h"
+#include "numsim-materials/materials/deformation_gradient_kinematics.h"
 #include "numsim-materials/materials/log_strain.h"
 #include "numsim-materials/materials/kirchhoff_to_first_piola.h"
 #include "numsim-materials/materials/seth_hill_strain.h"
@@ -140,6 +141,7 @@ void register_default_materials() {
   factory.template register_type<saturation_damage_law<Traits>>("saturation_damage_law");
   factory.template register_type<peerlings_damage_law<Traits>>("peerlings_damage_law");
   factory.template register_type<elastic_strain<Traits>>("elastic_strain");
+  factory.template register_type<deformation_gradient_kinematics<Traits>>("deformation_gradient_kinematics");
   factory.template register_type<log_strain<Traits>>("log_strain");
   factory.template register_type<kirchhoff_to_first_piola<Traits>>("kirchhoff_to_first_piola");
   factory.template register_type<seth_hill_strain<Traits>>("seth_hill_strain");

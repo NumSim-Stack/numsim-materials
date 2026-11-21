@@ -176,7 +176,8 @@ json neo_hooke_report() {
   return json::parse(R"({
     "model": {"materials": [
       {"type": "external_deformation_gradient_source", "name": "F"},
-      {"type": "neo_hooke", "name": "model", "deformation_gradient_source": "F", "K": 100.0, "G": 50.0}]},
+      {"type": "deformation_gradient_kinematics", "name": "kinematics", "deformation_gradient_source": "F"},
+      {"type": "neo_hooke", "name": "model", "deformation_gradient_source": "F", "kinematics_source": "kinematics", "K": 100.0, "G": 50.0}]},
     "point": {"deformation_gradient_source": "F", "stress_source": "model"}})");
 }
 

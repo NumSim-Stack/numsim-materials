@@ -45,6 +45,7 @@ std::string deck(bool eigenstrain, bool fixed = false) {
                                         : ""};
   return R"({"materials": [
     {"type": "external_deformation_gradient_source", "name": "F"},
+    {"type": "deformation_gradient_kinematics", "name": "kinematics", "deformation_gradient_source": "F"},
     {"type": "constant_scalar", "name": "K", "value": 166.67},
     {"type": "constant_scalar", "name": "G", "value": 76.92},
     {"type": "isotropic_tangent", "name": "stiffness", "K_source": "K", "G_source": "G"},
@@ -54,7 +55,7 @@ std::string deck(bool eigenstrain, bool fixed = false) {
      "eigenstrain_sources": [)" + std::string{eigenstrain ? R"("thermal")" : ""} + R"(]},
     )" + stress + R"(,
     {"type": "kirchhoff_to_first_piola", "name": "hencky", "stress_source": "tau", "tangent_source": ")" +
-         std::string{fixed ? "tau" : "stiffness"} + R"(", "strain_source": "log_strain", "deformation_gradient_source": "F"}]})";
+         std::string{fixed ? "tau" : "stiffness"} + R"(", "strain_source": "log_strain", "kinematics_source": "kinematics"}]})";
 }
 
 std::unique_ptr<ctx_type> build(bool with_eigenstrain = false, bool fixed = false) {

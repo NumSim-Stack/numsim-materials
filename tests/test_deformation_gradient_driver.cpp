@@ -1,8 +1,10 @@
 #include <gtest/gtest.h>
+#include <type_traits>
 #include <cmath>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/materials/constant_scalar.h"
+#include "numsim-materials/materials/deformation_gradient_kinematics.h"
 #include "numsim-materials/materials/neo_hooke.h"
 #include "numsim-materials/materials/saint_venant_kirchhoff.h"
 #include "numsim-materials/driver/deformation_gradient_driver.h"
@@ -39,8 +41,14 @@ void build(ctx_type& ctx, bool stuck = false) {
   p.insert<std::string>("name", "F");
   ctx.create<nm::external_deformation_gradient_source<policy>>(p);
   p.clear();
+  p.insert<std::string>("name", "kinematics");
+  p.insert<std::string>("deformation_gradient_source", "F");
+  ctx.create<nm::deformation_gradient_kinematics<policy>>(p);
+  p.clear();
   p.insert<std::string>("name", "model");
   p.insert<std::string>("deformation_gradient_source", "F");
+  if constexpr (std::is_same_v<Model, nm::neo_hooke<policy>>)
+    p.insert<std::string>("kinematics_source", "kinematics");
   p.insert<T>("K", K);
   p.insert<T>("G", G);
   ctx.create<Model>(p);
