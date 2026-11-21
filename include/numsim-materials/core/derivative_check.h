@@ -35,6 +35,7 @@ struct derivative_check {
   std::vector<derivative_direction<T>> directions;
   T error{0};     ///< over all directions: the norm of analytical - numerical
   T rel_error{0}; ///< error / the norm of the analytical, or error when that vanishes
+  T asymmetry{0}; ///< a symmetric input: the norm of the analytical's A_ij - A_ji (i < j), part of error
 };
 
 /// The parameters of material_context::check_derivative().
@@ -43,7 +44,7 @@ typename Traits::InputParameterController derivative_check_parameters() {
   using value_type = typename Traits::value_type;
   typename Traits::InputParameterController para;
   required<std::string>(para, "output");     // "material::property" differentiated
-  required<std::string>(para, "input");      // "material::property" perturbed: no callback fills it
+  required<std::string>(para, "input");      // "material::property" perturbed: host-bound, its codec sets the directions
   required<std::string>(para, "analytical"); // "material::property": d(output)/d(input), output indices first
   optional<value_type>(para, "step", value_type{1e-7});
   optional<std::string>(para, "step_kind", std::string{"absolute"}); // or "relative": step * max(|x_k|, 1)
@@ -129,7 +130,8 @@ std::vector<direction<T>> directions(std::string const& key, std::size_t count, 
   } else if (count == 3 && width == 3) {
     std::vector<std::size_t> all{0, 1, 2};
     for (auto const i : components.empty() ? all : components)
-      out.push_back({"(" + std::to_string(index(i)) + ")", unit({i}), i});
+      if (auto const label{"(" + std::to_string(index(i)) + ")"}; !std::ranges::contains(out, label, &direction<T>::label))
+        out.push_back({label, unit({i}), i});
   } else if (count == 9 && (width == 6 || width == 9)) {
     bool const symmetric{width == 6};
     std::vector<std::size_t> pairs{components};
@@ -183,7 +185,8 @@ T norm(std::vector<T> const& v) {
 
 template <class T>
 void report(std::string const& output, std::string const& input, derivative_check<T> const& check, T threshold) {
-  std::println("  check_derivative d({})/d({}): relative error {:.3e} above {:.2e}", output, input, check.rel_error, threshold);
+  std::println("  check_derivative d({})/d({}): relative error {:.3e} above {:.2e}, asymmetry {:.3e}", output, input,
+               check.rel_error, threshold, check.asymmetry);
   for (auto const& d : check.directions)
     for (std::size_t k{0}; k < d.numerical.size(); ++k) {
       auto const diff{std::abs(d.analytical[k] - d.numerical[k])};
@@ -193,8 +196,8 @@ void report(std::string const& output, std::string const& input, derivative_chec
     }
 }
 
-template <class Traits, class Context>
-derivative_check<typename Traits::value_type> run(Context& ctx, typename Traits::ParameterHandler parameters) {
+template <class Traits, class Context, class Engine>
+derivative_check<typename Traits::value_type> run(Context& ctx, Engine& engine, typename Traits::ParameterHandler parameters) {
   using T = typename Traits::value_type;
   static auto const controller{derivative_check_parameters<Traits>()};
   controller.check_parameter(parameters);
@@ -208,8 +211,11 @@ derivative_check<typename Traits::value_type> run(Context& ctx, typename Traits:
     throw std::invalid_argument("check_derivative(): step_kind '" + step_kind + "' is neither 'absolute' nor 'relative'");
   if (scheme != "central" && scheme != "forward")
     throw std::invalid_argument("check_derivative(): scheme '" + scheme + "' is neither 'central' nor 'forward'");
-  if (!(step > 0))
-    throw std::invalid_argument("check_derivative(): the step must be positive");
+  if (!(step > 0) || !std::isfinite(step))
+    throw std::invalid_argument("check_derivative(): the step must be positive and finite");
+  auto const threshold{parameters.template get<T>("report_threshold")};
+  if (!(threshold >= 0))
+    throw std::invalid_argument("check_derivative(): the report_threshold must not be negative");
 
   auto const find{[&](std::string const& key) {
     auto const src{connection_source::parse(key)};
@@ -227,9 +233,11 @@ derivative_check<typename Traits::value_type> run(Context& ctx, typename Traits:
   auto* input{find(input_key)};
   auto const* output{find(output_key)};
   auto const* analytical{find(analytical_key)};
-  if (input->traits().update)
+  if (!engine.host_bound(input))
     throw std::logic_error("check_derivative(): '" + input_key + "' is filled by a callback, which update() reruns over " +
                            "the perturbation: perturb a host-bound input (external_*_source) instead");
+  if (!engine.depends_on(output, input))
+    throw std::invalid_argument("check_derivative(): '" + output_key + "' does not depend on '" + input_key + "'");
   auto const x0{value_of(input_key, input)};
   std::size_t width{0};
   for (auto const* mat : ctx.materials())
@@ -238,20 +246,22 @@ derivative_check<typename Traits::value_type> run(Context& ctx, typename Traits:
         width = slot->width();
   auto const dirs{directions<T>(input_key, x0.size(), width, parameters.template get<std::vector<std::size_t>>("components"))};
   auto const write{writer<T>(ctx, input)};
+  auto const outputs{value_of(output_key, output).size()};
+  if (auto const n{value_of(analytical_key, analytical).size()}; n != outputs * x0.size())
+    throw std::invalid_argument("check_derivative(): '" + analytical_key + "' has " + std::to_string(n) +
+                                " components, d(output)/d(input) has " + std::to_string(outputs * x0.size()));
 
   auto const evaluate{[&](std::vector<T> const& x) {
-    ctx.revert();
+    engine.revert_produced();
     write(x);
     ctx.update();
     return value_of(output_key, output);
   }};
   derivative_check<T> check;
+  std::vector<T> skew;
   try {
     auto const f0{evaluate(x0)};
     auto const A{value_of(analytical_key, analytical)};
-    if (A.size() != f0.size() * x0.size())
-      throw std::invalid_argument("check_derivative(): '" + analytical_key + "' has " + std::to_string(A.size()) +
-                                  " components, d(output)/d(input) has " + std::to_string(f0.size() * x0.size()));
     for (auto const& d : dirs) {
       auto const h{step_kind == "relative" ? step * std::max(std::abs(x0[d.first]), T{1}) : step};
       auto const moved{[&](T s) {
@@ -271,23 +281,29 @@ derivative_check<typename Traits::value_type> run(Context& ctx, typename Traits:
       }
       check.directions.push_back(std::move(r));
     }
+    if (width == 6) // the directions see A_ij + A_ji only
+      for (std::size_t o{0}; o < outputs; ++o)
+        for (std::size_t i{0}; i < 3; ++i)
+          for (std::size_t j{i + 1}; j < 3; ++j)
+            skew.push_back(A[o * 9 + 3 * i + j] - A[o * 9 + 3 * j + i]);
     evaluate(x0);
   } catch (...) {
-    ctx.revert();
+    engine.revert_produced();
     write(x0);
     throw;
   }
 
-  std::vector<T> diff, ref;
+  std::vector<T> diff{skew}, ref;
   for (auto const& d : check.directions)
     for (std::size_t o{0}; o < d.numerical.size(); ++o) {
       diff.push_back(d.analytical[o] - d.numerical[o]);
       ref.push_back(d.analytical[o]);
     }
+  check.asymmetry = norm(skew);
   check.error = norm(diff);
   auto const scale{norm(ref)};
   check.rel_error = scale > T{1e-30} ? check.error / scale : check.error;
-  if (auto const threshold{parameters.template get<T>("report_threshold")}; check.rel_error > threshold)
+  if (check.rel_error > threshold)
     report(output_key, input_key, check, threshold);
   return check;
 }

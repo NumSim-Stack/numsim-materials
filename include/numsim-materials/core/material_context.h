@@ -108,11 +108,11 @@ public:
     m_engine.revert();
   }
 
-  /// d(output)/d(input) by finite differences along the host path: per perturbation revert(), the input set,
-  /// update(). Parameters: derivative_check_parameters(). Leaves the state evaluated at the input.
+  /// d(output)/d(input) by finite differences along the host path: per perturbation the callbacks' histories
+  /// reverted, the input set, update(). Parameters: derivative_check_parameters(). Returns evaluated at the input.
   derivative_check<value_type> check_derivative(parameter_handler parameters) {
     check_finalized("check_derivative");
-    return detail::derivative::run<Traits>(*this, std::move(parameters));
+    return detail::derivative::run<Traits>(*this, m_engine, std::move(parameters));
   }
 
   // --- Checkpoint / Restart ---

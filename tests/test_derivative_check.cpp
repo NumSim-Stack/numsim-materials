@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <tmech/tmech.h>
@@ -94,7 +95,7 @@ struct j2_point {
   auto tangent() { return ctx.check_derivative(check("j2::stress", "stepper::strain", "j2::tangent")); }
 };
 
-/// "value" = x², "slope" = 2x from "x::state"; throws above x = 1.
+/// "value" = x², "slope" = 2x from "x::state"; throws above x = 1e6.
 template <typename Traits>
 class square final : public nm::material_base<square<Traits>, Traits> {
 public:
@@ -186,6 +187,140 @@ public:
   }
 
   static input_parameter_controller parameters() { return base::parameters(); }
+};
+
+/// "value" = x dt, "slope" = dt: x from "x::state", dt from the host-bound time "t::state".
+template <typename Traits>
+class rate final : public nm::material_base<rate<Traits>, Traits> {
+public:
+  using base = nm::material_base<rate<Traits>, Traits>;
+  using value_type = typename base::value_type;
+  using input_parameter_controller = typename base::input_parameter_controller;
+
+  template <typename... Args>
+  explicit rate(Args &&...args)
+      : base(std::forward<Args>(args)...), m_value(base::template add_output<value_type>("value")),
+        m_slope(base::template add_output<value_type>("slope")), m_x(base::template add_input<value_type>("x", "state")),
+        m_t(base::template add_input_history<value_type>(nm::connection_source{"t", "state"})) {
+    base::add_callback(&rate::compute, m_value, m_slope).reads(m_x, m_t);
+  }
+
+  static input_parameter_controller parameters() { return base::parameters(); }
+
+  void compute() {
+    m_slope = m_t.new_value() - m_t.old_value();
+    m_value = m_x.get() * m_slope;
+  }
+
+private:
+  value_type &m_value;
+  value_type &m_slope;
+  nm::input_property<value_type, nm::property_traits> const &m_x;
+  nm::input_history<value_type, nm::property_traits> const &m_t;
+};
+
+/// "copy" by a callback from "x::state", and "bare": no callback of its own, filled by the same one.
+template <typename Traits>
+class bare final : public nm::material_base<bare<Traits>, Traits> {
+public:
+  using base = nm::material_base<bare<Traits>, Traits>;
+  using value_type = typename base::value_type;
+  using input_parameter_controller = typename base::input_parameter_controller;
+
+  template <typename... Args>
+  explicit bare(Args &&...args)
+      : base(std::forward<Args>(args)...), m_copy(base::template add_output<value_type>("copy")),
+        m_bare(base::template add_output<value_type>("bare")), m_x(base::template add_input<value_type>("x", "state")) {
+    base::add_callback(&bare::compute, m_copy).reads(m_x);
+  }
+
+  static input_parameter_controller parameters() { return base::parameters(); }
+
+  void compute() { m_copy = m_bare = m_x.get(); }
+
+private:
+  value_type &m_copy;
+  value_type &m_bare;
+  nm::input_property<value_type, nm::property_traits> const &m_x;
+};
+
+/// "value" = 2 e_01 of the strain "e::strain"; "symmetric" and "skew" are both d value/d e along symmetric
+/// directions, but only "symmetric" is minor symmetric.
+template <typename Traits>
+class shear final : public nm::material_base<shear<Traits>, Traits> {
+public:
+  using base = nm::material_base<shear<Traits>, Traits>;
+  using value_type = typename base::value_type;
+  using input_parameter_controller = typename base::input_parameter_controller;
+  using tensor = tmech::tensor<value_type, 3, 2>;
+
+  template <typename... Args>
+  explicit shear(Args &&...args)
+      : base(std::forward<Args>(args)...), m_value(base::template add_output<value_type>("value")),
+        m_symmetric(base::template add_output<tensor>("symmetric")), m_skew(base::template add_output<tensor>("skew")),
+        m_e(base::template add_input<tensor>("e", "strain")) {
+    base::add_callback(&shear::compute, m_value, m_symmetric, m_skew).reads(m_e);
+  }
+
+  static input_parameter_controller parameters() { return base::parameters(); }
+
+  void compute() {
+    m_value = 2 * m_e.get()(0, 1);
+    m_symmetric = tensor{};
+    m_symmetric(0, 1) = m_symmetric(1, 0) = 1;
+    m_skew = tensor{};
+    m_skew(0, 1) = 2;
+  }
+
+private:
+  value_type &m_value;
+  tensor &m_symmetric;
+  tensor &m_skew;
+  nm::input_property<tensor, nm::property_traits> const &m_e;
+};
+
+/// "value": a host-bound vector history (codecs::vector), no callback.
+template <typename Traits>
+class vector_source final : public nm::material_base<vector_source<Traits>, Traits> {
+public:
+  using base = nm::material_base<vector_source<Traits>, Traits>;
+  using input_parameter_controller = typename base::input_parameter_controller;
+
+  template <typename... Args>
+  explicit vector_source(Args &&...args) : base(std::forward<Args>(args)...) {
+    base::template add_history_output<tmech::tensor<typename base::value_type, 3, 1>>("value", nm::codecs::vector{});
+  }
+
+  static input_parameter_controller parameters() { return base::parameters(); }
+};
+
+/// "value" = v·v and "gradient" = 2v of "v::value".
+template <typename Traits>
+class dot final : public nm::material_base<dot<Traits>, Traits> {
+public:
+  using base = nm::material_base<dot<Traits>, Traits>;
+  using value_type = typename base::value_type;
+  using input_parameter_controller = typename base::input_parameter_controller;
+  using vector = tmech::tensor<value_type, 3, 1>;
+
+  template <typename... Args>
+  explicit dot(Args &&...args)
+      : base(std::forward<Args>(args)...), m_value(base::template add_output<value_type>("value")),
+        m_gradient(base::template add_output<vector>("gradient")), m_v(base::template add_input<vector>("v", "value")) {
+    base::add_callback(&dot::compute, m_value, m_gradient).reads(m_v);
+  }
+
+  static input_parameter_controller parameters() { return base::parameters(); }
+
+  void compute() {
+    m_value = tmech::dot(m_v.get(), m_v.get());
+    m_gradient = 2 * m_v.get();
+  }
+
+private:
+  value_type &m_value;
+  vector &m_gradient;
+  nm::input_property<vector, nm::property_traits> const &m_v;
 };
 
 TEST(DerivativeCheck, J2TangentMatchesOnPlasticStepsWithoutNamingHistories) {
@@ -320,6 +455,128 @@ TEST(DerivativeCheck, TheDeterminantOfANonSymmetricDeformationGradient) {
   auto const result{ctx.check_derivative(check("cof::determinant", "F::deformation_gradient", "cof::cofactor"))};
   EXPECT_EQ(result.directions.size(), 9u);
   EXPECT_LT(result.rel_error, 1e-8);
+}
+
+TEST(DerivativeCheck, AnotherHostBoundInputKeepsItsValue) {
+  ctx_type ctx;
+  param_type p;
+  p.insert<std::string>("name", "t");
+  auto &t{ctx.create<nm::external_scalar_source<policy>>(p)};
+  p.clear();
+  p.insert<std::string>("name", "x");
+  auto &x{ctx.create<nm::external_scalar_source<policy>>(p)};
+  p.clear();
+  p.insert<std::string>("name", "rate");
+  ctx.create<rate<policy>>(p);
+  ctx.finalize();
+  t.bind(T{1}, T{1.5});
+  x.bind(T{0}, T{2});
+  ctx.update();
+  auto const result{ctx.check_derivative(check("rate::value", "x::state", "rate::slope"))};
+  EXPECT_NEAR(result.directions[0].analytical[0], 0.5, 1e-15) << "dt = 0.5, not the reverted 0";
+  EXPECT_NEAR(result.directions[0].numerical[0], 0.5, 1e-8);
+  EXPECT_EQ(t.state().new_value(), T{1.5}) << "only the histories the callbacks fill are reverted";
+  EXPECT_EQ(ctx.get<T>("rate", "value"), T{1});
+}
+
+TEST(DerivativeCheck, AnOutputAnotherCallbackFillsIsRejected) {
+  ctx_type ctx;
+  param_type p;
+  p.insert<std::string>("name", "x");
+  ctx.create<nm::external_scalar_source<policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "bare");
+  ctx.create<bare<policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "square");
+  ctx.create<square<policy>>(p); // reads x::state, a host-bound input
+  ctx.finalize();
+  ctx.update();
+  auto const message{thrown([&] { ctx.check_derivative(check("bare::copy", "bare::bare", "bare::copy")); })};
+  EXPECT_NE(message.find("bare::bare"), std::string::npos) << message;
+  EXPECT_NE(message.find("callback"), std::string::npos) << message;
+}
+
+TEST(DerivativeCheck, ATangentThatIsNotMinorSymmetricFails) {
+  ctx_type ctx;
+  param_type p;
+  p.insert<std::string>("name", "e");
+  ctx.create<nm::external_strain_source<policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "shear");
+  ctx.create<shear<policy>>(p);
+  ctx.finalize();
+  ctx.update();
+  auto const symmetric{ctx.check_derivative(check("shear::value", "e::strain", "shear::symmetric"))};
+  EXPECT_EQ(symmetric.asymmetry, 0.0);
+  EXPECT_LT(symmetric.rel_error, 1e-8);
+  auto const skew{ctx.check_derivative(check("shear::value", "e::strain", "shear::skew"))};
+  EXPECT_LT(skew.directions[1].analytical[0] - skew.directions[1].numerical[0], 1e-8)
+      << "(0,1): both see 2, the directions alone cannot tell";
+  EXPECT_EQ(skew.asymmetry, 2.0) << "|A_01 - A_10|";
+  EXPECT_GT(skew.rel_error, 0.5) << "the skew part counts as error";
+}
+
+TEST(DerivativeCheck, AWrongAnalyticalSizeLeavesTheStateAlone) {
+  j2_point point;
+  for (int i{1}; i <= 6; ++i) {
+    point.load(T{0.05} * i);
+    point.ctx.commit();
+  }
+  point.load(T{0.35});
+  tensor2 const plastic{point.ctx.get<tensor2>("j2", "plastic_strain")};
+  auto const message{thrown([&] { point.ctx.check_derivative(check("j2::stress", "stepper::strain", "j2::stress")); })};
+  EXPECT_NE(message.find("components"), std::string::npos) << message;
+  EXPECT_EQ(tmech::norm(tensor2{point.ctx.get<tensor2>("j2", "plastic_strain") - plastic}), 0.0)
+      << "checked before anything is evaluated";
+}
+
+TEST(DerivativeCheck, AnInputTheOutputDoesNotDependOnIsRejected) {
+  ctx_type ctx;
+  param_type p;
+  p.insert<std::string>("name", "x");
+  ctx.create<nm::external_scalar_source<policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "y");
+  ctx.create<nm::external_scalar_source<policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "square");
+  ctx.create<square<policy>>(p);
+  ctx.finalize();
+  ctx.update();
+  auto const message{thrown([&] { ctx.check_derivative(check("square::value", "y::state", "square::slope")); })};
+  EXPECT_NE(message.find("does not depend on"), std::string::npos) << message;
+}
+
+TEST(DerivativeCheck, AVectorInputHasThreeDirections) {
+  ctx_type ctx;
+  param_type p;
+  p.insert<std::string>("name", "v");
+  ctx.create<vector_source<policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "dot");
+  ctx.create<dot<policy>>(p);
+  ctx.finalize();
+  ctx.get_mutable<tmech::tensor<T, 3, 1>>("v", "value") = tmech::tensor<T, 3, 1>{0.5, -1.0, 2.0};
+  ctx.update();
+  auto const all{ctx.check_derivative(check("dot::value", "v::value", "dot::gradient"))};
+  ASSERT_EQ(all.directions.size(), 3u);
+  EXPECT_EQ(all.directions[2].label, "(2)");
+  EXPECT_NEAR(all.directions[2].numerical[0], 4.0, 1e-7);
+  EXPECT_LT(all.rel_error, 1e-8);
+  auto q{check("dot::value", "v::value", "dot::gradient")};
+  q.insert<std::vector<std::size_t>>("components", {1, 1});
+  EXPECT_EQ(ctx.check_derivative(std::move(q)).directions.size(), 1u) << "a repeated component counts once";
+}
+
+TEST(DerivativeCheck, AnInfiniteStepOrANaNThresholdIsRejected) {
+  scalar_point point{0.5};
+  auto p{check("square::value", "x::state", "square::slope")};
+  p.insert<T>("step", std::numeric_limits<T>::infinity());
+  EXPECT_THROW(point.slope(std::move(p)), std::invalid_argument);
+  auto q{check("square::value", "x::state", "square::slope")};
+  q.insert<T>("report_threshold", std::numeric_limits<T>::quiet_NaN());
+  EXPECT_THROW(point.slope(std::move(q)), std::invalid_argument);
 }
 
 } // namespace

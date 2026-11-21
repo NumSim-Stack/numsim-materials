@@ -80,6 +80,7 @@ public:
     std::ranges::for_each(interfaces, &material_interface_type::check_reads);
     auto const writers{collect_writers(interfaces)};
     compute_execution_order(properties, interfaces, writers);
+    collect_host_bound(interfaces, writers);
     m_stateful.clear();
     for (auto const* mat : interfaces)
       m_stateful.insert(mat->stateful_outputs().begin(), mat->stateful_outputs().end());
@@ -171,6 +172,22 @@ public:
     m_failed = false;
     for (auto* hp : m_history_properties)
       hp->revert();
+  }
+
+  /// revert() of the histories a callback fills: host-bound ones keep their new value.
+  void revert_produced() {
+    m_failed = false;
+    for (auto* hp : m_history_properties)
+      if (!m_host_bound.contains(hp))
+        hp->revert();
+  }
+
+  /// Filled by no callback: the host sets it (bind(), get_mutable()) and update() leaves it alone.
+  bool host_bound(const property_base* prop) const { return m_host_bound.contains(prop); }
+
+  /// Whether `input` is upstream of `output` (or is it).
+  bool depends_on(const property_base* output, const property_base* input) const {
+    return upstream_of(output).contains(const_cast<property_base*>(input));
   }
 
   property_base* find_property(property_handler& properties,
@@ -657,6 +674,18 @@ private:
                            std::views::transform([](auto const& prop) { return prop.get(); }) |
                            std::views::filter([](auto const* prop) { return prop->is_history(); }) | std::ranges::to<std::vector>();
   }
+
+  /// The outputs with no callback, no writer and no material_ref filling them.
+  void collect_host_bound(const std::vector<material_interface_type*>& interfaces, const writers_by_material& writers) {
+    m_host_bound.clear();
+    for (auto const* mat : interfaces)
+      for (auto const& [prop, by] : writers.at(mat))
+        if (by.empty() && std::ranges::none_of(m_edges, [prop](graph_edge const& e) {
+              return e.to == prop && e.kind == edge_kind::material_ref;
+            }))
+          m_host_bound.insert(prop);
+  }
+  std::unordered_set<const property_base*> m_host_bound;
 
   /// An output filled by another output's callback (an add_callback group, written_by) reruns that callback when
   /// asked for directly (update_source()); the update loop runs only the writer.

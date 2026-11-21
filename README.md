@@ -165,8 +165,8 @@ factory-registered; Qt6 optional for the latter)
 
 **Derivative check** — `ctx.check_derivative(parameters)`: name the output, the
 input and the analytical derivative; the graph perturbs the input along the
-directions of its history codec and evaluates as a host does (revert, set the
-input, `update()`). See `docs/writing_a_material.md` §5.
+directions of its history codec and evaluates as a host does (revert the
+callbacks' histories, set the input, `update()`). See `docs/writing_a_material.md` §5.
 
 ## JSON-driven configuration
 
