@@ -310,6 +310,10 @@ public:
   }
 };
 
+/// A distinct address per type: identifies a type-erased block without a dynamic_cast.
+template <typename B>
+inline constexpr char type_tag{};
+
 /// One declared partial d output / d read of a callback: the value the callback fills, packed on demand.
 template <typename T>
 class partial_block : public read_probe<T> {
