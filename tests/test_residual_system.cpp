@@ -382,6 +382,35 @@ private:
   nm::input_property<T, nm::property_traits> const &m_x;
 };
 
+/// r = x^3 + x - load::state for the unknown x of "solver", filling d r / d x only when want_partial() asks for it.
+class selective_row final : public nm::material_base<selective_row, policy> {
+public:
+  using base = nm::material_base<selective_row, policy>;
+
+  template <typename... Args>
+  explicit selective_row(Args &&...args)
+      : base(std::forward<Args>(args)...), m_r(base::add_output<T>("r")), m_x(base::add_input<T>("solver", "x")),
+        m_load(base::add_input<T>("load", "state")) {
+    base::add_callback(&selective_row::compute, m_r).reads(m_x, m_load).partials(m_r, m_x, m_load);
+  }
+
+  static input_parameter_controller parameters() { return input_parameter_controller{base::parameters()}; }
+
+  void compute() {
+    T const x{m_x.get()};
+    m_r = x * x * x + x - m_load.get();
+    if (base::want_partial(m_r, m_x))
+      base::partial(m_r, m_x) = 3 * x * x + 1;
+    if (base::want_partial(m_r, m_load))
+      base::partial(m_r, m_load) = T{-1};
+  }
+
+private:
+  T &m_r;
+  nm::input_property<T, nm::property_traits> const &m_x;
+  nm::input_property<T, nm::property_traits> const &m_load;
+};
+
 /// A residual system "solver" over `unknowns` and `equations`.
 system_type &make_system(ctx_type &ctx, std::vector<nm::system_unknown> unknowns, std::vector<nm::system_equation> equations,
                          std::string const &method = "newton", int max_iter = 50, T tolerance = 1e-10,
@@ -999,6 +1028,16 @@ TEST(ResidualSystemTangent, NewtonFdAndPicardGiveTheImplicitFunctionTangent) {
   T const s{std::sin(load + x)};
   EXPECT_NEAR(dx, -(s / 2) / (1 + s / 2), 1e-10);
   EXPECT_NEAR(dx, (plus - minus) / (2 * h), 1e-7);
+}
+
+TEST(ResidualSystemScalar, TheJacobianPartialIsWantedWithoutARequestedDerivative) {
+  row_rig<selective_row> rig{"newton", 50, 1e-12, 0};
+  rig.load->bind(0, 2);
+  EXPECT_NO_THROW(rig.ctx.update()) << "want_partial(r, x) is true while the system solves";
+  EXPECT_NEAR(rig.x(), 1, 1e-12);
+  auto const &dx{rig.ctx.derivative<T>("solver", "x", "load", "state")};
+  rig.ctx.update();
+  EXPECT_NEAR(dx, 0.25, 1e-12);
 }
 
 TEST(ResidualSystemTangent, TwoCoupledSystemsMatchCentralDifferences) {

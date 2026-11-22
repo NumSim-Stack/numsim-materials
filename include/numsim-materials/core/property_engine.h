@@ -797,6 +797,8 @@ private:
   /// Sets the unknowns, reruns the members and gathers the residuals until |R|_inf <= tolerance (a non-finite residual never
   /// converges); max_iter counts the updates of the unknowns, converges() counts passes.
   void solve(system_stage& s, std::vector<property_base*> const& callbacks) {
+    if (s.scalar)
+      return solve_scalar(s, callbacks);
     auto const& d{*s.declared};
     auto const limit{d.own_residual ? *d.max_iter - 1 : *d.max_iter};
     start(s);
@@ -828,15 +830,51 @@ private:
     case system_method::newton: jacobian(s); break;
     case system_method::newton_fd: jacobian_by_differences(s, callbacks); break;
     }
-    if (s.width == 1) {
-      s.dx[0] = s.R[0] / s.J(0, 0);
-    } else {
-      s.lu.compute(s.J);
-      s.dx = s.lu.solve(s.R);
-    }
+    s.lu.compute(s.J);
+    s.dx = s.lu.solve(s.R);
     if (!s.dx.allFinite())
       throw cutback_error(std::format("system '{}': the Jacobian is singular at iteration {}", s.name, it));
     s.x -= s.dx;
+  }
+
+  /// solve() for one scalar unknown and one scalar residual, in plain arithmetic: J is the residual's own partial
+  /// when it reads the unknown directly, else from the Jacobian's plan.
+  void solve_scalar(system_stage& s, std::vector<property_base*> const& callbacks) {
+    auto const& d{*s.declared};
+    auto& u{*s.unknown_values.front().scalar};
+    auto const& r{*s.residual_values.front().scalar};
+    auto x{s.unknowns.front()->is_history() ? *s.unknown_old.front().scalar : static_cast<value_type>(d.seeds.front())};
+    for (int it{0};; ++it) {
+      if (d.report)
+        d.report->iterations = it;
+      u = x;
+      run(callbacks);
+      auto const R{r};
+      if (std::abs(R) <= *d.tolerance && std::isfinite(R))
+        return;
+      if (it >= *d.max_iter || !std::isfinite(R))
+        throw cutback_error(std::format("system '{}' did not reach {:g} in {} iteration{} (last |R| {:g})", s.name, *d.tolerance, it,
+                                        it == 1 ? "" : "s", std::abs(R)));
+      auto dx{R};
+      if (d.method == system_method::newton) {
+        dx = R / (s.dr_dx ? *s.dr_dx : (jacobian(s), s.J(0, 0)));
+      } else if (d.method == system_method::newton_fd) {
+        auto const h{std::sqrt(std::numeric_limits<value_type>::epsilon()) * (x != 0 ? std::abs(x) : value_type{1})};
+        auto const xh{x + h};
+        u = xh;
+        try {
+          run(callbacks);
+        } catch (...) {
+          u = x;
+          throw;
+        }
+        dx = R / ((r - R) / (xh - x));
+        u = x;
+      }
+      if (!std::isfinite(dx))
+        throw cutback_error(std::format("system '{}': the Jacobian is singular at iteration {}", s.name, it));
+      x -= dx;
+    }
   }
 
   /// J = dR/dx from the partials the members filled at x.
@@ -941,6 +979,7 @@ private:
     }
     for (std::size_t i{0}; i < s->residuals.size(); ++i)
       s->residual_values.push_back(value_of(*s->residuals[i], s->residual_ranks[i], false));
+    s->scalar = s->width == 1 && s->height == 1;
     s->R.resize(s->height);
     s->R_fd.resize(s->height);
     s->dx.resize(s->width);
@@ -1181,7 +1220,8 @@ private:
     std::size_t first_target;
     matrix J, B, dx_dp; ///< reused by every fold of the plan
     Eigen::PartialPivLU<matrix> lu;
-    std::vector<derivatives::product_kernel<value_type>> kernels; ///< per node of the plan; null: no fixed shape
+    std::vector<std::size_t> nodes; ///< read after this fold: the target and the residuals of the later systems
+    std::vector<derivatives::product_kernel<value_type>> kernels; ///< per node; null: no fixed shape
   };
   /// D = d node / d seeds over the nodes between the seeds and the targets that carry one, in topological order.
   struct derivative_plan {
@@ -1213,6 +1253,8 @@ private:
     matrix J;
     Eigen::PartialPivLU<matrix> lu;
     std::optional<derivative_plan> jacobian; ///< newton: J from the partials, the unknowns as seeds
+    bool scalar{false};                      ///< one scalar unknown, one scalar residual: solve_scalar()
+    value_type const* dr_dx{nullptr};        ///< scalar newton: J, when the residual reads the unknown directly
   };
   std::vector<std::unique_ptr<system_stage>> m_systems;
 
@@ -1280,8 +1322,13 @@ private:
       for (std::size_t j{0}; j < s.unknowns.size(); ++j)
         seeds.emplace_back(s.unknowns[j], static_cast<Eigen::Index>(derivatives::width<Traits::Dim>(s.ranks[j])));
       s.jacobian = plan_columns(std::vector<const property_base*>(s.residuals.begin(), s.residuals.end()), seeds, up, describe(s) + ": its Jacobian");
-      for (auto const& step : s.jacobian->steps)
+      for (auto const& step : s.jacobian->steps) {
         step.material->request_partials(step.callback, true);
+        step.material->request_partial(m_blocks[step.block].first);
+      }
+      auto const& steps{s.jacobian->steps};
+      if (s.scalar && steps.size() == 1 && steps.front().in == 0 && s.jacobian->target_nodes.front() == steps.front().out)
+        s.dr_dx = m_blocks[steps.front().block].first->scalar();
     }
   }
 
@@ -1320,7 +1367,7 @@ private:
     auto column{seed_width};
     for (auto* s : passed) {
       folds.push_back({s, column, targets.size(), matrix::Zero(s->height, s->width), matrix::Zero(s->height, seed_width),
-                       matrix::Zero(s->width, seed_width), {}, {}});
+                       matrix::Zero(s->width, seed_width), {}, {}, {}});
       for (std::size_t j{0}; j < s->unknowns.size(); ++j)
         seeds.emplace_back(s->unknowns[j], static_cast<Eigen::Index>(derivatives::width<Traits::Dim>(s->ranks[j])));
       column += s->width;
@@ -1330,9 +1377,14 @@ private:
     plan.seed = seed;
     plan.seed_width = seed_width;
     plan.folds = std::move(folds);
-    for (auto& f : plan.folds)
-      for (auto const& d : plan.D)
-        f.kernels.push_back(fixed_kernel(d.rows(), f.system->width));
+    for (auto& f : plan.folds) {
+      auto const later{f.first_target + f.system->residuals.size()};
+      for (std::size_t i{0}; i < plan.target_nodes.size(); ++i)
+        if (auto const n{plan.target_nodes[i]}; n && (i == 0 || i >= later) && !std::ranges::contains(f.nodes, *n))
+          f.nodes.push_back(*n);
+      for (auto const k : f.nodes)
+        f.kernels.push_back(fixed_kernel(plan.D[k].rows(), f.system->width));
+    }
     return plan;
   }
 
@@ -1436,26 +1488,32 @@ private:
     auto const p{plan.seed_width};
     for (auto& f : plan.folds) {
       auto const& s{*f.system};
-      f.J.setZero();
-      f.B.setZero();
-      for (std::size_t i{0}; i < s.residuals.size(); ++i)
-        if (auto const node{plan.target_nodes[f.first_target + i]}) {
-          auto const& d{plan.D[*node]};
-          f.J.middleRows(s.rows[i], d.rows()) = d.middleCols(f.column, s.width);
-          f.B.middleRows(s.rows[i], d.rows()) = d.leftCols(p);
-        }
-      if (s.width == 1) {
-        f.dx_dp = f.B / f.J(0, 0);
+      auto const singular{[&] { return cutback_error(std::format("derivative(): system '{}' has a singular Jacobian at its converged point", s.name)); }};
+      if (s.scalar) {
+        auto const node{plan.target_nodes[f.first_target]};
+        if (!node)
+          throw singular();
+        f.dx_dp = plan.D[*node].leftCols(p) / -plan.D[*node](0, f.column);
+        if (!f.dx_dp.allFinite())
+          throw singular();
       } else {
+        f.J.setZero();
+        f.B.setZero();
+        for (std::size_t i{0}; i < s.residuals.size(); ++i)
+          if (auto const node{plan.target_nodes[f.first_target + i]}) {
+            auto const& d{plan.D[*node]};
+            f.J.middleRows(s.rows[i], d.rows()) = d.middleCols(f.column, s.width);
+            f.B.middleRows(s.rows[i], d.rows()) = d.leftCols(p);
+          }
         f.lu.compute(f.J);
         f.dx_dp = f.lu.solve(f.B);
+        if (!f.dx_dp.allFinite())
+          throw singular();
+        f.dx_dp = -f.dx_dp;
       }
-      if (!f.dx_dp.allFinite())
-        throw cutback_error(std::format("derivative(): system '{}' has a singular Jacobian at its converged point", s.name));
-      f.dx_dp = -f.dx_dp;
-      for (std::size_t k{0}; k < plan.D.size(); ++k) {
-        auto& d{plan.D[k]};
-        if (auto const kernel{f.kernels[k]})
+      for (std::size_t i{0}; i < f.nodes.size(); ++i) {
+        auto& d{plan.D[f.nodes[i]]};
+        if (auto const kernel{f.kernels[i]})
           kernel(d.data() + f.column * d.rows(), f.dx_dp.data(), d.data(), p);
         else
           d.leftCols(p).noalias() += d.middleCols(f.column, s.width).lazyProduct(f.dx_dp);

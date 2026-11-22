@@ -329,6 +329,8 @@ public:
   virtual void pack(T* block) const = 0;
   /// The output's value, rows() Mandel components.
   virtual void pack_output(T* value) const = 0;
+  /// The value of a scalar by scalar partial, else null.
+  virtual T const* scalar() const noexcept { return nullptr; }
 
 private:
   std::size_t m_rows, m_cols;
@@ -347,6 +349,13 @@ public:
   partial_t<output_value, read_value, T, Dim> value{};
 
   void pack(T* block) const override { derivatives::pack<Dim, out_rank>(value, block); }
+
+  T const* scalar() const noexcept override {
+    if constexpr (std::is_same_v<decltype(value), T>)
+      return &value;
+    else
+      return nullptr;
+  }
 
   void pack_output(T* out) const override {
     if constexpr (requires(Out const& o) { o.new_value(); })
