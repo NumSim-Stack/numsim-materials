@@ -272,6 +272,8 @@ public:
     for (auto const& step : plan.steps) {
       step.material->request_partials(step.callback, true);
       step.material->request_partial(m_blocks[step.block].first);
+      if (auto* fill{step.material->fill_of(step.callback)}; fill && !std::ranges::contains(plan.fills, fill, &fill_ref::second))
+        plan.fills.emplace_back(step.material, fill);
     }
     m_plans.push_back(std::move(plan));
     reactivate(); // a constant callback fills its partials once more
@@ -290,6 +292,9 @@ public:
   void differentiate() {
     if (m_plans.empty())
       return;
+    for (auto& plan : m_plans)
+      for (auto& [mat, fill] : plan.fills)
+        mat->fill_partials(*fill);
     for (auto& [block, packed] : m_blocks)
       block->pack(packed.data());
     for (auto& plan : m_plans)
@@ -674,7 +679,11 @@ private:
   void verify(property_base* prop) {
     auto const& [mat, outputs]{m_checks.at(prop)};
     auto const checks{outputs | std::views::transform([](auto const* d) { return d->take(); }) | std::ranges::to<std::vector>()};
+    auto const* fill{mat->fill_of(prop)};
+    auto const ran{fill && fill->ran};
     prop->traits().update();
+    if (fill)
+      fill->ran = ran; // the outputs are checked unchanged below, so are the partials
     for (auto const& [check, d] : std::views::zip(checks, outputs))
       if (auto const verdict{check()}; verdict != detail::verdict::same)
         throw std::logic_error("constant_output(): '" + mat->name() + "::" + d->output->traits().id.name + "' " +
@@ -770,6 +779,7 @@ private:
   using matrix = Eigen::Matrix<value_type, Eigen::Dynamic, Eigen::Dynamic>;
   using read_declaration = typename material_interface_type::read_declaration;
 
+  using fill_ref = std::pair<material_interface_type*, typename material_interface_type::fill_declaration const*>;
   struct derivative_step {
     std::size_t out, in; ///< nodes of the plan
     std::size_t block;   ///< in m_blocks
@@ -786,6 +796,7 @@ private:
     std::vector<derivative_step> steps; ///< in topological order of their outputs
     std::optional<std::size_t> target_node;
     std::unique_ptr<derivatives::derivative_slot_base<value_type>> slot;
+    std::vector<fill_ref> fills; ///< of the steps' callbacks that fill their partials on request
   };
 
   /// D[out] += P * D[in] over the steps of one plan, from the packed blocks.
@@ -804,17 +815,22 @@ private:
       plan.slot->unpack(plan.D[*plan.target_node].data());
   }
 
-  /// Reruns the callbacks of a new plan at the values held and accumulates it. A stateful callback is not rerun: its
-  /// partials come with the next update().
+  /// Reruns the callbacks of a new plan at the values held, or fills their partials when they fill them on request,
+  /// and accumulates it. A stateful callback is not rerun: its partials come with the next update().
   void fill_now(derivative_plan& plan) {
-    auto const on_plan{[&](auto const* prop) {
-      return std::ranges::any_of(plan.steps, [&](auto const& step) { return step.callback == prop; });
+    auto const reruns{[&](auto const* prop) {
+      return std::ranges::any_of(plan.steps, [&](auto const& step) { return step.callback == prop; }) &&
+             !std::ranges::any_of(plan.fills, [&](auto const& f) { return f.second->callback == prop; });
     }};
-    if (std::ranges::any_of(m_callbacks, [&](auto const* prop) { return on_plan(prop) && m_stateful.contains(prop); }))
+    if (std::ranges::any_of(m_callbacks, [&](auto const* prop) { return reruns(prop) && m_stateful.contains(prop); }))
       return;
     guarded("derivative", [&] {
-      for (auto* prop : m_callbacks | std::views::filter(on_plan))
+      for (auto* prop : m_callbacks | std::views::filter(reruns))
         prop->traits().update();
+      for (auto& [mat, fill] : plan.fills) {
+        fill->ran = true; // the new plan may read blocks the last fill skipped
+        mat->fill_partials(*fill);
+      }
     });
     for (auto& [block, packed] : m_blocks)
       block->pack(packed.data());
@@ -833,7 +849,9 @@ private:
       for (auto const& p : mat->partials())
         if (auto* prop{find_in_graph(mat->name(), p.callback->traits().id.name)}; m_partials_wrapped.insert(prop).second) {
           auto& update{prop->traits().update};
-          update = [inner = std::move(update), mat, callback = p.callback] { mat->run_callback(callback, inner); };
+          update = [inner = std::move(update), mat, callback = p.callback, fill = mat->fill_of(p.callback)] {
+            mat->run_callback(callback, inner, fill);
+          };
         }
     }
   }
@@ -842,7 +860,7 @@ private:
   /// of each read that carries one, declared or declared zero (independent_of()).
   derivative_plan plan_derivative(const property_base* target, const property_base* seed, std::size_t seed_rank) {
     auto const seed_width{static_cast<Eigen::Index>(derivatives::width<Traits::Dim>(seed_rank))};
-    derivative_plan plan{target, seed, {}, {}, std::nullopt, nullptr};
+    derivative_plan plan{target, seed, {}, {}, std::nullopt, nullptr, {}};
     plan.D.emplace_back(seed_width, seed_width);
     std::unordered_map<const property_base*, std::size_t> node{{seed, 0}};
     std::unordered_map<const property_base*, const property_base*> via; ///< the read each node is first reached over

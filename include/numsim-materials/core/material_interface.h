@@ -355,9 +355,22 @@ public:
   /// Makes want_partial() true for every partial of the requested callbacks, as the finite-difference check needs.
   void request_all_partials(bool on) noexcept { m_all_partials = on; }
 
+  /// A callback whose partials a separate function fills (callback_handle::fills_partials()).
+  struct fill_declaration {
+    property_base_type const* callback;
+    std::function<void()> fill;
+    mutable bool ran{true}; ///< the callback ran since the last fill
+  };
+  /// The fill of `callback`, null if the callback fills its partials itself. Stable once the material is built.
+  fill_declaration const* fill_of(property_base_type const* callback) const noexcept {
+    auto const it{std::ranges::find(m_fills, callback, &fill_declaration::callback)};
+    return it != m_fills.end() ? &*it : nullptr;
+  }
+
   /// Runs `run`, the update of `callback`, with want_partials() as requested for it; the engine wraps those callbacks.
+  /// A callback with a fill (`fill`) runs with want_partials() false.
   template <typename Run>
-  void run_callback(property_base_type const* callback, Run const& run) {
+  void run_callback(property_base_type const* callback, Run const& run, fill_declaration const* fill = nullptr) {
     struct restore {
       material_interface& self;
       bool outer;
@@ -366,8 +379,28 @@ public:
         self.m_want_partials = outer;
         self.m_running = outer_callback;
       }
-    } const guard{*this, std::exchange(m_want_partials, partials_requested(callback)), std::exchange(m_running, callback)};
+    } const guard{*this, std::exchange(m_want_partials, !fill && partials_requested(callback)), std::exchange(m_running, callback)};
     run();
+    if (fill)
+      fill->ran = true;
+  }
+
+  /// Fills the requested partials of the callback of `fill` if it ran since its last fill: want_partials() is true
+  /// and want_partial() true for the requested blocks.
+  void fill_partials(fill_declaration const& fill) {
+    if (!fill.ran)
+      return;
+    struct restore {
+      material_interface& self;
+      bool outer;
+      property_base_type const* outer_callback;
+      ~restore() {
+        self.m_want_partials = outer;
+        self.m_running = outer_callback;
+      }
+    } const guard{*this, std::exchange(m_want_partials, true), std::exchange(m_running, fill.callback)};
+    fill.fill();
+    fill.ran = false;
   }
 
 protected:
@@ -416,6 +449,16 @@ protected:
     using block_type = derivatives::typed_partial<value_type, Traits::Dim, Out, In>;
     m_partials.push_back({d->callback, out.property, input, own, &output, &read, &derivatives::type_tag<block_type>,
                           std::make_unique<block_type>(output)});
+  }
+
+  /// `fill` fills the partials the callback filling `callback` declared (after its partials()).
+  void declare_fill(void const* callback, std::function<void()> fill) {
+    auto const& [d, entry]{declared_read_of("fills_partials", callback)};
+    if (!std::ranges::contains(m_partials, d->callback, &partial_declaration::callback))
+      throw std::logic_error("fills_partials(): the callback of '" + key_of(entry) + "' declares no partials() before it");
+    if (fill_of(d->callback))
+      throw std::logic_error("fills_partials(): the callback of '" + key_of(entry) + "' declares a fill twice");
+    m_fills.push_back({d->callback, std::move(fill)});
   }
 
   /// The outputs of the callback filling `callback` do not depend on `read`: its partials are zero. It holds for every
@@ -691,6 +734,7 @@ private:
   std::vector<partial_declaration> m_partials;
   std::vector<independent_declaration> m_independent;
   std::vector<property_base_type const*> m_partials_requested; ///< callbacks filling their partials
+  std::vector<fill_declaration> m_fills;
   bool m_want_partials{false};
   bool m_all_partials{false};
   property_base_type const* m_running{nullptr}; ///< the callback run_callback() runs

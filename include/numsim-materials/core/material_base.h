@@ -184,6 +184,14 @@ protected:
       return *this;
     }
 
+    /// `fill`, a member function, fills the declared partials instead of the callback: the engine calls it only
+    /// when a requested derivative reads them, at the values the callback left. After partials().
+    callback_handle& fills_partials(void (Derived::*fill)()) {
+      Derived& obj{static_cast<Derived&>(m_owner)};
+      m_owner.declare_fill(m_outputs.front(), [&obj, fill] { (obj.*fill)(); });
+      return *this;
+    }
+
     /// The outputs of the callback do not depend on `reads`: their partials are zero. After reads().
     template <typename... Reads>
     callback_handle& independent_of(Reads const&... reads) {

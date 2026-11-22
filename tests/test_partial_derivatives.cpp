@@ -137,7 +137,8 @@ struct wrong_map { // declares A4 for B4 : x
   static tensor4 partial(tensor2 const &) { return A4; }
 };
 
-/// y = Law::value(x) for x read from "x_source"; "partials" is "declared" (the default), "independent" or "none".
+/// y = Law::value(x) for x read from "x_source"; "partials" is "declared" (the default), "independent", "on_request"
+/// (fill() fills it), "fill_only" (fill() without partials()) or "none".
 template <typename Law, typename Traits>
 class law_node final : public nm::material_base<law_node<Law, Traits>, Traits> {
 public:
@@ -152,10 +153,12 @@ public:
         m_mode(base::template get_parameter<std::string>("partials")) {
     auto handle{base::add_callback(&law_node::compute, m_y)};
     handle.reads(m_x);
-    if (m_mode == "declared")
+    if (m_mode == "declared" || m_mode == "on_request")
       handle.partials(m_y, m_x);
     else if (m_mode == "independent")
       handle.independent_of(m_x);
+    if (m_mode == "on_request" || m_mode == "fill_only")
+      handle.fills_partials(&law_node::fill);
   }
 
   static input_parameter_controller parameters() {
@@ -173,6 +176,14 @@ public:
       hook();
     m_y = Law::value(m_x.get());
     if (base::want_partials()) {
+      base::partial(m_y, m_x) = Law::partial(m_x.get());
+      ++m_fills;
+    }
+  }
+
+  /// "on_request": the partial, at the value compute() left.
+  void fill() {
+    if (base::want_partial(m_y, m_x)) {
       base::partial(m_y, m_x) = Law::partial(m_x.get());
       ++m_fills;
     }
@@ -655,6 +666,75 @@ TEST(PartialDerivatives, NoPartialsAreComputedWithoutARequest) {
   EXPECT_EQ(a.fills(), 3);
   EXPECT_EQ(b.fills(), 3);
   EXPECT_EQ(q.fills(), 0) << "q is off the requested path";
+}
+
+// --- partials filled on request (callback_handle::fills_partials()) ---
+
+TEST(PartialDerivatives, PartialsOnRequestAreFilledOncePerUpdateOfARequestedDerivative) {
+  chain c;
+  auto &a{c.node<map_a>("a", "strain::strain", "on_request")};
+  auto &b{c.node<map_b>("b", "a::y", "on_request")};
+  auto &q{c.node<map_b>("q", "strain::strain", "on_request")};
+  c.ctx.finalize();
+  for (int i{0}; i < 3; ++i)
+    c.load(x0, s0);
+  EXPECT_EQ(a.fills() + b.fills() + q.fills(), 0) << "update() alone fills nothing";
+
+  auto const &d{c.ctx.derivative<tensor4>("b", "y", "strain", "strain")};
+  EXPECT_EQ(a.fills(), 1) << "filled at once at the held state";
+  EXPECT_EQ(b.fills(), 1);
+  EXPECT_LT(distance(d, tensor4{tmech::dcontract(B4, A4)}), 1e-12);
+  for (int i{0}; i < 2; ++i)
+    c.load(x0, s0);
+  EXPECT_EQ(a.fills(), 3);
+  EXPECT_EQ(b.fills(), 3);
+  EXPECT_EQ(q.fills(), 0) << "q is off the requested path";
+  EXPECT_EQ(a.runs(), 5) << "the values are not recomputed for the partials";
+}
+
+TEST(PartialDerivatives, PartialsOnRequestFollowTheState) {
+  chain c;
+  c.node<norm_trace>("n", "strain::strain", "on_request");
+  c.node<square>("s", "n::y", "on_request");
+  c.ctx.finalize();
+  auto const &d{c.ctx.derivative<tensor2>("s", "y", "strain", "strain")};
+  for (T const k : {T{1}, T{-2}}) {
+    tensor2 const x{k * x0};
+    c.load(x, s0);
+    EXPECT_LT(distance(d, tensor2{2 * norm_trace::value(x) * norm_trace::partial(x)}), 1e-12) << k;
+  }
+}
+
+TEST(PartialDerivatives, AConstantCallbackFillsItsPartialsOnRequestOnce) {
+  chain c;
+  param_type p;
+  p.insert<std::string>("name", "c");
+  p.insert<T>("value", s0);
+  c.ctx.create<nm::constant_scalar<policy>>(p);
+  auto &s{c.node<square>("s", "c::value", "on_request")};
+  c.ctx.finalize();
+  auto const &d{c.ctx.derivative<T>("s", "y", "c", "value")};
+  for (int i{0}; i < 3; ++i)
+    c.load(x0, s0);
+  EXPECT_NEAR(d, 2 * s0, 1e-12);
+  EXPECT_EQ(s.fills(), 1) << "it did not run again, so its partials stand";
+}
+
+TEST(PartialDerivatives, TheFiniteDifferenceCheckFillsPartialsOnRequest) {
+  chain c;
+  c.node<map_a>("a", "strain::strain", "on_request");
+  c.node<wrong_map>("w", "strain::strain", "on_request");
+  c.ctx.finalize();
+  c.load(x0, s0);
+  EXPECT_TRUE(nm::check_partials(c.ctx, "a").empty());
+  auto const mismatches{nm::check_partials(c.ctx, "w")};
+  ASSERT_FALSE(mismatches.empty());
+  EXPECT_TRUE(mismatches.front().contains("w::y")) << mismatches.front();
+}
+
+TEST(PartialDerivatives, FillsPartialsWithoutDeclaredPartialsThrows) {
+  chain c;
+  EXPECT_THROW(c.node<map_a>("a", "strain::strain", "fill_only"), std::logic_error);
 }
 
 // --- the per-node finite-difference check ---
