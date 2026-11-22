@@ -296,6 +296,7 @@ public:
     property_base_type const* own; ///< ... else the output of this material it is
     void const* output_value;      ///< the addresses partial() is called with
     void const* read_value;
+    void const* type; ///< derivatives::type_tag of the block, checked by partial()
     std::unique_ptr<derivatives::partial_block<value_type>> block;
     bool requested{false}; ///< a requested derivative reads the block
   };
@@ -392,10 +393,9 @@ protected:
     auto const it{std::ranges::find_if(m_partials, [&](auto const& p) {
       return p.output_value == static_cast<void const*>(&output) && p.read_value == static_cast<void const*>(&read);
     })};
-    auto* block{it != m_partials.end() ? dynamic_cast<block_type*>(it->block.get()) : nullptr};
-    if (!block)
+    if (it == m_partials.end() || it->type != &derivatives::type_tag<block_type>)
       throw std::logic_error("partial(): material '" + m_name + "' fills a partial its callback did not declare in partials()");
-    return block->value;
+    return static_cast<block_type*>(it->block.get())->value;
   }
 
   /// The callback filling `callback` (after its reads()) fills d output / d read through partial().
@@ -413,8 +413,9 @@ protected:
       throw std::logic_error("partials(): '" + key_of(out) + "' declares a partial twice");
     if (is_independent(d->callback, input, own))
       throw std::logic_error("partials(): '" + key_of(entry) + "' declares a read both in partials() and independent_of()");
-    m_partials.push_back({d->callback, out.property, input, own, &output, &read,
-                          std::make_unique<derivatives::typed_partial<value_type, Traits::Dim, Out, In>>(output)});
+    using block_type = derivatives::typed_partial<value_type, Traits::Dim, Out, In>;
+    m_partials.push_back({d->callback, out.property, input, own, &output, &read, &derivatives::type_tag<block_type>,
+                          std::make_unique<block_type>(output)});
   }
 
   /// The outputs of the callback filling `callback` do not depend on `read`: its partials are zero. It holds for every
