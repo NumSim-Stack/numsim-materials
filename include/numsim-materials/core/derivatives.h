@@ -174,6 +174,15 @@ struct mandel_tables {
 template <std::size_t Dim, std::size_t Rank, std::size_t OutRank>
 inline constexpr mandel_tables<Dim, Rank, OutRank> mandel_table{};
 
+/// The sum of the tensor entries of block position Q (its index pairs swapped), indices as constants.
+template <std::size_t Dim, std::size_t Rank, std::size_t OutRank, std::size_t Q, typename T, std::size_t... C>
+T entry_sum(T const* data, std::index_sequence<C...>) noexcept {
+  return (data[mandel_table<Dim, Rank, OutRank>.entries[Q][C]] + ...);
+}
+
+/// pack() and unpack() of up to this many entries run with the table indices as constants.
+inline constexpr std::size_t unroll_limit{256};
+
 /// sqrt(2)^c for c = 0..n, multiplied up one factor at a time.
 template <typename T, std::size_t N>
 constexpr std::array<T, N + 1> sqrt2_powers() {
@@ -193,14 +202,23 @@ void pack(P const& p, T* block) {
     *block = p;
   } else {
     constexpr std::size_t rank{P::rank()};
+    using table_type = detail::mandel_tables<Dim, rank, OutRank>;
     constexpr auto const& table{detail::mandel_table<Dim, rank, OutRank>};
     constexpr auto scale{detail::sqrt2_powers<T, table.n>()};
     T const* const data{p.raw_data()};
-    for (std::size_t q{0}; q < table.rows * table.cols; ++q) {
-      T sum{0};
-      for (auto const flat : table.entries[q])
-        sum += data[flat];
-      block[q] = (scale[table.weight_count[q]] / T(table.copies)) * sum;
+    if constexpr (table.rows * table.cols <= detail::unroll_limit) {
+      [&]<std::size_t... q>(std::index_sequence<q...>) {
+        ((block[q] = (scale[table.weight_count[q]] / T(table_type::copies)) *
+                     detail::entry_sum<Dim, rank, OutRank, q>(data, std::make_index_sequence<table_type::copies>{})),
+         ...);
+      }(std::make_index_sequence<table.rows * table.cols>{});
+    } else {
+      for (std::size_t q{0}; q < table.rows * table.cols; ++q) {
+        T sum{0};
+        for (auto const flat : table.entries[q])
+          sum += data[flat];
+        block[q] = (scale[table.weight_count[q]] / T(table.copies)) * sum;
+      }
     }
   }
 }
@@ -215,8 +233,14 @@ void unpack(T const* block, P& p) {
     constexpr auto const& table{detail::mandel_table<Dim, rank, OutRank>};
     constexpr auto scale{detail::sqrt2_powers<T, table.n>()};
     T* const data{p.raw_data()};
-    for (std::size_t flat{0}; flat < table.size; ++flat)
-      data[flat] = block[table.position[flat]] / scale[table.count[flat]];
+    if constexpr (table.size <= detail::unroll_limit) {
+      [&]<std::size_t... flat>(std::index_sequence<flat...>) {
+        ((data[flat] = block[table.position[flat]] / scale[table.count[flat]]), ...);
+      }(std::make_index_sequence<table.size>{});
+    } else {
+      for (std::size_t flat{0}; flat < table.size; ++flat)
+        data[flat] = block[table.position[flat]] / scale[table.count[flat]];
+    }
   }
 }
 
