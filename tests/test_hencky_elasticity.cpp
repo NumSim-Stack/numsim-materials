@@ -183,6 +183,31 @@ TEST(Hencky, LinearElasticityOnTheSameConstantsGivesTheSameStress) {
   EXPECT_LE(tmech::norm(tensor2{produced->get<tensor2>("hencky", "stress") - fixed->get<tensor2>("hencky", "stress")}), 1e-12);
 }
 
+// the documented failure mode: a push-forward on a wrong tangent_source keeps P and breaks dP/dF
+TEST(Hencky, AMismatchedTangentSourceShowsInTheTangentError) {
+  std::string mismatched{deck(false)};
+  auto const replace = [&](std::string const &from, std::string const &to) {
+    auto const at{mismatched.find(from)};
+    ASSERT_NE(at, std::string::npos) << from;
+    mismatched.replace(at, from.size(), to);
+  };
+  replace(R"("tangent_source": "stiffness", "strain_source": "log_strain")", R"("tangent_source": "other", "strain_source": "log_strain")");
+  replace(R"({"type": "log_strain")", R"({"type": "constant_scalar", "name": "G2", "value": 153.84},
+    {"type": "isotropic_tangent", "name": "other", "K_source": "K", "G_source": "G2"},
+    {"type": "log_strain")");
+  auto right{build()};
+  ctx_type wrong;
+  nm::umat::make_json_builder<policy>(mismatched)(wrong, {});
+  tensor2 F{stretch(1.2, 0.95, 1.05)};
+  F(0, 1) = 0.3;
+  driver d_right(*right, point()), d_wrong(wrong, point());
+  auto const r_right{d_right.step(F, tensor2{}, control::deformation(), 0, 1)};
+  auto const r_wrong{d_wrong.step(F, tensor2{}, control::deformation(), 0, 1)};
+  EXPECT_LE(tmech::norm(tensor2{r_right.stress - r_wrong.stress}), 1e-12);
+  EXPECT_LT(d_right.tangent_error(r_right), 1e-6);
+  EXPECT_GT(d_wrong.tangent_error(r_wrong), 0.1);
+}
+
 // the chain as a deck: the template a user starts from
 TEST(Hencky, TheJsonDeckBuildsAndEvaluates) {
   auto ctx{build(true)};

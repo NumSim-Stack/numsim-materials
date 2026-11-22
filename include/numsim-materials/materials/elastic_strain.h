@@ -1,6 +1,8 @@
 #ifndef NUMSIM_MATERIALS_ELASTIC_STRAIN_H
 #define NUMSIM_MATERIALS_ELASTIC_STRAIN_H
 
+#include <algorithm>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -34,9 +36,13 @@ public:
     if (base::m_parameter_handler.contains("eigenstrain_sources"))
       for (auto const &source : base::template get_parameter<std::vector<std::string>>("eigenstrain_sources")) {
         auto const split{source.find("::")};
-        m_eigenstrains.push_back(&base::template add_input<tensor2>(
-            source.substr(0, split), split == std::string::npos ? std::string{"eigenstrain"} : source.substr(split + 2),
-            EdgeKind::Global));
+        std::string const material{source.substr(0, split)};
+        std::string const property{split == std::string::npos ? std::string{"eigenstrain"} : source.substr(split + 2)};
+        if (std::ranges::any_of(m_eigenstrains, [&](auto const *e) {
+              return e->source_owner() == material && e->source_name() == property;
+            }))
+          throw std::invalid_argument(base::name() + ": eigenstrain_sources lists '" + material + "::" + property + "' twice");
+        m_eigenstrains.push_back(&base::template add_input<tensor2>(material, property, EdgeKind::Global));
       }
     base::add_callback(&elastic_strain::compute, m_strain).reads(m_eps, m_eigenstrains).partials(m_strain, m_eps, m_eigenstrains);
   }
