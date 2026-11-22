@@ -7,7 +7,7 @@ on:
 
 jobs:
   build-and-test:
-    name: build-and-test (${{ matrix.cxx }}${{ matrix.asan && ', asan' || '' }})
+    name: build-and-test (${{ matrix.cxx }}${{ matrix.asan && ', asan' || '' }}${{ matrix.build_type == '' && ', no build type' || '' }})
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -15,6 +15,12 @@ jobs:
         cxx: [g++-14, clang++-19]
         # The sanitizer executables build in their own job, in parallel with the plain one.
         asan: [false, true]
+        build_type: [Release]
+        include:
+          # No build type: the tests compile at -O1, so its -Werror warnings are covered.
+          - cxx: clang++-19
+            asan: false
+            build_type: ""
 
     steps:
     - uses: actions/checkout@v4
@@ -34,7 +40,7 @@ jobs:
     - name: Configure
       run: |
         cmake -B build \
-          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
           -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
           -DNUMSIM_MATERIALS_BUILD_TESTS=ON \
           -DNUMSIM_SANITIZER_TESTS=${{ matrix.asan && 'ON' || 'OFF' }} \
