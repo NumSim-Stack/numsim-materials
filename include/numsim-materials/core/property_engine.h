@@ -21,6 +21,7 @@
 #include <utility>
 #include <vector>
 #include <Eigen/Core>
+#include "numsim-materials/core/derivative_kernels.h"
 #include "numsim-materials/core/derivatives.h"
 #include "numsim-materials/core/property_traits.h"
 #include "numsim-materials/core/property.h"
@@ -774,6 +775,7 @@ private:
     std::size_t block;   ///< in m_blocks
     material_interface_type* material;
     const property_base* callback;
+    derivatives::product_kernel<value_type> kernel; ///< fixed to the block's shape
   };
   /// One requested derivative: the nodes between seed and target that carry one, in topological order.
   struct derivative_plan {
@@ -791,7 +793,7 @@ private:
     for (auto& d : plan.D | std::views::drop(1))
       d.setZero();
     for (auto const& step : plan.steps)
-      plan.D[step.out].noalias() += m_blocks[step.block].second * plan.D[step.in];
+      step.kernel(m_blocks[step.block].second.data(), plan.D[step.in].data(), plan.D[step.out].data(), plan.D[step.out].cols());
     if (plan.target_node)
       plan.slot->unpack(plan.D[*plan.target_node].data());
   }
@@ -863,7 +865,8 @@ private:
         auto const& partials{mat->partials()};
         if (auto const p{std::ranges::find_if(partials, [&](auto const& q) { return q.output == prop && same_read(q); })};
             p != partials.end()) {
-          steps.push_back({0, node.at(src), block_of(*p->block), mat, p->callback});
+          steps.push_back({0, node.at(src), block_of(*p->block), mat, p->callback,
+                           derivatives::product_kernel_for<value_type, Traits::Dim>(p->block->rows(), p->block->cols())});
           width = static_cast<Eigen::Index>(p->block->rows());
           via.try_emplace(prop, src);
         } else if (!std::ranges::any_of(mat->independent_reads(), [&](auto const& i) { return i.callback == d.callback && same_read(i); })) {
@@ -885,7 +888,7 @@ private:
       auto const index{plan.D.size()};
       plan.D.emplace_back(width, seed_width);
       for (auto const& step : steps)
-        plan.steps.push_back({index, step.in, step.block, step.material, step.callback});
+        plan.steps.push_back({index, step.in, step.block, step.material, step.callback, step.kernel});
       node.emplace(prop, index);
     }
     if (auto const it{node.find(target)}; it != node.end())
