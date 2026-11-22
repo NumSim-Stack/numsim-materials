@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 #include <memory>
+#include <stdexcept>
+#include <string>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/core/partial_check.h"
@@ -76,8 +78,39 @@ TEST(ElasticStrain, TheStrainPropertyIsConfigurable) {
   ctx_type ctx;
   nm::umat::make_json_builder<policy>(R"({"materials": [
     {"type": "external_strain_source", "name": "strain"},
-    {"type": "elastic_strain", "name": "ee", "strain_source": "strain", "strain_property": "strain"}]})")(ctx, {});
-  EXPECT_NE(ctx.find("ee"), nullptr);
+    {"type": "external_scalar_source", "name": "temperature"},
+    {"type": "constant_scalar", "name": "alpha", "value": 1e-5},
+    {"type": "thermal_eigenstrain", "name": "thermal", "alpha_source": "alpha::value", "reference_temperature": 20.0},
+    {"type": "elastic_strain", "name": "ee", "strain_source": "thermal", "strain_property": "eigenstrain"}]})")(ctx, {});
+  dynamic_cast<nm::external_scalar_source<policy> *>(ctx.find("temperature"))->bind(T0, 70);
+  ctx.update();
+  EXPECT_NEAR(ctx.get<tensor2>("ee", "strain")(0, 0), alpha * 50, 1e-18);
+}
+
+TEST(ElasticStrain, TheSameEigenstrainTwiceIsRejected) {
+  for (auto const *sources : {R"("thermal", "thermal")", R"("thermal", "thermal::eigenstrain")"}) {
+    ctx_type ctx;
+    try {
+      nm::umat::make_json_builder<policy>(deck(sources))(ctx, {});
+      ADD_FAILURE() << sources << " built";
+    } catch (std::invalid_argument const &e) {
+      EXPECT_NE(std::string{e.what()}.find("'thermal::eigenstrain' twice"), std::string::npos) << e.what();
+    }
+  }
+}
+
+// #240 moved the eigenstrain out of linear_elasticity: an old deck must not lose it silently
+TEST(LinearElasticity, TheRemovedEigenstrainSourceIsAnError) {
+  ctx_type ctx;
+  try {
+    nm::umat::make_json_builder<policy>(R"({"materials": [
+      {"type": "external_strain_source", "name": "strain"},
+      {"type": "linear_elasticity", "name": "el", "strain_producer_name": "strain", "K": 1.0, "G": 1.0,
+       "eigenstrain_source": "thermal"}]})")(ctx, {});
+    ADD_FAILURE() << "built";
+  } catch (std::invalid_argument const &e) {
+    EXPECT_NE(std::string{e.what()}.find("elastic_strain"), std::string::npos) << e.what();
+  }
 }
 
 TEST(ElasticStrain, PartialsPassTheFiniteDifferenceCheck) {
