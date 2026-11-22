@@ -75,8 +75,12 @@ std::vector<std::string> check_partials(material_context<Traits>& ctx, std::stri
     on_exit rerun{run}; // the outputs at the state the check found
     bool const requested{mat->partials_requested(callback)};
     mat->request_partials(callback, true);
+    mat->request_all_partials(true);
     {
-      on_exit reset{[&] { mat->request_partials(callback, requested); }};
+      on_exit reset{[&] {
+        mat->request_partials(callback, requested);
+        mat->request_all_partials(false);
+      }};
       run();
     }
     auto of_callback{partials | std::views::filter([callback](auto const& q) { return q.callback == callback; })};

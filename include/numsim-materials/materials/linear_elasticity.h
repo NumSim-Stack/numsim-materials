@@ -78,12 +78,14 @@ public:
   /// d sigma / d eps = C, d sigma / d eps_eig = -C, d sigma / d C = Isym (x) (eps - eps_eig).
   void update_partials() {
     base::partial(m_sig, m_eps) = m_C;
-    if (m_eigenstrain) {
+    if (m_eigenstrain && base::want_partial(m_sig, *m_eigenstrain))
       base::partial(m_sig, *m_eigenstrain) = value_type{-1} * m_C;
+    if (!base::want_partial(m_sig, m_C))
+      return;
+    if (m_eigenstrain)
       base::partial(m_sig, m_C) = tmech::otimes(sym_identity<value_type, Dim>(), tensor2{m_eps.get() - m_eigenstrain->get()});
-    } else {
+    else
       base::partial(m_sig, m_C) = tmech::otimes(sym_identity<value_type, Dim>(), m_eps.get());
-    }
   }
 
   void update_tangent(){

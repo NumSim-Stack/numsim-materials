@@ -1,9 +1,13 @@
 #include <gtest/gtest.h>
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <functional>
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <utility>
+#include <vector>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_base.h"
 #include "numsim-materials/core/material_context.h"
@@ -775,6 +779,112 @@ TEST(PartialDerivatives, ThermoelasticPartialsPassTheFiniteDifferenceCheck) {
   for (auto const *name : {"thermal", "elastic"})
     for (auto const &mismatch : nm::check_partials(m.ctx, name))
       ADD_FAILURE() << mismatch;
+}
+
+// --- a declared partial is filled only when a requested derivative uses it ---
+
+// Largest component of the packed partial d `output` / d `read` that elastic declares for read_name.
+T filled(thermoelastic &m, std::string const &read_name) {
+  auto *mat{m.ctx.find("elastic")};
+  for (auto const &p : mat->partials()) {
+    bool const own{p.own && p.own->traits().id.name == read_name};
+    bool const in{p.input && p.input->source_name() == read_name};
+    if (!own && !in)
+      continue;
+    std::vector<T> packed(p.block->rows() * p.block->cols());
+    p.block->pack(packed.data());
+    T largest{0};
+    for (auto const v : packed)
+      largest = std::max(largest, std::abs(v));
+    return largest;
+  }
+  throw std::logic_error("no partial for " + read_name);
+}
+
+TEST(PartialDerivatives, APartialNoRequestedDerivativeUsesIsNotFilled) {
+  thermoelastic m;
+  auto const &ddsdde{m.point->derivative<tensor4>("elastic::stress", "strain")};
+  tensor2 const eps{sym(1e-3, -2e-4, 5e-4, 1e-4, -3e-4, 2e-4)};
+  m.evaluate(eps, T_ref);
+  auto const &tangent{m.point->output<tensor4>("elastic::tangent")};
+  EXPECT_LT(tmech::norm(tensor4{ddsdde - tangent}), 1e-12 * tmech::norm(tangent));
+  EXPECT_GT(filled(m, "strain"), 0);
+  EXPECT_EQ(filled(m, "tangent"), 0) << "d stress / d C is not on a requested path";
+  EXPECT_EQ(filled(m, "eigenstrain"), 0) << "nor d stress / d eigenstrain";
+}
+
+TEST(PartialDerivatives, ADerivativeThroughTheTangentFillsItsPartial) {
+  thermoelastic m;
+  auto const &ddsdde{m.point->derivative<tensor4>("elastic::stress", "strain")};
+  auto const &dsdc{m.point->derivative<tensor6>("elastic::stress", "elastic::tangent")};
+  tensor2 const eps{sym(1e-3, -2e-4, 5e-4, 1e-4, -3e-4, 2e-4)};
+  m.evaluate(eps, T_ref);
+  auto const &tangent{m.point->output<tensor4>("elastic::tangent")};
+  EXPECT_LT(tmech::norm(tensor4{ddsdde - tangent}), 1e-12 * tmech::norm(tangent));
+  EXPECT_LT(tmech::norm(tensor6{dsdc - tensor6{tmech::otimes(Is, eps)}}), 1e-12 * tmech::norm(dsdc));
+  EXPECT_GT(filled(m, "tangent"), 0);
+}
+
+// --- pack and unpack against the index-loop definition ---
+
+// The definition pack and unpack replaced: each index pair projected onto its Mandel component.
+template <std::size_t Dim, std::size_t Rank>
+tmech::tensor<T, Dim, Rank> minor_symmetric(unsigned seed) {
+  tmech::tensor<T, Dim, Rank> t;
+  std::array<std::size_t, Rank> idx{};
+  auto value{[&](std::array<std::size_t, Rank> i) {
+    unsigned h{seed};
+    for (std::size_t k{0}; k < Rank; k += 2) {
+      auto const lo{std::min(i[k], i[k + 1])}, hi{std::max(i[k], i[k + 1])};
+      h = h * 31u + static_cast<unsigned>(lo * 7 + hi * 3 + 1);
+    }
+    return T(h % 1000u) / 100 - 5;
+  }};
+  std::size_t total{1};
+  for (std::size_t k{0}; k < Rank; ++k)
+    total *= Dim;
+  for (std::size_t flat{0}; flat < total; ++flat) {
+    for (std::size_t k{Rank}, rest{flat}; k-- > 0; rest /= Dim)
+      idx[k] = rest % Dim;
+    [&]<std::size_t... I>(std::index_sequence<I...>) { t(idx[I]...) = value(idx); }(std::make_index_sequence<Rank>{});
+  }
+  return t;
+}
+
+template <std::size_t Dim, std::size_t Rank, std::size_t OutRank>
+void expect_round_trip() {
+  namespace dv = numsim::materials::derivatives;
+  auto const t{minor_symmetric<Dim, Rank>(Rank + Dim)};
+  constexpr std::size_t rows{dv::width<Dim>(OutRank)}, cols{dv::width<Dim>(Rank - OutRank)};
+  std::vector<T> block(rows * cols);
+  dv::pack<Dim, OutRank>(t, block.data());
+  // Mandel components: a sqrt(2) per off-diagonal pair makes A : A the sum of squares of the block.
+  T squares{0};
+  for (auto const v : block)
+    squares += v * v;
+  T full{0};
+  std::size_t total{1};
+  for (std::size_t k{0}; k < Rank; ++k)
+    total *= Dim;
+  for (std::size_t k{0}; k < total; ++k)
+    full += t.raw_data()[k] * t.raw_data()[k];
+  EXPECT_NEAR(squares, full, 1e-10 * full);
+  tmech::tensor<T, Dim, Rank> back;
+  dv::unpack<Dim, OutRank>(block.data(), back);
+  for (std::size_t k{0}; k < total; ++k)
+    EXPECT_NEAR(back.raw_data()[k], t.raw_data()[k], 1e-12) << "rank " << Rank << " dim " << Dim << " flat " << k;
+}
+
+TEST(PartialDerivatives, PackAndUnpackRoundTripMinorSymmetricTensors) {
+  expect_round_trip<3, 2, 0>();
+  expect_round_trip<3, 4, 2>();
+  expect_round_trip<3, 4, 0>();
+  expect_round_trip<3, 6, 2>();
+  expect_round_trip<3, 6, 4>();
+  expect_round_trip<2, 2, 0>();
+  expect_round_trip<2, 4, 2>();
+  expect_round_trip<2, 6, 2>();
+  expect_round_trip<2, 6, 4>();
 }
 
 } // namespace

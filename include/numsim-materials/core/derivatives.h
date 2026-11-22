@@ -3,6 +3,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <numbers>
 #include <optional>
@@ -120,35 +121,86 @@ constexpr std::size_t power(std::size_t base, std::size_t exponent) {
 }
 } // namespace detail
 
+namespace detail {
+/// Index tables of pack() and unpack() for a tensor of rank `Rank` split at `OutRank`, over its contiguous storage
+/// (the first index slowest). The weight of an entry is sqrt(2)^count, count being its off-diagonal pairs.
+template <std::size_t Dim, std::size_t Rank, std::size_t OutRank>
+struct mandel_tables {
+  static constexpr std::size_t n{Rank / 2}, W{pair_width<Dim>}, copies{std::size_t{1} << n};
+  static constexpr std::size_t rows{width<Dim>(OutRank)}, cols{width<Dim>(Rank - OutRank)}, size{power(Dim, Rank)};
+
+  /// tensor entry -> its position in the column-major block, and its off-diagonal pairs
+  std::array<std::uint16_t, size> position{};
+  std::array<std::uint8_t, size> count{};
+  /// block position -> the `copies` tensor entries of its index pairs, and the off-diagonal pairs
+  std::array<std::array<std::uint16_t, copies>, rows * cols> entries{};
+  std::array<std::uint8_t, rows * cols> weight_count{};
+
+  constexpr mandel_tables() {
+    for (std::size_t flat{0}; flat < size; ++flat) {
+      std::size_t mandel{0}, off{0}, rest{flat};
+      std::array<std::size_t, Rank> idx{};
+      for (std::size_t k{Rank}; k-- > 0; rest /= Dim)
+        idx[k] = rest % Dim;
+      for (std::size_t k{0}; k < Rank; k += 2) {
+        auto const c{component<Dim>(idx[k], idx[k + 1])};
+        mandel = mandel * W + c;
+        off += c >= Dim;
+      }
+      position[flat] = static_cast<std::uint16_t>(mandel / cols + (mandel % cols) * rows);
+      count[flat] = static_cast<std::uint8_t>(off);
+    }
+    constexpr auto pair{pairs<Dim>()};
+    for (std::size_t mandel{0}; mandel < rows * cols; ++mandel) {
+      std::array<std::size_t, n> m{};
+      std::size_t rest{mandel}, off{0};
+      for (std::size_t k{n}; k-- > 0; rest /= W) {
+        m[k] = rest % W;
+        off += m[k] >= Dim;
+      }
+      auto const q{mandel / cols + (mandel % cols) * rows};
+      weight_count[q] = static_cast<std::uint8_t>(off);
+      for (std::size_t swaps{0}; swaps < copies; ++swaps) {
+        std::size_t flat{0};
+        for (std::size_t k{0}; k < n; ++k) {
+          auto const flip{(swaps >> k) & 1};
+          flat = (flat * Dim + pair[m[k]][flip]) * Dim + pair[m[k]][1 - flip];
+        }
+        entries[q][swaps] = static_cast<std::uint16_t>(flat);
+      }
+    }
+  }
+};
+template <std::size_t Dim, std::size_t Rank, std::size_t OutRank>
+inline constexpr mandel_tables<Dim, Rank, OutRank> mandel_table{};
+
+/// sqrt(2)^c for c = 0..n, multiplied up one factor at a time.
+template <typename T, std::size_t N>
+constexpr std::array<T, N + 1> sqrt2_powers() {
+  std::array<T, N + 1> w{};
+  w[0] = T{1};
+  for (std::size_t c{1}; c <= N; ++c)
+    w[c] = w[c - 1] * std::numbers::sqrt2_v<T>;
+  return w;
+}
+} // namespace detail
+
 /// Packs P = d out / d in (rank(out) = OutRank) into a width(OutRank) x width(rank(P) - OutRank) column-major block;
-/// each index pair is projected onto its symmetric part. Index loops: packing is the boundary to the matrices.
+/// each index pair is projected onto its symmetric part. Table driven: packing is the boundary to the matrices.
 template <std::size_t Dim, std::size_t OutRank, typename P, typename T>
 void pack(P const& p, T* block) {
   if constexpr (std::is_arithmetic_v<P>) {
     *block = p;
   } else {
-    constexpr std::size_t rank{P::rank()}, n{rank / 2}, W{pair_width<Dim>};
-    constexpr std::size_t rows{width<Dim>(OutRank)}, cols{width<Dim>(rank - OutRank)};
-    constexpr auto pair{detail::pairs<Dim>()};
-    std::array<std::size_t, n> m{};
-    std::array<std::size_t, rank> idx{};
-    for (std::size_t flat{0}; flat < rows * cols; ++flat) {
-      for (std::size_t k{n}, rest{flat}; k-- > 0; rest /= W)
-        m[k] = rest % W; // the first pair varies slowest
+    constexpr std::size_t rank{P::rank()};
+    constexpr auto const& table{detail::mandel_table<Dim, rank, OutRank>};
+    constexpr auto scale{detail::sqrt2_powers<T, table.n>()};
+    T const* const data{p.raw_data()};
+    for (std::size_t q{0}; q < table.rows * table.cols; ++q) {
       T sum{0};
-      for (std::size_t swaps{0}; swaps < (std::size_t{1} << n); ++swaps) {
-        for (std::size_t k{0}; k < n; ++k) {
-          auto const flip{(swaps >> k) & 1};
-          idx[2 * k] = pair[m[k]][flip];
-          idx[2 * k + 1] = pair[m[k]][1 - flip];
-        }
-        sum += detail::entry(p, idx, std::make_index_sequence<rank>{});
-      }
-      T weight{T{1} / T(std::size_t{1} << n)};
-      for (auto const mk : m)
-        if (mk >= Dim)
-          weight *= std::numbers::sqrt2_v<T>;
-      block[flat / cols + (flat % cols) * rows] = weight * sum;
+      for (auto const flat : table.entries[q])
+        sum += data[flat];
+      block[q] = (scale[table.weight_count[q]] / T(table.copies)) * sum;
     }
   }
 }
@@ -159,22 +211,12 @@ void unpack(T const* block, P& p) {
   if constexpr (std::is_arithmetic_v<P>) {
     p = *block;
   } else {
-    constexpr std::size_t rank{P::rank()}, W{pair_width<Dim>};
-    constexpr std::size_t rows{width<Dim>(OutRank)}, cols{width<Dim>(rank - OutRank)};
-    std::array<std::size_t, rank> idx{};
-    for (std::size_t flat{0}; flat < detail::power(Dim, rank); ++flat) {
-      for (std::size_t k{rank}, rest{flat}; k-- > 0; rest /= Dim)
-        idx[k] = rest % Dim;
-      std::size_t mandel{0};
-      T weight{1};
-      for (std::size_t k{0}; k < rank; k += 2) {
-        auto const c{detail::component<Dim>(idx[k], idx[k + 1])};
-        mandel = mandel * W + c;
-        if (c >= Dim)
-          weight *= std::numbers::sqrt2_v<T>;
-      }
-      detail::entry(p, idx, std::make_index_sequence<rank>{}) = block[mandel / cols + (mandel % cols) * rows] / weight;
-    }
+    constexpr std::size_t rank{P::rank()};
+    constexpr auto const& table{detail::mandel_table<Dim, rank, OutRank>};
+    constexpr auto scale{detail::sqrt2_powers<T, table.n>()};
+    T* const data{p.raw_data()};
+    for (std::size_t flat{0}; flat < table.size; ++flat)
+      data[flat] = block[table.position[flat]] / scale[table.count[flat]];
   }
 }
 
