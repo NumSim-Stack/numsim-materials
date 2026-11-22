@@ -758,6 +758,23 @@ private:
   using tensor2 = tmech::tensor<value_type, Traits::Dim, 2>;
   using system_declaration = typename material_interface_type::system_declaration;
   struct system_stage;
+  /// A scalar or a symmetric tensor a system reads or writes, by address: properties keep theirs.
+  struct value_ref {
+    value_type* scalar{nullptr};
+    tensor2* tensor{nullptr};
+    void pack(value_type* out) const {
+      if (scalar)
+        *out = *scalar;
+      else
+        derivatives::pack<Traits::Dim, 2>(*tensor, out);
+    }
+    void unpack(value_type const* in) const {
+      if (scalar)
+        *scalar = *in;
+      else
+        derivatives::unpack<Traits::Dim, 2>(in, *tensor);
+    }
+  };
 
   /// Callbacks run in sequence (no system) or as a residual system's members until it converges.
   struct stage {
@@ -811,11 +828,15 @@ private:
     case system_method::newton: jacobian(s); break;
     case system_method::newton_fd: jacobian_by_differences(s, callbacks); break;
     }
-    s.lu.compute(s.J);
-    column_vector const dx{s.lu.solve(s.R)};
-    if (!dx.allFinite())
+    if (s.width == 1) {
+      s.dx[0] = s.R[0] / s.J(0, 0);
+    } else {
+      s.lu.compute(s.J);
+      s.dx = s.lu.solve(s.R);
+    }
+    if (!s.dx.allFinite())
       throw cutback_error(std::format("system '{}': the Jacobian is singular at iteration {}", s.name, it));
-    s.x -= dx;
+    s.x -= s.dx;
   }
 
   /// J = dR/dx from the partials the members filled at x.
@@ -834,7 +855,9 @@ private:
   /// x is zero); the unknowns are back at x afterwards, also when a member throws.
   void jacobian_by_differences(system_stage& s, std::vector<property_base*> const& callbacks) {
     s.J.resize(s.height, s.width);
-    column_vector x{s.x}, R(s.height);
+    auto& x{s.x_fd};
+    auto& R{s.R_fd};
+    x = s.x;
     auto const norm{s.x.template lpNorm<Eigen::Infinity>()};
     auto const scale{norm > 0 ? norm : value_type{1}};
     try {
@@ -859,39 +882,31 @@ private:
     s.x.setZero(s.width);
     for (std::size_t i{0}; i < s.unknowns.size(); ++i)
       if (s.unknowns[i]->is_history())
-        pack_value(*s.unknowns[i], s.ranks[i], s.x.data() + s.columns[i], true);
+        s.unknown_old[i].pack(s.x.data() + s.columns[i]);
       else if (s.ranks[i] == 0)
         s.x[s.columns[i]] = s.declared->seeds[i];
   }
 
   void scatter(system_stage& s, column_vector const& x) {
     for (std::size_t i{0}; i < s.unknowns.size(); ++i)
-      unpack_value(x.data() + s.columns[i], s.ranks[i], *s.unknowns[i]);
+      s.unknown_values[i].unpack(x.data() + s.columns[i]);
   }
 
   void gather(system_stage& s, column_vector& R) {
     for (std::size_t i{0}; i < s.residuals.size(); ++i)
-      pack_value(*s.residuals[i], s.residual_ranks[i], R.data() + s.rows[i], false);
+      s.residual_values[i].pack(R.data() + s.rows[i]);
   }
 
-  /// A scalar or a symmetric tensor into its Mandel components; `old`: a history property's old value.
-  static void pack_value(property_base& prop, std::size_t rank, value_type* out, bool old) {
-    auto const value{[&]<typename V>(std::type_identity<V>) -> V const& {
+  /// The value of `prop` (rank 0 or 2) by address, resolved once; `old`: a history property's old value.
+  static value_ref value_of(property_base& prop, std::size_t rank, bool old) {
+    auto const value{[&]<typename V>(std::type_identity<V>) -> V& {
       if (old)
         return dynamic_cast<numsim_core::history_property<V, property_traits>&>(prop).old_value();
       return derivatives::value_in<V>(prop);
     }};
     if (rank == 0)
-      *out = value(std::type_identity<value_type>{});
-    else
-      derivatives::pack<Traits::Dim, 2>(value(std::type_identity<tensor2>{}), out);
-  }
-
-  static void unpack_value(value_type const* in, std::size_t rank, property_base& prop) {
-    if (rank == 0)
-      derivatives::value_in<value_type>(prop) = *in;
-    else
-      derivatives::unpack<Traits::Dim, 2>(in, derivatives::value_in<tensor2>(prop));
+      return {&value(std::type_identity<value_type>{}), nullptr};
+    return {nullptr, &value(std::type_identity<tensor2>{})};
   }
 
   /// A declaration with its properties: the unknowns and residuals in Mandel rows and columns.
@@ -920,7 +935,16 @@ private:
       s->rows.push_back(s->height);
       s->height += static_cast<Eigen::Index>(derivatives::width<Traits::Dim>(s->residual_ranks.back()));
     }
+    for (std::size_t i{0}; i < s->unknowns.size(); ++i) {
+      s->unknown_values.push_back(value_of(*s->unknowns[i], s->ranks[i], false));
+      s->unknown_old.push_back(s->unknowns[i]->is_history() ? value_of(*s->unknowns[i], s->ranks[i], true) : value_ref{});
+    }
+    for (std::size_t i{0}; i < s->residuals.size(); ++i)
+      s->residual_values.push_back(value_of(*s->residuals[i], s->residual_ranks[i], false));
     s->R.resize(s->height);
+    s->R_fd.resize(s->height);
+    s->dx.resize(s->width);
+    s->x_fd.resize(s->width);
     return s;
   }
 
@@ -1157,6 +1181,7 @@ private:
     std::size_t first_target;
     matrix J, B, dx_dp; ///< reused by every fold of the plan
     Eigen::PartialPivLU<matrix> lu;
+    std::vector<derivatives::product_kernel<value_type>> kernels; ///< per node of the plan; null: no fixed shape
   };
   /// D = d node / d seeds over the nodes between the seeds and the targets that carry one, in topological order.
   struct derivative_plan {
@@ -1181,8 +1206,10 @@ private:
     std::vector<const property_base*> members; ///< the callbacks it reruns, from finalize()
     std::vector<std::size_t> ranks, residual_ranks;
     std::vector<Eigen::Index> columns, rows;
+    std::vector<value_ref> unknown_values, unknown_old, residual_values; ///< resolved by make_system()
     Eigen::Index width{0}, height{0};
     column_vector x, R;
+    column_vector dx, x_fd, R_fd; ///< scratch of step() and newton_fd, sized once
     matrix J;
     Eigen::PartialPivLU<matrix> lu;
     std::optional<derivative_plan> jacobian; ///< newton: J from the partials, the unknowns as seeds
@@ -1292,7 +1319,8 @@ private:
     std::vector<system_fold> folds;
     auto column{seed_width};
     for (auto* s : passed) {
-      folds.push_back({s, column, targets.size(), matrix::Zero(s->height, s->width), matrix::Zero(s->height, seed_width), {}, {}});
+      folds.push_back({s, column, targets.size(), matrix::Zero(s->height, s->width), matrix::Zero(s->height, seed_width),
+                       matrix::Zero(s->width, seed_width), {}, {}});
       for (std::size_t j{0}; j < s->unknowns.size(); ++j)
         seeds.emplace_back(s->unknowns[j], static_cast<Eigen::Index>(derivatives::width<Traits::Dim>(s->ranks[j])));
       column += s->width;
@@ -1302,7 +1330,19 @@ private:
     plan.seed = seed;
     plan.seed_width = seed_width;
     plan.folds = std::move(folds);
+    for (auto& f : plan.folds)
+      for (auto const& d : plan.D)
+        f.kernels.push_back(fixed_kernel(d.rows(), f.system->width));
     return plan;
+  }
+
+  /// The product kernel of a rows x inner block when both are widths of node values, else null.
+  static derivatives::product_kernel<value_type> fixed_kernel(Eigen::Index rows, Eigen::Index inner) {
+    constexpr auto W{static_cast<Eigen::Index>(derivatives::pair_width<Traits::Dim>)};
+    auto const fits{[](Eigen::Index w) { return w == 1 || w == W || w == W * W; }};
+    return fits(rows) && fits(inner) ? derivatives::product_kernel_for<value_type, Traits::Dim>(static_cast<std::size_t>(rows),
+                                                                                                static_cast<std::size_t>(inner))
+                                     : nullptr;
   }
 
   /// D = d node / d seeds over `up`: seed k is the identity in its own columns. Every node a seed reaches needs
@@ -1404,12 +1444,22 @@ private:
           f.J.middleRows(s.rows[i], d.rows()) = d.middleCols(f.column, s.width);
           f.B.middleRows(s.rows[i], d.rows()) = d.leftCols(p);
         }
-      f.lu.compute(f.J);
-      f.dx_dp = -f.lu.solve(f.B);
+      if (s.width == 1) {
+        f.dx_dp = f.B / f.J(0, 0);
+      } else {
+        f.lu.compute(f.J);
+        f.dx_dp = f.lu.solve(f.B);
+      }
       if (!f.dx_dp.allFinite())
         throw cutback_error(std::format("derivative(): system '{}' has a singular Jacobian at its converged point", s.name));
-      for (auto& d : plan.D)
-        d.leftCols(p).noalias() += d.middleCols(f.column, s.width) * f.dx_dp;
+      f.dx_dp = -f.dx_dp;
+      for (std::size_t k{0}; k < plan.D.size(); ++k) {
+        auto& d{plan.D[k]};
+        if (auto const kernel{f.kernels[k]})
+          kernel(d.data() + f.column * d.rows(), f.dx_dp.data(), d.data(), p);
+        else
+          d.leftCols(p).noalias() += d.middleCols(f.column, s.width).lazyProduct(f.dx_dp);
+      }
     }
   }
 
