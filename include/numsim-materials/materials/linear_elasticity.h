@@ -1,6 +1,8 @@
 #ifndef LINEAR_ELASTICITY_H
 #define LINEAR_ELASTICITY_H
 
+#include <stdexcept>
+#include <string>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_base.h"
 #include "numsim-materials/core/parameter_helpers.h"
@@ -39,6 +41,9 @@ public:
         m_eps_name(base::template get_parameter<std::string>("strain_producer_name")),
         m_eps(base::template add_input<tensor2>(m_eps_name, base::template get_parameter<std::string>("strain_property"), EdgeKind::Global))
   {
+    if (base::m_parameter_handler.contains("eigenstrain_source")) // removed: an old deck would lose its eigenstrain
+      throw std::invalid_argument(base::name() + ": eigenstrain_source was removed; read the strain from an "
+                                  "elastic_strain with eigenstrain_sources instead");
     update_tangent(); // readable before the first update
     base::add_callback(&linear_elasticity::update_tangent, m_C).reads();
     base::add_callback(&linear_elasticity::update_stress, m_sig)
@@ -60,6 +65,7 @@ public:
     required<value_type>(para, "G");
     required<std::string>(para, "strain_producer_name");
     optional<std::string>(para, "strain_property", std::string{"strain"});
+    para.template insert<std::string>("eigenstrain_source"); // removed; kept so that a deck still naming it fails
     return para;
   }
 
