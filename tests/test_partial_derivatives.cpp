@@ -1048,49 +1048,77 @@ TEST(PartialDerivatives, PackAndUnpackRoundTripMinorSymmetricTensors) {
 } // namespace
 
 namespace {
+/// Entries of a value of rank r in full notation: Dim^r.
 template <std::size_t Dim>
-void expect_kernels_match_the_matrix_product() {
-  using matrix = Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>;
-  constexpr std::size_t W{nm::derivatives::pair_width<Dim>};
-  for (std::size_t const rows : {std::size_t{1}, W, W * W})
-    for (std::size_t const inner : {std::size_t{1}, W, W * W})
-      for (Eigen::Index const cols : {1, 6, 7}) {
-        matrix const P{matrix::Random(static_cast<Eigen::Index>(rows), static_cast<Eigen::Index>(inner))};
-        matrix const in{matrix::Random(static_cast<Eigen::Index>(inner), cols)};
-        matrix out{matrix::Random(static_cast<Eigen::Index>(rows), cols)};
-        matrix const expected{out + P * in};
-        nm::derivatives::product_kernel_for<T, Dim>(rows, inner)(P.data(), in.data(), out.data(), cols);
-        EXPECT_LT((out - expected).cwiseAbs().maxCoeff(), 1e-12) << rows << " x " << inner << " x " << cols;
-      }
+std::size_t entries(std::size_t rank) {
+  std::size_t n{1};
+  for (std::size_t k{0}; k < rank; ++k)
+    n *= Dim;
+  return n;
 }
 
+/// The tmech product of a kernel is the chain rule in full notation: out (Dim^a x Dim^s) [+]= P (Dim^a x Dim^b) *
+/// in (Dim^b x Dim^s), all row-major, tmech's storage order.
 template <std::size_t Dim>
-void expect_seed_kernels_add_the_block() {
-  using matrix = Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>;
-  constexpr std::size_t W{nm::derivatives::pair_width<Dim>};
-  for (std::size_t const rows : {std::size_t{1}, W, W * W})
-    for (std::size_t const cols : {std::size_t{1}, W, W * W}) {
-      matrix const P{matrix::Random(static_cast<Eigen::Index>(rows), static_cast<Eigen::Index>(cols))};
-      matrix out{matrix::Random(static_cast<Eigen::Index>(rows), static_cast<Eigen::Index>(cols))};
-      matrix const expected{out + P};
-      nm::derivatives::seed_kernel_for<T, Dim>(rows, cols)(P.data(), out.data());
-      EXPECT_EQ(out, expected) << rows << " x " << cols;
-    }
+void expect_kernels_match_the_row_major_product() {
+  using matrix = Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
+  auto const random{[](std::size_t rank) {
+    auto v{nm::derivatives::make_value<T, Dim>(rank)};
+    Eigen::Map<matrix>(v->data(), 1, static_cast<Eigen::Index>(entries<Dim>(rank))) = matrix::Random(1, static_cast<Eigen::Index>(entries<Dim>(rank)));
+    return v;
+  }};
+  for (std::size_t const a : {0, 2, 4})
+    for (std::size_t const b : {0, 2, 4})
+      for (std::size_t const s : {0, 2, 4})
+        for (bool const assign : {false, true}) {
+          auto const rows{static_cast<Eigen::Index>(entries<Dim>(a))}, inner{static_cast<Eigen::Index>(entries<Dim>(b))},
+              cols{static_cast<Eigen::Index>(entries<Dim>(s))};
+          auto P{random(a + b)}, in{random(b + s)}, out{random(a + s)};
+          Eigen::Map<matrix const> const p{P->data(), rows, inner}, d{in->data(), inner, cols};
+          Eigen::Map<matrix> o{out->data(), rows, cols};
+          matrix const expected{assign ? matrix{p * d} : matrix{o + p * d}};
+          nm::derivatives::step_kernel_for<T, Dim>(a, b, s, assign)(P->object(), in->object(), out->object());
+          EXPECT_LT((o - expected).cwiseAbs().maxCoeff(), 1e-12) << a << " " << b << " " << s << " " << assign;
+          if (b != s)
+            continue;
+          auto seeded{random(a + s)};
+          Eigen::Map<matrix> q{seeded->data(), rows, cols};
+          matrix const added{assign ? matrix{p} : matrix{q + p}};
+          nm::derivatives::seed_kernel_for<T, Dim>(a, s, assign)(P->object(), nullptr, seeded->object());
+          EXPECT_EQ(q, added) << a << " " << s << " " << assign;
+        }
 }
 } // namespace
 
-TEST(PartialDerivatives, TheSeedKernelsAddTheBlock) {
-  expect_seed_kernels_add_the_block<2>();
-  expect_seed_kernels_add_the_block<3>();
-  EXPECT_THROW((void)(nm::derivatives::seed_kernel_for<T, 3>(6, 4)), std::logic_error);
+TEST(PartialDerivatives, TheTmechKernelsAreTheRowMajorProduct) {
+  expect_kernels_match_the_row_major_product<2>();
+  expect_kernels_match_the_row_major_product<3>();
 }
 
-TEST(PartialDerivatives, TheFixedSizeProductKernelsMatchTheMatrixProduct) {
-  expect_kernels_match_the_matrix_product<2>();
-  expect_kernels_match_the_matrix_product<3>();
+TEST(PartialDerivatives, TheSeedIdentityMapsASymmetricValueToItself) {
+  tensor4 I2;
+  nm::derivatives::identity<T, 3>(2, &I2);
+  tensor2 const S2{0.5 * (B2 + tmech::trans(B2))};
+  EXPECT_LT(distance(tensor2{tmech::dcontract(I2, S2)}, S2), 1e-12);
+  tmech::tensor<T, 3, 8> I4;
+  nm::derivatives::identity<T, 3>(4, &I4);
+  tensor4 S4{A4};
+  S4 = 0.25 * (A4 + tmech::basis_change<tmech::sequence<2, 1, 3, 4>>(A4) + tmech::basis_change<tmech::sequence<1, 2, 4, 3>>(A4) +
+               tmech::basis_change<tmech::sequence<2, 1, 4, 3>>(A4));
+  EXPECT_LT(distance(tensor4{tmech::ddcontract(I4, S4)}, S4), 1e-12);
+  T one{};
+  nm::derivatives::identity<T, 3>(0, &one);
+  EXPECT_EQ(one, 1.0);
 }
 
-TEST(PartialDerivatives, ABlockShapeOfNoValueHasNoKernel) {
-  EXPECT_THROW((void)(nm::derivatives::product_kernel_for<T, 3>(5, 6)), std::logic_error);
-  EXPECT_THROW((void)(nm::derivatives::product_kernel_for<T, 3>(6, 4)), std::logic_error);
+TEST(PartialDerivatives, TheScalarFoldScalesThroughTmech) {
+  tensor4 out;
+  nm::derivatives::scale_kernel_for<T, 3>(4)(-0.5, &A4, &out);
+  EXPECT_LT(distance(out, tensor4{-0.5 * A4}), 1e-12);
+}
+
+TEST(PartialDerivatives, ARankOfNoNodeValueHasNoKernel) {
+  EXPECT_THROW((void)(nm::derivatives::step_kernel_for<T, 3>(1, 2, 2, false)), std::logic_error);
+  EXPECT_THROW((void)(nm::derivatives::step_kernel_for<T, 3>(2, 6, 2, false)), std::logic_error);
+  EXPECT_THROW((void)(nm::derivatives::seed_kernel_for<T, 3>(2, 3, false)), std::logic_error);
 }

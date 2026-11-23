@@ -8,6 +8,7 @@
 #include <numbers>
 #include <optional>
 #include <stdexcept>
+#include <string>
 #include <type_traits>
 #include <utility>
 #include <tmech/tmech.h>
@@ -194,18 +195,31 @@ constexpr std::array<T, N + 1> sqrt2_powers() {
 }
 } // namespace detail
 
+template <std::size_t Dim, std::size_t Rank, std::size_t OutRank, typename T>
+void pack_data(T const* data, T* block);
+template <std::size_t Dim, std::size_t Rank, std::size_t OutRank, typename T>
+void unpack_data(T const* block, T* data);
+
 /// Packs P = d out / d in (rank(out) = OutRank) into a width(OutRank) x width(rank(P) - OutRank) column-major block;
 /// each index pair is projected onto its symmetric part. Table driven: packing is the boundary to the matrices.
 template <std::size_t Dim, std::size_t OutRank, typename P, typename T>
 void pack(P const& p, T* block) {
-  if constexpr (std::is_arithmetic_v<P>) {
+  if constexpr (std::is_arithmetic_v<P>)
     *block = p;
+  else
+    pack_data<Dim, P::rank(), OutRank>(p.raw_data(), block);
+}
+
+/// pack() of a tensor of rank `Rank` given by its storage.
+template <std::size_t Dim, std::size_t Rank, std::size_t OutRank, typename T>
+void pack_data(T const* data, T* block) {
+  if constexpr (Rank == 0) {
+    *block = *data;
   } else {
-    constexpr std::size_t rank{P::rank()};
+    constexpr std::size_t rank{Rank};
     using table_type = detail::mandel_tables<Dim, rank, OutRank>;
     constexpr auto const& table{detail::mandel_table<Dim, rank, OutRank>};
     constexpr auto scale{detail::sqrt2_powers<T, table.n>()};
-    T const* const data{p.raw_data()};
     if constexpr (table.rows * table.cols <= detail::unroll_limit) {
       [&]<std::size_t... q>(std::index_sequence<q...>) {
         ((block[q] = (scale[table.weight_count[q]] / T(table_type::copies)) *
@@ -226,13 +240,21 @@ void pack(P const& p, T* block) {
 /// The inverse of pack(): a minor-symmetric tensor (or a scalar) from its column-major Mandel block.
 template <std::size_t Dim, std::size_t OutRank, typename P, typename T>
 void unpack(T const* block, P& p) {
-  if constexpr (std::is_arithmetic_v<P>) {
+  if constexpr (std::is_arithmetic_v<P>)
     p = *block;
+  else
+    unpack_data<Dim, P::rank(), OutRank>(block, p.raw_data());
+}
+
+/// unpack() into the storage of a tensor of rank `Rank`.
+template <std::size_t Dim, std::size_t Rank, std::size_t OutRank, typename T>
+void unpack_data(T const* block, T* data) {
+  if constexpr (Rank == 0) {
+    *data = *block;
   } else {
-    constexpr std::size_t rank{P::rank()};
+    constexpr std::size_t rank{Rank};
     constexpr auto const& table{detail::mandel_table<Dim, rank, OutRank>};
     constexpr auto scale{detail::sqrt2_powers<T, table.n>()};
-    T* const data{p.raw_data()};
     if constexpr (table.size <= detail::unroll_limit) {
       [&]<std::size_t... flat>(std::index_sequence<flat...>) {
         ((data[flat] = block[table.position[flat]] / scale[table.count[flat]]), ...);
@@ -242,6 +264,45 @@ void unpack(T const* block, P& p) {
         data[flat] = block[table.position[flat]] / scale[table.count[flat]];
     }
   }
+}
+
+namespace detail {
+/// f.template operator()<OutRank, InRank>() for node ranks 0, 2, 4 known at run time.
+template <typename F>
+void with_ranks(std::size_t out_rank, std::size_t in_rank, F&& f) {
+  auto const in{[&]<std::size_t A>() {
+    switch (in_rank) {
+    case 0: f.template operator()<A, 0>(); return;
+    case 2: f.template operator()<A, 2>(); return;
+    case 4: f.template operator()<A, 4>(); return;
+    default: throw std::logic_error("derivatives: no node value has rank " + std::to_string(in_rank));
+    }
+  }};
+  switch (out_rank) {
+  case 0: in.template operator()<0>(); return;
+  case 2: in.template operator()<2>(); return;
+  case 4: in.template operator()<4>(); return;
+  default: throw std::logic_error("derivatives: no node value has rank " + std::to_string(out_rank));
+  }
+}
+} // namespace detail
+
+/// pack() of d out / d in (ranks known at run time) given in full notation: the boundary to an LU solve.
+template <std::size_t Dim, typename T>
+void pack_full(std::size_t out_rank, std::size_t in_rank, T const* data, T* block) {
+  detail::with_ranks(out_rank, in_rank, [&]<std::size_t A, std::size_t B>() { pack_data<Dim, A + B, A>(data, block); });
+}
+
+/// unpack() of d out / d in into full notation.
+template <std::size_t Dim, typename T>
+void unpack_full(std::size_t out_rank, std::size_t in_rank, T const* block, T* data) {
+  detail::with_ranks(out_rank, in_rank, [&]<std::size_t A, std::size_t B>() { unpack_data<Dim, A + B, A>(block, data); });
+}
+
+/// Entries of a value of rank `rank` in full notation.
+template <std::size_t Dim>
+constexpr std::size_t full_size(std::size_t rank) {
+  return detail::power(Dim, rank);
 }
 
 /// The value of `source` as V: a property's value or a history property's new value.
@@ -321,12 +382,17 @@ enum reader : std::uint8_t { derivative_reader = 1, jacobian_reader = 2, every_r
 template <typename T>
 class partial_block : public read_probe<T> {
 public:
-  partial_block(std::size_t rows, std::size_t cols) noexcept : m_rows(rows), m_cols(cols) {}
+  partial_block(std::size_t out_rank, std::size_t in_rank, std::size_t rows, std::size_t cols) noexcept
+      : m_out_rank(out_rank), m_in_rank(in_rank), m_rows(rows), m_cols(cols) {}
   partial_block(partial_block const&) = delete;
   partial_block& operator=(partial_block const&) = delete;
 
+  std::size_t out_rank() const noexcept { return m_out_rank; }
+  std::size_t in_rank() const noexcept { return m_in_rank; }
   std::size_t rows() const noexcept { return m_rows; }
   std::size_t cols() const noexcept { return m_cols; }
+  /// The partial as its tmech value: the plans read it here.
+  virtual void const* object() const noexcept = 0;
   std::size_t width() const noexcept override { return m_cols; }
   /// The partial as a rows() x cols() column-major Mandel block.
   virtual void pack(T* block) const = 0;
@@ -340,7 +406,7 @@ public:
   void add_readers(std::uint8_t readers) noexcept { m_readers |= readers; }
 
 private:
-  std::size_t m_rows, m_cols;
+  std::size_t m_out_rank, m_in_rank, m_rows, m_cols;
   std::uint8_t m_readers{0};
 };
 
@@ -352,11 +418,14 @@ public:
   static constexpr std::size_t out_rank{rank_of<output_value>()};
 
   explicit typed_partial(Out const& output)
-      : partial_block<T>{derivatives::width<Dim>(out_rank), derivatives::width<Dim>(rank_of<read_value>())}, m_output(output) {}
+      : partial_block<T>{out_rank, rank_of<read_value>(), derivatives::width<Dim>(out_rank), derivatives::width<Dim>(rank_of<read_value>())},
+        m_output(output) {}
 
   partial_t<output_value, read_value, T, Dim> value{};
 
   void pack(T* block) const override { derivatives::pack<Dim, out_rank>(value, block); }
+
+  void const* object() const noexcept override { return &value; }
 
   T const* scalar() const noexcept override {
     if constexpr (std::is_same_v<decltype(value), T>)
@@ -381,39 +450,43 @@ private:
   typed_read<T, Dim, read_value> m_read;
 };
 
-/// A requested derivative as the host reads it, unpacked from its accumulated block.
+/// A value of a plan, d node / d seed, held as its tmech type; a requested derivative is the host's view of one.
 template <typename T>
-class derivative_slot_base {
+class value_holder {
 public:
-  virtual ~derivative_slot_base() = default;
-  virtual void unpack(T const* block) = 0;
+  virtual ~value_holder() = default;
+  /// The tmech value, for the kernels.
+  virtual void* object() noexcept = 0;
+  /// Its storage in full notation, for the Mandel boundary of an LU.
+  virtual T* data() noexcept = 0;
+  virtual void zero() noexcept = 0;
 };
 
-template <typename T, std::size_t Dim, typename R>
-class derivative_slot final : public derivative_slot_base<T> {
+template <typename T, typename V>
+class typed_value final : public value_holder<T> {
 public:
-  explicit derivative_slot(std::size_t out_rank) : m_out_rank(out_rank) {}
+  V value{};
 
-  R value{};
-
-  void unpack(T const* block) override {
-    switch (m_out_rank) {
-    case 0: derivatives::unpack<Dim, 0>(block, value); break;
-    case 2:
-      if constexpr (rank_of<R>() >= 2)
-        derivatives::unpack<Dim, 2>(block, value);
-      break;
-    case 4:
-      if constexpr (rank_of<R>() >= 4)
-        derivatives::unpack<Dim, 4>(block, value);
-      break;
-    default: break;
-    }
+  typed_value() noexcept { zero(); }
+  void* object() noexcept override { return &value; }
+  T* data() noexcept override {
+    if constexpr (std::is_arithmetic_v<V>)
+      return &value;
+    else
+      return value.raw_data();
   }
-
-private:
-  std::size_t m_out_rank;
+  void zero() noexcept override {
+    if constexpr (std::is_arithmetic_v<V>)
+      value = T{0};
+    else
+      value.fill(T{0});
+  }
 };
+
+template <typename T>
+using derivative_slot_base = value_holder<T>;
+template <typename T, std::size_t, typename R>
+using derivative_slot = typed_value<T, R>;
 
 } // namespace numsim::materials::derivatives
 

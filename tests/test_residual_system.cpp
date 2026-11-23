@@ -461,6 +461,58 @@ private:
   int m_runs{0}, m_u_fills{0}, m_load_fills{0};
 };
 
+/// r = u^3 + u - load::state and y = 2u from one callback, values only; fill() counts the partials it writes.
+class row_beside_output final : public nm::material_base<row_beside_output, policy> {
+public:
+  using base = nm::material_base<row_beside_output, policy>;
+
+  template <typename... Args>
+  explicit row_beside_output(Args &&...args)
+      : base(std::forward<Args>(args)...), m_y(base::add_output<T>("y")), m_r(base::add_output<T>("r")),
+        m_u(base::add_input<T>("solver", "x")), m_load(base::add_input<T>("load", "state")) {
+    base::add_callback(&row_beside_output::compute, m_y, m_r)
+        .reads(m_u, m_load)
+        .partials(m_r, m_u, m_load)
+        .partials(m_y, m_u, m_load)
+        .fills_partials(&row_beside_output::fill);
+    m_dr_du = base::partial_of(m_r, m_u);
+    m_dr_dload = base::partial_of(m_r, m_load);
+    m_dy_du = base::partial_of(m_y, m_u);
+    m_dy_dload = base::partial_of(m_y, m_load);
+  }
+
+  static input_parameter_controller parameters() { return input_parameter_controller{base::parameters()}; }
+
+  void compute() {
+    T const u{m_u.get()};
+    m_r = u * u * u + u - m_load.get();
+    m_y = 2 * u;
+  }
+
+  void fill() {
+    if (m_dr_du.wanted())
+      m_dr_du.value() = 3 * m_u.get() * m_u.get() + 1;
+    if (m_dr_dload.wanted())
+      m_dr_dload.value() = T{-1};
+    if (m_dy_du.wanted()) {
+      m_dy_du.value() = T{2};
+      ++m_y_fills;
+    }
+    if (m_dy_dload.wanted())
+      m_dy_dload.value() = T{0};
+  }
+
+  int y_fills() const noexcept { return m_y_fills; }
+
+private:
+  T &m_y;
+  T &m_r;
+  nm::input_property<T, nm::property_traits> const &m_u;
+  nm::input_property<T, nm::property_traits> const &m_load;
+  base::partial_handle<T, T> m_dr_du, m_dr_dload, m_dy_du, m_dy_dload;
+  int m_y_fills{0};
+};
+
 /// A residual system "solver" over `unknowns` and `equations`.
 system_type &make_system(ctx_type &ctx, std::vector<nm::system_unknown> unknowns, std::vector<nm::system_equation> equations,
                          std::string const &method = "newton", int max_iter = 50, T tolerance = 1e-10,
@@ -1131,6 +1183,22 @@ TEST(ResidualSystem, NewtonFillsOnlyTheJacobianPartialsOnRequest) {
   EXPECT_GT(f.u_fills(), 0);
   EXPECT_EQ(f.u_fills(), f.runs() - 1) << "one fill per Newton step, none at the converged pass";
   EXPECT_EQ(f.load_fills() + g.load_fills(), 0) << "no derivative reads d r / d load";
+}
+
+TEST(ResidualSystemScalar, NewtonFillsNoPartialOfAnOutputBesideTheResidual) {
+  row_rig<row_beside_output> rig{"newton", 50, 1e-12, 0};
+  auto &row{*dynamic_cast<row_beside_output *>(rig.ctx.find("f"))};
+  rig.load->bind(0, 2);
+  rig.ctx.update();
+  EXPECT_NEAR(rig.x(), 1, 1e-12);
+  EXPECT_EQ(row.y_fills(), 0) << "y is no residual: the Jacobian does not read d y / d x";
+
+  auto const &dy{rig.ctx.derivative<T>("f", "y", "load", "state")};
+  rig.load->bind(2, 10);
+  rig.ctx.update();
+  EXPECT_NEAR(rig.x(), 2, 1e-12);
+  EXPECT_NEAR(dy, 2.0 / 13, 1e-12) << "d y / d load = 2 dx/dload";
+  EXPECT_EQ(row.y_fills(), 2) << "for the derivative only: at the request and once per update";
 }
 
 TEST(ResidualSystemTangent, TwoCoupledSystemsMatchCentralDifferences) {
