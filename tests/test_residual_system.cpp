@@ -378,6 +378,30 @@ private:
   nm::input_property<T, nm::property_traits> const &m_x;
 };
 
+/// r = -1 at x = 0 for the unknown x of "solver"; any other x throws, as a perturbed run of newton_fd does.
+class fragile_row final : public nm::material_base<fragile_row, policy> {
+public:
+  using base = nm::material_base<fragile_row, policy>;
+
+  template <typename... Args>
+  explicit fragile_row(Args &&...args)
+      : base(std::forward<Args>(args)...), m_r(base::add_output<T>("r")), m_x(base::add_input<T>("solver", "x")) {
+    base::add_callback(&fragile_row::compute, m_r).reads(m_x);
+  }
+
+  static input_parameter_controller parameters() { return input_parameter_controller{base::parameters()}; }
+
+  void compute() {
+    if (m_x.get() != 0)
+      throw nm::cutback_error("fragile_row: x moved");
+    m_r = T{-1};
+  }
+
+private:
+  T &m_r;
+  nm::input_property<T, nm::property_traits> const &m_x;
+};
+
 /// r = y^3 + y - solver::x for the unknown y of "second": a system reading the unknown of another.
 class chain_row final : public nm::material_base<chain_row, policy> {
 public:
@@ -1127,6 +1151,28 @@ struct row_rig {
 
   T x() { return ctx.get<T>("solver", "x"); }
 };
+
+TEST(ResidualSystemScalar, ASingularNewtonStepThrowsACutbackAndLeavesTheUnknownFinite) {
+  row_rig<square_row> newton{"newton", 50, 1e-12, 0};
+  newton.load->bind(1, 1); // J = 2x = 0 at the seed
+  auto const message{thrown<nm::cutback_error>([&] { newton.ctx.update(); })};
+  EXPECT_TRUE(message.contains("singular")) << message;
+  EXPECT_EQ(newton.x(), 0);
+
+  param_type row;
+  row.insert<T>("value", 1);
+  row_rig<poison_row> fd{"newton_fd", 50, 1e-12, 0, row}; // R = 1 whatever x: the difference quotient is 0
+  auto const fd_message{thrown<nm::cutback_error>([&] { fd.ctx.update(); })};
+  EXPECT_TRUE(fd_message.contains("singular")) << fd_message;
+  EXPECT_EQ(fd.x(), 0) << "not x + h";
+}
+
+TEST(ResidualSystemScalar, NewtonFdRestoresTheUnknownWhenThePerturbedRunThrows) {
+  row_rig<fragile_row> rig{"newton_fd", 50, 1e-12, 0};
+  auto const message{thrown<nm::cutback_error>([&] { rig.ctx.update(); })};
+  EXPECT_TRUE(message.contains("x moved")) << message;
+  EXPECT_EQ(rig.x(), 0) << "back at the iterate, not x + h";
+}
 
 TEST(ResidualSystemReview, TheIterationsAreReportedWhenTheSolveThrows) {
   auto const ref{vector_newton_on(system_mode::nonlinear, 3, 5)};
