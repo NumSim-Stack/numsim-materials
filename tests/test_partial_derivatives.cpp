@@ -137,7 +137,8 @@ struct wrong_map { // declares A4 for B4 : x
   static tensor4 partial(tensor2 const &) { return A4; }
 };
 
-/// y = Law::value(x) for x read from "x_source"; "partials" is "declared" (the default), "independent" or "none".
+/// y = Law::value(x) for x read from "x_source"; "partials" is "declared" (the default), "independent", "on_request"
+/// (fill() fills it), "fill_only" (fill() without partials()) or "none".
 template <typename Law, typename Traits>
 class law_node final : public nm::material_base<law_node<Law, Traits>, Traits> {
 public:
@@ -152,10 +153,12 @@ public:
         m_mode(base::template get_parameter<std::string>("partials")) {
     auto handle{base::add_callback(&law_node::compute, m_y)};
     handle.reads(m_x);
-    if (m_mode == "declared")
+    if (m_mode == "declared" || m_mode == "on_request")
       handle.partials(m_y, m_x);
     else if (m_mode == "independent")
       handle.independent_of(m_x);
+    if (m_mode == "on_request" || m_mode == "fill_only")
+      handle.fills_partials(&law_node::fill);
   }
 
   static input_parameter_controller parameters() {
@@ -173,6 +176,14 @@ public:
       hook();
     m_y = Law::value(m_x.get());
     if (base::want_partials()) {
+      base::partial(m_y, m_x) = Law::partial(m_x.get());
+      ++m_fills;
+    }
+  }
+
+  /// "on_request": the partial, at the value compute() left.
+  void fill() {
+    if (base::want_partial(m_y, m_x)) {
       base::partial(m_y, m_x) = Law::partial(m_x.get());
       ++m_fills;
     }
@@ -217,6 +228,8 @@ public:
       handle.partials(m_y, m_x).independent_of(m_x);
     else if (mistake == "other_output")
       handle.partials(m_z, m_x);
+    else if (mistake == "handle_undeclared")
+      std::ignore = base::partial_of(m_y, m_x);
   }
 
   static input_parameter_controller parameters() {
@@ -233,6 +246,51 @@ private:
   tensor2 &m_z;
   nm::input_property<tensor2, nm::property_traits> const &m_x;
   nm::input_property<T, nm::property_traits> const &m_w;
+};
+
+/// y = x + w I with partials on request through handles; counts the blocks each fill wrote.
+template <typename Traits>
+class two_reads final : public nm::material_base<two_reads<Traits>, Traits> {
+public:
+  using base = nm::material_base<two_reads<Traits>, Traits>;
+  using input_parameter_controller = typename base::input_parameter_controller;
+
+  template <typename... Args>
+  explicit two_reads(Args &&...args)
+      : base(std::forward<Args>(args)...), m_y(base::template add_output<tensor2>("y")),
+        m_x(base::template add_input<tensor2>("strain", "strain", nm::EdgeKind::Global)),
+        m_w(base::template add_input<T>("temperature", "state", nm::EdgeKind::Global)) {
+    base::add_callback(&two_reads::compute, m_y).reads(m_x, m_w).partials(m_y, m_x, m_w).fills_partials(&two_reads::fill);
+    m_dy_dx = base::partial_of(m_y, m_x);
+    m_dy_dw = base::partial_of(m_y, m_w);
+  }
+
+  static input_parameter_controller parameters() { return base::parameters(); }
+
+  void compute() { m_y = m_x.get() + m_w.get() * I; }
+
+  void fill() {
+    if (m_dy_dx.wanted()) {
+      m_dy_dx.value() = Is;
+      ++m_x_fills;
+    }
+    if (m_dy_dw.wanted()) {
+      m_dy_dw.value() = I;
+      ++m_w_fills;
+    }
+  }
+
+  int x_fills() const noexcept { return m_x_fills; }
+  int w_fills() const noexcept { return m_w_fills; }
+
+private:
+  tensor2 &m_y;
+  nm::input_property<tensor2, nm::property_traits> const &m_x;
+  nm::input_property<T, nm::property_traits> const &m_w;
+  typename base::template partial_handle<tensor2, tensor2> m_dy_dx;
+  typename base::template partial_handle<tensor2, T> m_dy_dw;
+  int m_x_fills{0};
+  int m_w_fills{0};
 };
 
 /// y = a::y + b::y, both read and differentiated.
@@ -495,7 +553,7 @@ TEST(PartialDerivatives, TheResultTypeMustMatchTheRanks) {
 }
 
 TEST(PartialDerivatives, PartialsAreDeclaredForReadsAndOutputsOfTheCallback) {
-  for (auto const *mistake : {"unread", "twice", "both", "other_output", "before_reads"}) {
+  for (auto const *mistake : {"unread", "twice", "both", "other_output", "before_reads", "handle_undeclared"}) {
     chain c;
     param_type p;
     p.insert<std::string>("name", "m");
@@ -655,6 +713,104 @@ TEST(PartialDerivatives, NoPartialsAreComputedWithoutARequest) {
   EXPECT_EQ(a.fills(), 3);
   EXPECT_EQ(b.fills(), 3);
   EXPECT_EQ(q.fills(), 0) << "q is off the requested path";
+}
+
+// --- partials filled on request (callback_handle::fills_partials()) ---
+
+TEST(PartialDerivatives, PartialsOnRequestAreFilledOncePerUpdateOfARequestedDerivative) {
+  chain c;
+  auto &a{c.node<map_a>("a", "strain::strain", "on_request")};
+  auto &b{c.node<map_b>("b", "a::y", "on_request")};
+  auto &q{c.node<map_b>("q", "strain::strain", "on_request")};
+  c.ctx.finalize();
+  for (int i{0}; i < 3; ++i)
+    c.load(x0, s0);
+  EXPECT_EQ(a.fills() + b.fills() + q.fills(), 0) << "update() alone fills nothing";
+
+  auto const &d{c.ctx.derivative<tensor4>("b", "y", "strain", "strain")};
+  EXPECT_EQ(a.fills(), 1) << "filled at once at the held state";
+  EXPECT_EQ(b.fills(), 1);
+  EXPECT_LT(distance(d, tensor4{tmech::dcontract(B4, A4)}), 1e-12);
+  for (int i{0}; i < 2; ++i)
+    c.load(x0, s0);
+  EXPECT_EQ(a.fills(), 3);
+  EXPECT_EQ(b.fills(), 3);
+  EXPECT_EQ(q.fills(), 0) << "q is off the requested path";
+  EXPECT_EQ(a.runs(), 5) << "the values are not recomputed for the partials";
+}
+
+TEST(PartialDerivatives, PartialsOnRequestFollowTheState) {
+  chain c;
+  c.node<norm_trace>("n", "strain::strain", "on_request");
+  c.node<square>("s", "n::y", "on_request");
+  c.ctx.finalize();
+  auto const &d{c.ctx.derivative<tensor2>("s", "y", "strain", "strain")};
+  for (T const k : {T{1}, T{-2}}) {
+    tensor2 const x{k * x0};
+    c.load(x, s0);
+    EXPECT_LT(distance(d, tensor2{2 * norm_trace::value(x) * norm_trace::partial(x)}), 1e-12) << k;
+  }
+}
+
+TEST(PartialDerivatives, AConstantCallbackFillsItsPartialsOnRequestOnce) {
+  chain c;
+  param_type p;
+  p.insert<std::string>("name", "c");
+  p.insert<T>("value", s0);
+  c.ctx.create<nm::constant_scalar<policy>>(p);
+  auto &s{c.node<square>("s", "c::value", "on_request")};
+  c.ctx.finalize();
+  auto const &d{c.ctx.derivative<T>("s", "y", "c", "value")};
+  for (int i{0}; i < 3; ++i)
+    c.load(x0, s0);
+  EXPECT_NEAR(d, 2 * s0, 1e-12);
+  EXPECT_EQ(s.fills(), 1) << "it did not run again, so its partials stand";
+}
+
+TEST(PartialDerivatives, TheFiniteDifferenceCheckFillsPartialsOnRequest) {
+  chain c;
+  c.node<map_a>("a", "strain::strain", "on_request");
+  c.node<wrong_map>("w", "strain::strain", "on_request");
+  c.ctx.finalize();
+  c.load(x0, s0);
+  EXPECT_TRUE(nm::check_partials(c.ctx, "a").empty());
+  auto const mismatches{nm::check_partials(c.ctx, "w")};
+  ASSERT_FALSE(mismatches.empty());
+  EXPECT_TRUE(mismatches.front().contains("w::y")) << mismatches.front();
+}
+
+TEST(PartialDerivatives, AHandleFillsOnlyTheBlockOfARequestedDerivative) {
+  chain c;
+  param_type p;
+  p.insert<std::string>("name", "t");
+  auto &t{c.ctx.create<two_reads<policy>>(p)};
+  c.ctx.finalize();
+  auto const &dw{c.ctx.derivative<tensor2>("t", "y", "temperature", "state")};
+  for (int i{0}; i < 3; ++i)
+    c.load(x0, s0);
+  EXPECT_LT(distance(dw, I), 1e-12);
+  EXPECT_EQ(t.w_fills(), 3) << "once per update";
+  EXPECT_EQ(t.x_fills(), 0) << "no plan reads d y / d strain";
+
+  auto const &dx{c.ctx.derivative<tensor4>("t", "y", "strain", "strain")};
+  c.load(x0, s0);
+  EXPECT_LT(distance(dx, Is), 1e-12);
+  EXPECT_EQ(t.x_fills(), 2);
+}
+
+TEST(PartialDerivatives, TheCheckFillsEveryBlockThroughHandles) {
+  chain c;
+  param_type p;
+  p.insert<std::string>("name", "t");
+  c.ctx.create<two_reads<policy>>(p);
+  c.ctx.finalize();
+  c.load(x0, s0);
+  EXPECT_TRUE(nm::check_partials(c.ctx, "t").empty());
+}
+
+TEST(PartialDerivatives, FillsPartialsWithoutDeclaredPartialsThrows) {
+  chain c;
+  EXPECT_THROW(c.node<map_a>("a", "strain::strain", "fill_only"), std::logic_error);
 }
 
 // --- the per-node finite-difference check ---

@@ -82,6 +82,8 @@ std::vector<std::string> check_partials(material_context<Traits>& ctx, std::stri
         mat->request_all_partials(false);
       }};
       run();
+      if (auto* fill{mat->fill_of(callback)})
+        mat->fill_partials(*fill, derivatives::every_reader);
     }
     auto of_callback{partials | std::views::filter([callback](auto const& q) { return q.callback == callback; })};
     // packed before any perturbed rerun overwrites them
