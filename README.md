@@ -260,7 +260,8 @@ build-bench/benchmark/numsim_materials_benchmark --benchmark_repetitions=5 --ben
 
 `material_point` updates one context per iteration (shipped J2, J2 as a residual system with and without a
 thermal eigenstrain, the stress as a separate node; elastic and plastic). `step_kernel`, `seed_kernel` and
-`scalar_fold` time the chain-rule kernels of a derivative plan per rank combination. Built with `-O3 -march=native`.
+`scalar_fold` time the chain-rule kernels of a derivative plan per rank combination. Built with `-O3 -march=native`,
+so the binary runs only on CPUs with the instruction set of the build machine. CI only compiles the suite.
 
 ## Structure
 
