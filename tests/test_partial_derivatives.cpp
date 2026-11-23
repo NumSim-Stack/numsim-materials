@@ -1079,6 +1079,7 @@ TEST(PartialDerivatives, PackAndUnpackRoundTripMinorSymmetricTensors) {
   expect_round_trip<3, 4, 0>();
   expect_round_trip<3, 6, 2>();
   expect_round_trip<3, 6, 4>();
+  expect_round_trip<3, 8, 4>();
   expect_round_trip<2, 2, 0>();
   expect_round_trip<2, 4, 2>();
   expect_round_trip<2, 6, 2>();
