@@ -1211,6 +1211,7 @@ private:
     material_interface_type* material;
     const property_base* callback;
     derivatives::product_kernel<value_type> kernel; ///< fixed to the block's shape
+    derivatives::seed_kernel<value_type> from_seed;  ///< in is a seed: D[out] += P in its columns
   };
   /// A residual system a derivative passes: its unknowns are seeds in `column`..., its residuals the targets from
   /// `first_target` on; fold() replaces their columns by the implicit function theorem.
@@ -1436,7 +1437,8 @@ private:
         if (auto const p{std::ranges::find_if(partials, [&](auto const& q) { return q.output == prop && same_read(q); })};
             p != partials.end()) {
           steps.push_back({0, node.at(src), block_of(*p->block), mat, p->callback,
-                           derivatives::product_kernel_for<value_type, Traits::Dim>(p->block->rows(), p->block->cols())});
+                           derivatives::product_kernel_for<value_type, Traits::Dim>(p->block->rows(), p->block->cols()),
+                           derivatives::seed_kernel_for<value_type, Traits::Dim>(p->block->rows(), p->block->cols())});
           width = static_cast<Eigen::Index>(p->block->rows());
           via.try_emplace(prop, src);
         } else if (!std::ranges::any_of(mat->independent_reads(), [&](auto const& i) { return i.callback == d.callback && same_read(i); })) {
@@ -1458,7 +1460,7 @@ private:
       auto const index{plan.D.size()};
       plan.D.emplace_back(width, columns);
       for (auto const& step : steps) {
-        plan.steps.push_back({index, step.in, step.block, step.material, step.callback, step.kernel});
+        plan.steps.push_back({index, step.in, step.block, step.material, step.callback, step.kernel, step.from_seed});
         if (!std::ranges::contains(plan.blocks, step.block))
           plan.blocks.push_back(step.block);
       }
@@ -1478,8 +1480,14 @@ private:
       if (k < plan.seeds.size())
         plan.D[k].middleCols(plan.seeds[k].first, plan.seeds[k].second).setIdentity();
     }
-    for (auto const& step : plan.steps)
-      step.kernel(m_blocks[step.block].second.data(), plan.D[step.in].data(), plan.D[step.out].data(), plan.D[step.out].cols());
+    for (auto const& step : plan.steps) {
+      auto const* P{m_blocks[step.block].second.data()};
+      auto& out{plan.D[step.out]};
+      if (step.in < plan.seeds.size())
+        step.from_seed(P, out.data() + plan.seeds[step.in].first * out.rows());
+      else
+        step.kernel(P, plan.D[step.in].data(), out.data(), out.cols());
+    }
   }
 
   /// Per system passed, at its converged point R(x, p) = 0: dx/dp = -J^-1 B with J = dR/dx and B = dR/dp taken

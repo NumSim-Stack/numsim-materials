@@ -907,7 +907,27 @@ void expect_kernels_match_the_matrix_product() {
         EXPECT_LT((out - expected).cwiseAbs().maxCoeff(), 1e-12) << rows << " x " << inner << " x " << cols;
       }
 }
+
+template <std::size_t Dim>
+void expect_seed_kernels_add_the_block() {
+  using matrix = Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>;
+  constexpr std::size_t W{nm::derivatives::pair_width<Dim>};
+  for (std::size_t const rows : {std::size_t{1}, W, W * W})
+    for (std::size_t const cols : {std::size_t{1}, W, W * W}) {
+      matrix const P{matrix::Random(static_cast<Eigen::Index>(rows), static_cast<Eigen::Index>(cols))};
+      matrix out{matrix::Random(static_cast<Eigen::Index>(rows), static_cast<Eigen::Index>(cols))};
+      matrix const expected{out + P};
+      nm::derivatives::seed_kernel_for<T, Dim>(rows, cols)(P.data(), out.data());
+      EXPECT_EQ(out, expected) << rows << " x " << cols;
+    }
+}
 } // namespace
+
+TEST(PartialDerivatives, TheSeedKernelsAddTheBlock) {
+  expect_seed_kernels_add_the_block<2>();
+  expect_seed_kernels_add_the_block<3>();
+  EXPECT_THROW((void)(nm::derivatives::seed_kernel_for<T, 3>(6, 4)), std::logic_error);
+}
 
 TEST(PartialDerivatives, TheFixedSizeProductKernelsMatchTheMatrixProduct) {
   expect_kernels_match_the_matrix_product<2>();
