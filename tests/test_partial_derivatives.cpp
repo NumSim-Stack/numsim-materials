@@ -1117,6 +1117,13 @@ TEST(PartialDerivatives, TheScalarFoldScalesThroughTmech) {
   EXPECT_LT(distance(out, tensor4{-0.5 * A4}), 1e-12);
 }
 
+TEST(PartialDerivatives, TheLuBoundaryPacksOnlySystemRowsOfRankTwoAtMost) {
+  std::vector<T> full(6561), block(36 * 36);
+  EXPECT_NO_THROW(nm::derivatives::pack_full<3>(2, 4, full.data(), block.data()));
+  EXPECT_THROW(nm::derivatives::pack_full<3>(4, 4, full.data(), block.data()), std::logic_error);
+  EXPECT_THROW(nm::derivatives::unpack_full<3>(4, 2, block.data(), full.data()), std::logic_error);
+}
+
 TEST(PartialDerivatives, ARankOfNoNodeValueHasNoKernel) {
   EXPECT_THROW((void)(nm::derivatives::step_kernel_for<T, 3>(1, 2, 2, false)), std::logic_error);
   EXPECT_THROW((void)(nm::derivatives::step_kernel_for<T, 3>(2, 6, 2, false)), std::logic_error);

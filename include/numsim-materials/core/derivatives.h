@@ -267,7 +267,7 @@ void unpack_data(T const* block, T* data) {
 }
 
 namespace detail {
-/// f.template operator()<OutRank, InRank>() for node ranks 0, 2, 4 known at run time.
+/// f.template operator()<OutRank, InRank>() for a system row of rank 0 or 2 and a column of rank 0, 2 or 4.
 template <typename F>
 void with_ranks(std::size_t out_rank, std::size_t in_rank, F&& f) {
   auto const in{[&]<std::size_t A>() {
@@ -281,8 +281,7 @@ void with_ranks(std::size_t out_rank, std::size_t in_rank, F&& f) {
   switch (out_rank) {
   case 0: in.template operator()<0>(); return;
   case 2: in.template operator()<2>(); return;
-  case 4: in.template operator()<4>(); return;
-  default: throw std::logic_error("derivatives: no node value has rank " + std::to_string(out_rank));
+  default: throw std::logic_error("derivatives: a system row has rank 0 or 2, not " + std::to_string(out_rank));
   }
 }
 } // namespace detail
