@@ -5,12 +5,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <numbers>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
 #include <utility>
+#include <vector>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/history_property.h"
 #include "numsim-materials/core/input_types.h"
@@ -399,6 +401,8 @@ public:
   virtual void pack_output(T* value) const = 0;
   /// The value of a scalar by scalar partial, else null.
   virtual T const* scalar() const noexcept { return nullptr; }
+  /// |P - sym(P)| / |P| over every index pair: plans use partials as written, so they must be minor-symmetric.
+  virtual T asymmetry() const = 0;
 
   /// The readers (reader bits) of the block.
   std::uint8_t readers() const noexcept { return m_readers; }
@@ -425,6 +429,19 @@ public:
   void pack(T* block) const override { derivatives::pack<Dim, out_rank>(value, block); }
 
   void const* object() const noexcept override { return &value; }
+
+  T asymmetry() const override {
+    if constexpr (std::is_arithmetic_v<decltype(value)>) {
+      return T{0};
+    } else {
+      std::vector<T> block(this->rows() * this->cols());
+      pack(block.data());
+      auto symmetric{std::make_unique<std::remove_cvref_t<decltype(value)>>()};
+      derivatives::unpack<Dim, out_rank>(block.data(), *symmetric);
+      T const size{tmech::norm(value)};
+      return size > T{0} ? tmech::norm(value - *symmetric) / size : T{0};
+    }
+  }
 
   T const* scalar() const noexcept override {
     if constexpr (std::is_same_v<decltype(value), T>)
@@ -458,7 +475,8 @@ public:
   virtual void* object() noexcept = 0;
   /// Its storage in full notation, for the Mandel boundary of an LU.
   virtual T* data() noexcept = 0;
-  virtual void zero() noexcept = 0;
+  virtual void fill(T v) noexcept = 0;
+  void zero() noexcept { fill(T{0}); }
 };
 
 template <typename T, typename V>
@@ -466,7 +484,7 @@ class typed_value final : public value_holder<T> {
 public:
   V value{};
 
-  typed_value() noexcept { zero(); }
+  typed_value() noexcept { this->zero(); }
   void* object() noexcept override { return &value; }
   T* data() noexcept override {
     if constexpr (std::is_arithmetic_v<V>)
@@ -474,11 +492,11 @@ public:
     else
       return value.raw_data();
   }
-  void zero() noexcept override {
+  void fill(T v) noexcept override {
     if constexpr (std::is_arithmetic_v<V>)
-      value = T{0};
+      value = v;
     else
-      value.fill(T{0});
+      value.fill(v);
   }
 };
 

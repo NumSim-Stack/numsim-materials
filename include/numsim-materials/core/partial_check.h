@@ -95,6 +95,12 @@ std::vector<std::string> check_partials(material_context<Traits>& ctx, std::stri
       std::vector<T> plus(block.rows()), minus(block.rows());
       auto* source{source_of(p)};
       auto const read{key_of(source)};
+      if (T const asymmetry{block.asymmetry()}; asymmetry > tolerance) {
+        mismatches.push_back(std::format("'{}::{}' wrt '{}': the partial is not minor-symmetric (relative distance {:g} to "
+                                         "its symmetric part)",
+                                         material, p.output->traits().id.name, read, asymmetry));
+        continue;
+      }
       T scale{0};
       for (auto const a : analytic)
         scale = std::max(scale, std::abs(a));

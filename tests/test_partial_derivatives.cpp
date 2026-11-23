@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <pthread.h>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -32,6 +33,7 @@ using T = policy::value_type;
 using tensor2 = tmech::tensor<T, 3, 2>;
 using tensor4 = tmech::tensor<T, 3, 4>;
 using tensor6 = tmech::tensor<T, 3, 6>;
+using tensor8 = tmech::tensor<T, 3, 8>;
 using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
 
@@ -135,6 +137,20 @@ struct wrong_map { // declares A4 for B4 : x
   using out = tensor2;
   static tensor2 value(tensor2 const &x) { return tmech::dcontract(B4, x); }
   static tensor4 partial(tensor2 const &) { return A4; }
+};
+
+tensor2 const N2{0.9, 0.3, -0.2, 0.1, 1.2, 0.4, -0.5, 0.2, 0.8}; // not symmetric
+struct congruence { // tensor2 of tensor2: y = N x N^T, partial N_ik N_jl, symmetric in neither index pair
+  using in = tensor2;
+  using out = tensor2;
+  static tensor2 value(tensor2 const &x) { return tensor2{N2 * x * tmech::trans(N2)}; }
+  static tensor4 partial(tensor2 const &) { return tensor4{tmech::otimesu(N2, N2)}; }
+};
+struct map_y { // tensor4 of tensor4: z = A : Y
+  using in = tensor4;
+  using out = tensor4;
+  static tensor4 value(tensor4 const &Y) { return tmech::dcontract(A4, Y); }
+  static tensor8 partial(tensor4 const &) { return tmech::outer_product<tmech::sequence<1, 2, 5, 6>, tmech::sequence<3, 4, 7, 8>>(A4, Is); }
 };
 
 /// y = Law::value(x) for x read from "x_source"; "partials" is "declared" (the default), "independent", "on_request"
@@ -856,6 +872,30 @@ TEST(PartialDerivatives, TheFiniteDifferenceCheckNamesAWrongPartial) {
   EXPECT_LT(distance(c.ctx.get<tensor2>("w", "y"), wrong_map::value(x0)), 1e-15) << "the check restores the state";
 }
 
+TEST(PartialDerivatives, APartialWithoutMinorSymmetryFailsTheFiniteDifferenceCheck) {
+  chain c;
+  c.node<congruence>("n", "strain::strain");
+  c.ctx.finalize();
+  c.load(x0, s0);
+  auto const mismatches{nm::check_partials(c.ctx, "n")};
+  ASSERT_FALSE(mismatches.empty()) << "a Mandel comparison projects the partial onto its symmetric part";
+  EXPECT_TRUE(mismatches.front().contains("minor-symmetric")) << mismatches.front();
+}
+
+TEST(PartialDerivatives, TensorOfFourthOrderTensorOfFourthOrderTensor) {
+  chain c;
+  c.node<dyad>("y", "strain::strain");
+  c.node<map_y>("z", "y::y");
+  c.node<contract_e>("w", "z::y");
+  c.ctx.finalize();
+  EXPECT_TRUE(nm::check_partials(c.ctx, "z").empty());
+  auto const &dw{c.ctx.derivative<tensor6>("w", "y", "y", "y")};
+  auto const &dz{c.ctx.derivative<tensor8>("z", "y", "y", "y")};
+  c.load(x0, s0);
+  EXPECT_LT(distance(dw, tensor6{tmech::otimes(A4, E2)}), 1e-12) << "w = A : Y : E through a tensor4 seed";
+  EXPECT_LT(distance(dz, map_y::partial(tensor4{})), 1e-12);
+}
+
 // --- thermal eigenstrain with linear elasticity: the first DDSDDT ---
 
 constexpr T K{100}, G{40}, alpha{1e-5}, T_ref{20};
@@ -1077,14 +1117,15 @@ void expect_kernels_match_the_row_major_product() {
           Eigen::Map<matrix const> const p{P->data(), rows, inner}, d{in->data(), inner, cols};
           Eigen::Map<matrix> o{out->data(), rows, cols};
           matrix const expected{assign ? matrix{p * d} : matrix{o + p * d}};
-          nm::derivatives::step_kernel_for<T, Dim>(a, b, s, assign)(P->object(), in->object(), out->object());
+          auto scratch{nm::derivatives::make_value<T, Dim>(a + s)};
+          nm::derivatives::step_kernel_for<T, Dim>(a, b, s, assign)(P->object(), in->object(), out->object(), scratch->object());
           EXPECT_LT((o - expected).cwiseAbs().maxCoeff(), 1e-12) << a << " " << b << " " << s << " " << assign;
           if (b != s)
             continue;
           auto seeded{random(a + s)};
           Eigen::Map<matrix> q{seeded->data(), rows, cols};
           matrix const added{assign ? matrix{p} : matrix{q + p}};
-          nm::derivatives::seed_kernel_for<T, Dim>(a, s, assign)(P->object(), nullptr, seeded->object());
+          nm::derivatives::seed_kernel_for<T, Dim>(a, s, assign)(P->object(), nullptr, seeded->object(), nullptr);
           EXPECT_EQ(q, added) << a << " " << s << " " << assign;
         }
 }
@@ -1098,17 +1139,52 @@ TEST(PartialDerivatives, TheTmechKernelsAreTheRowMajorProduct) {
 TEST(PartialDerivatives, TheSeedIdentityMapsASymmetricValueToItself) {
   tensor4 I2;
   nm::derivatives::identity<T, 3>(2, &I2);
-  tensor2 const S2{0.5 * (B2 + tmech::trans(B2))};
-  EXPECT_LT(distance(tensor2{tmech::dcontract(I2, S2)}, S2), 1e-12);
-  tmech::tensor<T, 3, 8> I4;
+  tensor2 const S2{0.5 * (N2 + tmech::trans(N2))};
+  EXPECT_LT(distance(tensor2{tmech::dcontract(I2, N2)}, S2), 1e-12) << "projects onto the symmetric part";
+  EXPECT_LT(distance(tensor2{tmech::dcontract(N2, I2)}, S2), 1e-12);
+  tensor8 I4;
   nm::derivatives::identity<T, 3>(4, &I4);
-  tensor4 S4{A4};
-  S4 = 0.25 * (A4 + tmech::basis_change<tmech::sequence<2, 1, 3, 4>>(A4) + tmech::basis_change<tmech::sequence<1, 2, 4, 3>>(A4) +
-               tmech::basis_change<tmech::sequence<2, 1, 4, 3>>(A4));
-  EXPECT_LT(distance(tensor4{tmech::ddcontract(I4, S4)}, S4), 1e-12);
+  tensor4 X;
+  X.randn();
+  tensor4 const S4{0.25 * (X + tmech::basis_change<tmech::sequence<2, 1, 3, 4>>(X) + tmech::basis_change<tmech::sequence<1, 2, 4, 3>>(X) +
+                           tmech::basis_change<tmech::sequence<2, 1, 4, 3>>(X))};
+  EXPECT_LT(distance(tensor4{tmech::ddcontract(I4, X)}, S4), 1e-12) << "projects onto the minor-symmetric part";
+  EXPECT_LT(distance(tensor4{tmech::ddcontract(X, I4)}, S4), 1e-12);
   T one{};
   nm::derivatives::identity<T, 3>(0, &one);
   EXPECT_EQ(one, 1.0);
+}
+
+#if defined(__SANITIZE_ADDRESS__)
+#define NM_TEST_ASAN 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define NM_TEST_ASAN 1
+#endif
+#endif
+
+TEST(PartialDerivatives, AnAccumulatingRankEightProductFitsASmallThreadStack) {
+#if !defined(__OPTIMIZE__) || defined(NM_TEST_ASAN)
+  GTEST_SKIP() << "unoptimised or ASan builds keep tmech's contraction temporaries in the frame";
+#endif
+  auto P{nm::derivatives::make_value<T, 3>(8)}, in{nm::derivatives::make_value<T, 3>(8)}, out{nm::derivatives::make_value<T, 3>(8)},
+      scratch{nm::derivatives::make_value<T, 3>(8)};
+  struct job {
+    void const *P, *in;
+    void *out, *scratch;
+  } j{P->object(), in->object(), out->object(), scratch->object()};
+  pthread_attr_t attr;
+  pthread_attr_init(&attr);
+  pthread_attr_setstacksize(&attr, 128 * 1024); // small thread stacks, as HPX's
+  pthread_t thread;
+  void *(*const run)(void *){[](void *p) -> void * {
+    auto const &k{*static_cast<job *>(p)};
+    nm::derivatives::step_kernel_for<T, 3>(4, 4, 4, false)(k.P, k.in, k.out, k.scratch);
+    return nullptr;
+  }};
+  ASSERT_EQ(pthread_create(&thread, &attr, run, &j), 0);
+  pthread_join(thread, nullptr);
+  pthread_attr_destroy(&attr);
 }
 
 TEST(PartialDerivatives, TheScalarFoldScalesThroughTmech) {

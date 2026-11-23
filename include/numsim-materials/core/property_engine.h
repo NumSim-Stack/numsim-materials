@@ -278,6 +278,8 @@ public:
       throw std::logic_error(std::format("{} has rank {}, the requested type rank {}", what(), *target_rank + *seed_rank,
                                          derivatives::rank_of<R>()));
     auto plan{plan_derivative(target, seed, *seed_rank, what())};
+    if (auto const n{plan.target_nodes.front()}; n && plan.ranks[*n] != *target_rank)
+      throw std::logic_error(std::format("{}: the plan's target has rank {}, the property {}", what(), plan.ranks[*n], *target_rank));
     auto slot{std::make_unique<slot_type>()};
     compile(plan, slot.get());
     auto& value{slot->value};
@@ -1241,6 +1243,7 @@ private:
     void const* P;
     void const* in;
     void* out;
+    void* scratch{nullptr};
   };
   using value_holder = derivatives::value_holder<value_type>;
   /// A residual system a derivative passes: its unknowns are the seeds from `first_seed` on, its residuals the
@@ -1265,6 +1268,7 @@ private:
     std::vector<std::size_t> ranks;          ///< per node
     std::vector<std::vector<value_holder*>> D; ///< null: zero
     std::vector<std::unique_ptr<value_holder>> values;
+    std::array<std::unique_ptr<value_holder>, 5> scratch; ///< per rank / 2, shared by the ops
     std::vector<derivative_step> steps; ///< in topological order of their outputs
     std::vector<derivative_op> ops;     ///< the steps per seed; the first into a D assigns it
     std::vector<value_holder*> zeroed; ///< D written by folds only
@@ -1296,8 +1300,14 @@ private:
 
   /// D from the partials, folded through the systems it passes; the target's D is the slot's value.
   void finish(derivative_plan& plan) {
-    accumulate(plan);
-    fold(plan);
+    try {
+      accumulate(plan);
+      fold(plan);
+    } catch (...) {
+      if (plan.slot) // no half-folded derivative
+        plan.slot->fill(std::numeric_limits<value_type>::quiet_NaN());
+      throw;
+    }
   }
 
   /// Reruns the callbacks of a new plan at the values held, or fills their partials when they fill them on request,
@@ -1518,7 +1528,16 @@ private:
   void compile(derivative_plan& plan, value_holder* target) {
     auto const seeds{plan.seed_ranks.size()};
     auto const nodes{plan.ranks.size()};
+    check_ranks(plan);
     plan.D.assign(nodes, std::vector<value_holder*>(seeds, nullptr));
+    auto const scratch{[&](std::size_t a, std::size_t b, std::size_t s, bool assign) -> void* {
+      if (!derivatives::needs_scratch(a, b, s, assign))
+        return nullptr;
+      auto& value{plan.scratch[(a + s) / 2]};
+      if (!value)
+        value = derivatives::make_value<value_type, Traits::Dim>(a + s);
+      return value->object();
+    }};
     auto const target_node{target ? plan.target_nodes.front() : std::nullopt};
     auto const buffer{[&](std::size_t k, std::size_t j) {
       if (!plan.D[k][j]) {
@@ -1546,7 +1565,7 @@ private:
           plan.ops.push_back({derivatives::seed_kernel_for<value_type, Traits::Dim>(a, s, assign), step.block->object(), nullptr, out->object()});
         else
           plan.ops.push_back({derivatives::step_kernel_for<value_type, Traits::Dim>(a, plan.ranks[step.in], s, assign), step.block->object(),
-                              plan.D[step.in][j]->object(), out->object()});
+                              plan.D[step.in][j]->object(), out->object(), scratch(a, plan.ranks[step.in], s, assign)});
       }
     auto const identity{[&](std::size_t j) {
       if (!plan.D[j][j])
@@ -1577,11 +1596,33 @@ private:
           if (!dx)
             continue;
           f.ops.push_back({derivatives::step_kernel_for<value_type, Traits::Dim>(plan.ranks[k], s.ranks[u], plan.seed_ranks[0], false),
-                           dx->object(), f.dx[u]->object(), zeroed(k)->object()});
+                           dx->object(), f.dx[u]->object(), zeroed(k)->object(), scratch(plan.ranks[k], s.ranks[u], plan.seed_ranks[0], false)});
         }
     }
     if (target_node == 0) // the seed itself: its identity, written into the target
       identity(0);
+  }
+
+  /// The ranks the kernels cast the values to: each partial's against its nodes, each system's against its seeds.
+  static void check_ranks(derivative_plan const& plan) {
+    auto const mismatch{[](std::string const& what, std::size_t has, std::size_t plan_rank) {
+      return std::logic_error(std::format("derivative plan: {} has rank {}, its node rank {}", what, has, plan_rank));
+    }};
+    for (auto const& step : plan.steps) {
+      if (step.block->out_rank() != plan.ranks[step.out])
+        throw mismatch("the output of a partial", step.block->out_rank(), plan.ranks[step.out]);
+      if (step.block->in_rank() != plan.ranks[step.in])
+        throw mismatch("the read of a partial", step.block->in_rank(), plan.ranks[step.in]);
+    }
+    for (auto const& f : plan.folds) {
+      auto const& s{*f.system};
+      for (std::size_t u{0}; u < s.unknowns.size(); ++u)
+        if (s.ranks[u] != plan.seed_ranks[f.first_seed + u])
+          throw mismatch("an unknown", s.ranks[u], plan.seed_ranks[f.first_seed + u]);
+      for (std::size_t i{0}; i < s.residuals.size(); ++i)
+        if (auto const n{plan.target_nodes[f.first_target + i]}; n && s.residual_ranks[i] != plan.ranks[*n])
+          throw mismatch("a residual", s.residual_ranks[i], plan.ranks[*n]);
+    }
   }
 
   /// The ops of a plan, after zeroing the D only folds write.
@@ -1589,7 +1630,7 @@ private:
     for (auto* d : plan.zeroed)
       d->zero();
     for (auto const& op : plan.ops)
-      op.kernel(op.P, op.in, op.out);
+      op.kernel(op.P, op.in, op.out, op.scratch);
   }
 
   /// Per system passed, at its converged point R(x, p) = 0: dx/dp = -J^-1 B with J = dR/dx and B = dR/dp, then
@@ -1631,7 +1672,7 @@ private:
         }
       }
       for (auto const& op : f.ops)
-        op.kernel(op.P, op.in, op.out);
+        op.kernel(op.P, op.in, op.out, op.scratch);
     }
   }
 

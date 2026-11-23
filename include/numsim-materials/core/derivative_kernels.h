@@ -20,12 +20,15 @@ template <typename T, std::size_t Dim, std::size_t Rank>
 using value_t = typename partial_value<T, Dim, Rank>::type;
 
 /// out = P * in (assigning) or out += P * in, the values given by address: P of rank a + b, in of rank b + s,
-/// out of rank a + s.
+/// out of rank a + s; `scratch`, of rank a + s, for an accumulated contraction.
 template <typename T>
-using step_kernel = void (*)(void const* P, void const* in, void* out) noexcept;
+using step_kernel = void (*)(void const* P, void const* in, void* out, void* scratch) noexcept;
+
+/// Whether a step needs a scratch value: tmech's contraction carries temporaries that `o += ` would copy onto the stack.
+constexpr bool needs_scratch(std::size_t a, std::size_t b, std::size_t s, bool assign) noexcept { return !assign && b != 0 && a + s != 0; }
 
 template <typename T, std::size_t Dim, std::size_t A, std::size_t B, std::size_t S, bool Assign>
-void tensor_step(void const* P, void const* in, void* out) noexcept {
+void tensor_step(void const* P, void const* in, void* out, [[maybe_unused]] void* scratch) noexcept {
   auto const& p{*static_cast<value_t<T, Dim, A + B> const*>(P)};
   auto const& d{*static_cast<value_t<T, Dim, B + S> const*>(in)};
   auto& o{*static_cast<value_t<T, Dim, A + S>*>(out)};
@@ -39,15 +42,20 @@ void tensor_step(void const* P, void const* in, void* out) noexcept {
     else
       return tmech::ddcontract(p, d);
   }};
-  if constexpr (Assign)
+  if constexpr (Assign) {
     o = product();
-  else
+  } else if constexpr (needs_scratch(A, B, S, Assign)) {
+    auto& t{*static_cast<value_t<T, Dim, A + S>*>(scratch)};
+    t = product();
+    o += t;
+  } else {
     o += product();
+  }
 }
 
 /// From a seed, whose d seed / d seed is the identity: out = P or out += P.
 template <typename T, std::size_t Dim, std::size_t Rank, bool Assign>
-void seed_step(void const* P, void const*, void* out) noexcept {
+void seed_step(void const* P, void const*, void* out, void*) noexcept {
   auto const& p{*static_cast<value_t<T, Dim, Rank> const*>(P)};
   auto& o{*static_cast<value_t<T, Dim, Rank>*>(out)};
   if constexpr (Assign)

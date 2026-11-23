@@ -181,17 +181,24 @@ private:
 };
 
 /// R_g = g + tr(B) - a - tr(eps),  R_B = B - g P, with eps from strain::strain: strain_coupled_system of
-/// test_vector_newton with the strain as a seed instead of a member.
-class strain_rows final : public nm::material_base<strain_rows, policy> {
+/// test_vector_newton with the strain as a seed instead of a member. With a scalar Seed, tr(eps) is load::state.
+template <typename Policy, typename Seed = tmech::tensor<T, Policy::Dim, 2>>
+class strain_rows_t final : public nm::material_base<strain_rows_t<Policy, Seed>, Policy> {
 public:
-  using base = nm::material_base<strain_rows, policy>;
+  using base = nm::material_base<strain_rows_t<Policy, Seed>, Policy>;
+  using input_parameter_controller = typename base::input_parameter_controller;
+  static constexpr auto D = base::Dim;
+  using t2 = tmech::tensor<T, D, 2>;
+  using t4 = tmech::tensor<T, D, 4>;
+  static constexpr bool scalar_seed{std::is_same_v<Seed, T>};
 
   template <typename... Args>
-  explicit strain_rows(Args &&...args)
-      : base(std::forward<Args>(args)...), m_rg(base::add_output<T>("rg")), m_rB(base::add_output<tensor2>("rB")),
-        m_a(base::get_parameter<T>("a")), m_g(base::add_input<T>("solver", "g")), m_B(base::add_input<tensor2>("solver", "B")),
-        m_eps(base::add_input<tensor2>("strain", "strain")) {
-    base::add_callback(&strain_rows::compute, m_rg, m_rB)
+  explicit strain_rows_t(Args &&...args)
+      : base(std::forward<Args>(args)...), m_rg(base::template add_output<T>("rg")), m_rB(base::template add_output<t2>("rB")),
+        m_a(base::template get_parameter<T>("a")), m_g(base::template add_input<T>("solver", "g")),
+        m_B(base::template add_input<t2>("solver", "B")),
+        m_eps(scalar_seed ? base::template add_input<Seed>("load", "state") : base::template add_input<Seed>("strain", "strain")) {
+    base::add_callback(&strain_rows_t::compute, m_rg, m_rB)
         .reads(m_g, m_B, m_eps)
         .partials(m_rg, m_g, m_B, m_eps)
         .partials(m_rB, m_g, m_B, m_eps);
@@ -203,30 +210,48 @@ public:
     return para;
   }
 
-  static tensor2 P() { return tensor2{0.5, 0.2, 0.1, 0.2, 0.7, 0.3, 0.1, 0.3, 0.9}; }
+  static t2 P() {
+    if constexpr (D == 2)
+      return t2{0.5, 0.2, 0.2, 0.7};
+    else
+      return t2{0.5, 0.2, 0.1, 0.2, 0.7, 0.3, 0.1, 0.3, 0.9};
+  }
 
   void compute() {
-    auto const I{tmech::eye<T, 3, 2>()};
-    m_rg = m_g.get() + tmech::trace(m_B.get()) - m_a - tmech::trace(m_eps.get());
+    auto const I{tmech::eye<T, D, 2>()};
+    m_rg = m_g.get() + tmech::trace(m_B.get()) - m_a - trace_of(m_eps.get());
     m_rB = m_B.get() - m_g.get() * P();
     if (!base::want_partials())
       return;
     base::partial(m_rg, m_g) = T{1};
-    base::partial(m_rg, m_B) = tensor2{I};
-    base::partial(m_rg, m_eps) = tensor2{-I};
-    base::partial(m_rB, m_g) = tensor2{-P()};
-    base::partial(m_rB, m_B) = nm::sym_identity<T, 3>();
-    base::partial(m_rB, m_eps) = tensor4{};
+    base::partial(m_rg, m_B) = t2{I};
+    base::partial(m_rB, m_g) = t2{-P()};
+    base::partial(m_rB, m_B) = nm::sym_identity<T, D>();
+    if constexpr (scalar_seed) {
+      base::partial(m_rg, m_eps) = T{-1};
+      base::partial(m_rB, m_eps) = t2{};
+    } else {
+      base::partial(m_rg, m_eps) = t2{-I};
+      base::partial(m_rB, m_eps) = t4{};
+    }
   }
 
 private:
+  static T trace_of(Seed const &eps) {
+    if constexpr (scalar_seed)
+      return eps;
+    else
+      return tmech::trace(eps);
+  }
+
   T &m_rg;
-  tensor2 &m_rB;
+  t2 &m_rB;
   T const &m_a;
   nm::input_property<T, nm::property_traits> const &m_g;
-  nm::input_property<tensor2, nm::property_traits> const &m_B;
-  nm::input_property<tensor2, nm::property_traits> const &m_eps;
+  nm::input_property<t2, nm::property_traits> const &m_B;
+  nm::input_property<Seed, nm::property_traits> const &m_eps;
 };
+using strain_rows = strain_rows_t<policy>;
 
 /// r = x^3 + x - load::state for the unknown x of "solver"; with "picard", r = x - cos(load + x) / 2.
 class cubic_row final : public nm::material_base<cubic_row, policy> {
@@ -826,6 +851,64 @@ TEST(ResidualSystemTangent, MatchesTheAnalyticStrainDerivative) {
   ASSERT_GT(std::abs(dB_ref(0, 0, 1, 1) - dB_ref(1, 1, 0, 0)), 1e-3);
 }
 
+/// dg/deps and dB/deps through a scalar and a tensor unknown, by the context in Policy's dimension, twice at the
+/// same seed; a scalar Seed is load::state (the strain source is 3D only).
+template <typename Policy, typename Seed>
+void strain_tangent_case() {
+  constexpr auto D{Policy::Dim};
+  constexpr bool scalar_seed{std::is_same_v<Seed, T>};
+  using t2 = tmech::tensor<T, D, 2>;
+  using dB_type = std::conditional_t<scalar_seed, t2, tmech::tensor<T, D, 4>>;
+  using rows = strain_rows_t<Policy, Seed>;
+  std::string const source{scalar_seed ? "load" : "strain"}, read{scalar_seed ? "state" : "strain"};
+  nm::material_context<Policy> ctx;
+  param_type p;
+  p.insert<std::string>("name", source);
+  if constexpr (scalar_seed)
+    ctx.template create<nm::external_scalar_source<Policy>>(p);
+  else
+    ctx.template create<nm::external_strain_source<Policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "solver");
+  p.insert<std::vector<nm::system_unknown>>("unknowns", {{"g", nm::unknown_kind::scalar}, {"B", nm::unknown_kind::sym_tensor}});
+  p.insert<std::vector<nm::system_equation>>("equations", {{"sys::rg", "g"}, {"sys::rB", "B"}});
+  ctx.template create<nm::residual_system<Policy>>(p);
+  p.clear();
+  p.insert<std::string>("name", "sys");
+  ctx.template create<rows>(p);
+  ctx.finalize();
+  auto const &dg{ctx.template derivative<Seed>("solver", "g", source, read)};
+  auto const &dB{ctx.template derivative<dB_type>("solver", "B", source, read)};
+  if constexpr (scalar_seed) {
+    dynamic_cast<nm::external_scalar_source<Policy> *>(ctx.find(source))->bind(T{0}, T{0.3});
+  } else {
+    t2 eps;
+    eps.randn();
+    dynamic_cast<nm::external_strain_source<Policy> *>(ctx.find(source))->bind(t2{}, t2{0.01 * (eps + tmech::trans(eps))});
+  }
+  ctx.update();
+  T const denom{1 + tmech::trace(rows::P())};
+  auto const I{tmech::eye<T, D, 2>()};
+  if constexpr (scalar_seed) {
+    EXPECT_NEAR(dg, 1 / denom, 1e-12);
+    EXPECT_TRUE(tmech::almost_equal(dB, t2{rows::P() / denom}, 1e-12));
+  } else {
+    EXPECT_TRUE(tmech::almost_equal(dg, t2{I / denom}, 1e-12));
+    EXPECT_TRUE(tmech::almost_equal(dB, dB_type{tmech::otimes(rows::P(), I) / denom}, 1e-12));
+  }
+  Seed const dg_first{dg};
+  dB_type const dB_first{dB};
+  ctx.update();
+  if constexpr (scalar_seed)
+    EXPECT_EQ(dg, dg_first) << "no stale accumulation across updates";
+  else
+    EXPECT_EQ(tmech::norm(Seed{dg - dg_first}), 0) << "no stale accumulation across updates";
+  EXPECT_EQ(tmech::norm(dB_type{dB - dB_first}), 0);
+}
+
+TEST(ResidualSystemTangent, ATensorUnknownFoldsIn3D) { strain_tangent_case<policy, tensor2>(); }
+TEST(ResidualSystemTangent, ATensorUnknownFoldsIn2D) { strain_tangent_case<nm::material_policy_2d, T>(); }
+
 TEST(ResidualSystemTangent, AMemberReadOutsideGetsTheTotalDerivative) {
   strain_rig rig;
   auto const &drg{rig.point->derivative<tensor2>("sys::rg", "strain")};
@@ -1233,10 +1316,11 @@ TEST(ResidualSystemTangent, TwoCoupledSystemsMatchCentralDifferences) {
 
 TEST(ResidualSystemTangent, ASingularJacobianAtTheConvergedPointThrowsACutbackNamingTheSystem) {
   row_rig<square_row> rig{"newton", 50, 1e-10, 0};
-  rig.ctx.derivative<T>("solver", "x", "load", "state");
+  auto const &dx{rig.ctx.derivative<T>("solver", "x", "load", "state")};
   rig.load->bind(0, 0); // x = 0 is a double root, and the seed already solves it
   auto const message{thrown<nm::cutback_error>([&] { rig.ctx.update(); })};
   EXPECT_TRUE(message.contains("'solver'")) << message;
+  EXPECT_TRUE(std::isnan(dx)) << "no half-folded derivative";
 }
 
 TEST(ResidualSystemTangent, ASeedThatIsAMemberOutputOfAPassedSystemThrows) {
