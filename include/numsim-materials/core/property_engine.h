@@ -866,7 +866,7 @@ private:
                                         it == 1 ? "" : "s", std::abs(R)));
       auto dx{R};
       if (d.method == system_method::newton) {
-        dx = R / (s.dr_dx ? *s.dr_dx : (jacobian(s), s.J(0, 0)));
+        dx = R / (s.dr_dx ? (fill_jacobian(s), *s.dr_dx) : (jacobian(s), s.J(0, 0)));
       } else if (d.method == system_method::newton_fd) {
         auto const h{std::sqrt(std::numeric_limits<value_type>::epsilon()) * (x != 0 ? std::abs(x) : value_type{1})};
         auto const xh{x + h};
@@ -886,8 +886,15 @@ private:
     }
   }
 
+  /// The members filling their partials on request fill J's blocks at the x they last ran at.
+  void fill_jacobian(system_stage& s) {
+    for (auto& [mat, fill] : s.jacobian->fills)
+      mat->fill_partials(*fill, derivatives::jacobian_reader);
+  }
+
   /// J = dR/dx from the partials the members filled at x.
   void jacobian(system_stage& s) {
+    fill_jacobian(s);
     auto& plan{*s.jacobian};
     for (auto const b : plan.blocks)
       m_blocks[b].first->pack(m_blocks[b].second.data());
@@ -1320,7 +1327,7 @@ private:
   }
 
   /// Per system, its structural zero blocks (no path from the unknown to the residual) and, for newton, the plan
-  /// of J = dR/dx; the members fill their partials on every pass.
+  /// of J = dR/dx; members with a fill (fills_partials()) fill only J's blocks, before a Newton step.
   void plan_systems() {
     for (auto& owned : m_systems) {
       auto& s{*owned};
@@ -1343,7 +1350,9 @@ private:
       s.jacobian = plan_columns(std::vector<const property_base*>(s.residuals.begin(), s.residuals.end()), seeds, up, describe(s) + ": its Jacobian");
       for (auto const& step : s.jacobian->steps) {
         step.material->request_partials(step.callback, true);
-        step.material->request_partial(m_blocks[step.block].first);
+        step.material->request_partial(m_blocks[step.block].first, derivatives::jacobian_reader);
+        if (auto* fill{step.material->fill_of(step.callback)}; fill && !std::ranges::contains(s.jacobian->fills, fill, &fill_ref::second))
+          s.jacobian->fills.emplace_back(step.material, fill);
       }
       auto const& steps{s.jacobian->steps};
       if (s.scalar && steps.size() == 1 && steps.front().in == 0 && s.jacobian->target_nodes.front() == steps.front().out)
