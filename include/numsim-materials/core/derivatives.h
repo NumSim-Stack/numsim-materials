@@ -386,9 +386,10 @@ public:
   }
 };
 
-/// A distinct address per type: identifies a type-erased block without a dynamic_cast.
+/// A distinct address per type: identifies a type-erased block without a dynamic_cast. Writable, so no linker
+/// folds the tags of different types as identical read-only data.
 template <typename B>
-inline constexpr char type_tag{};
+inline char type_tag{};
 
 /// Who reads a partial block, as bits: a fill writes the blocks of the readers asking.
 enum reader : std::uint8_t { derivative_reader = 1, jacobian_reader = 2, every_reader = 3 };
