@@ -814,6 +814,30 @@ TEST(PartialDerivatives, AHandleFillsOnlyTheBlockOfARequestedDerivative) {
   EXPECT_EQ(t.x_fills(), 2);
 }
 
+TEST(PartialDerivatives, ACallbackThatThrowsLeavesItsPartialsToBeFilledAgain) {
+  chain c;
+  param_type p;
+  p.insert<std::string>("name", "t");
+  auto &t{c.ctx.create<two_reads<policy>>(p)};
+  c.ctx.finalize();
+  (void)c.ctx.derivative<tensor2>("t", "y", "temperature", "state");
+  c.load(x0, s0);
+  ASSERT_EQ(t.w_fills(), 1);
+  auto const *callback{t.partials().front().callback};
+  auto const *fill{t.fill_of(callback)};
+  ASSERT_NE(fill, nullptr);
+  t.fill_partials(*fill);
+  EXPECT_EQ(t.w_fills(), 1) << "filled since the callback last ran";
+  EXPECT_THROW(t.run_callback(callback, [] { throw std::runtime_error("cutback"); }, fill), std::runtime_error);
+  t.fill_partials(*fill);
+  EXPECT_EQ(t.w_fills(), 2) << "a throwing run may have changed what the partials depend on";
+}
+
+TEST(PartialDerivatives, AnUnsetHandleIsNotWanted) {
+  using handle = two_reads<policy>::base::partial_handle<tensor2, T>;
+  EXPECT_FALSE(handle{}.wanted());
+}
+
 TEST(PartialDerivatives, TheCheckFillsEveryBlockThroughHandles) {
   chain c;
   param_type p;

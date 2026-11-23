@@ -405,9 +405,9 @@ public:
       }
     } const guard{*this, std::exchange(m_want_partials, !fill && partials_requested(callback)), std::exchange(m_running, callback),
                   std::exchange(m_want_readers, derivatives::every_reader)};
-    run();
     if (fill)
-      fill->filled = 0;
+      fill->filled = 0; // before run(): a throwing run may have changed what the partials depend on
+    run();
   }
 
   /// Fills the partials `readers` read of the callback of `fill`, unless filled for them since it last ran:
@@ -436,9 +436,9 @@ public:
   class partial_handle {
   public:
     partial_handle() = default;
-    /// As want_partial() for the callback the partial belongs to.
+    /// As want_partial() for the callback the partial belongs to; false for a handle never set.
     bool wanted() const noexcept {
-      return m_owner->m_want_partials && (m_owner->m_all_partials || (m_block->readers() & m_owner->m_want_readers));
+      return m_block && m_owner->m_want_partials && (m_owner->m_all_partials || (m_block->readers() & m_owner->m_want_readers));
     }
     auto& value() noexcept { return *m_value; }
 
