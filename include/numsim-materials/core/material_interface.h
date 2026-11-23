@@ -298,7 +298,6 @@ public:
     void const* read_value;
     void const* type; ///< derivatives::type_tag of the block, checked by partial()
     std::unique_ptr<derivatives::partial_block<value_type>> block;
-    bool requested{false}; ///< a requested derivative reads the block
   };
   const std::vector<partial_declaration>& partials() const noexcept { return m_partials; }
 
@@ -347,10 +346,11 @@ public:
     return std::ranges::contains(m_partials_requested, callback);
   }
 
-  /// Marks the partial held by `block` as read by a requested derivative: want_partial() is true for it.
-  void request_partial(derivatives::partial_block<value_type> const* block) {
+  /// Marks the partial held by `block` as read by `readers` (derivatives::reader bits): want_partial() is true for it
+  /// while a fill for one of them runs.
+  void request_partial(derivatives::partial_block<value_type> const* block, std::uint8_t readers = derivatives::derivative_reader) {
     if (auto const it{std::ranges::find(m_partials, block, [](auto const& p) { return p.block.get(); })}; it != m_partials.end())
-      it->requested = true;
+      it->block->add_readers(readers);
   }
   /// Makes want_partial() true for every partial of the requested callbacks, as the finite-difference check needs.
   void request_all_partials(bool on) noexcept { m_all_partials = on; }
@@ -359,7 +359,7 @@ public:
   struct fill_declaration {
     property_base_type const* callback;
     std::function<void()> fill;
-    mutable bool ran{true}; ///< the callback ran since the last fill
+    mutable std::uint8_t filled{0}; ///< the readers whose blocks hold the state the callback last ran at
   };
   /// The fill of `callback`, null if the callback fills its partials itself. Stable once the material is built.
   fill_declaration const* fill_of(property_base_type const* callback) const noexcept {
@@ -375,33 +375,60 @@ public:
       material_interface& self;
       bool outer;
       property_base_type const* outer_callback;
+      std::uint8_t outer_readers;
       ~restore() {
         self.m_want_partials = outer;
         self.m_running = outer_callback;
+        self.m_want_readers = outer_readers;
       }
-    } const guard{*this, std::exchange(m_want_partials, !fill && partials_requested(callback)), std::exchange(m_running, callback)};
+    } const guard{*this, std::exchange(m_want_partials, !fill && partials_requested(callback)), std::exchange(m_running, callback),
+                  std::exchange(m_want_readers, derivatives::every_reader)};
     run();
     if (fill)
-      fill->ran = true;
+      fill->filled = 0;
   }
 
-  /// Fills the requested partials of the callback of `fill` if it ran since its last fill: want_partials() is true
-  /// and want_partial() true for the requested blocks.
-  void fill_partials(fill_declaration const& fill) {
-    if (!fill.ran)
+  /// Fills the partials `readers` read of the callback of `fill`, unless filled for them since it last ran:
+  /// want_partials() is true and want_partial() true for the blocks of those readers.
+  void fill_partials(fill_declaration const& fill, std::uint8_t readers = derivatives::derivative_reader) {
+    if (!(readers & ~fill.filled))
       return;
     struct restore {
       material_interface& self;
       bool outer;
       property_base_type const* outer_callback;
+      std::uint8_t outer_readers;
       ~restore() {
         self.m_want_partials = outer;
         self.m_running = outer_callback;
+        self.m_want_readers = outer_readers;
       }
-    } const guard{*this, std::exchange(m_want_partials, true), std::exchange(m_running, fill.callback)};
+    } const guard{*this, std::exchange(m_want_partials, true), std::exchange(m_running, fill.callback),
+                  std::exchange(m_want_readers, readers)};
     fill.fill();
-    fill.ran = false;
+    fill.filled |= readers;
   }
+
+  /// A declared partial found once (partial_of()): wanted() and value() search nothing.
+  template <typename Out, typename In>
+  class partial_handle {
+  public:
+    partial_handle() = default;
+    /// As want_partial() for the callback the partial belongs to.
+    bool wanted() const noexcept {
+      return m_owner->m_want_partials && (m_owner->m_all_partials || (m_block->readers() & m_owner->m_want_readers));
+    }
+    auto& value() noexcept { return *m_value; }
+
+  private:
+    friend class material_interface;
+    using value_t = derivatives::partial_t<Out, In, value_type, Traits::Dim>;
+    partial_handle(material_interface const* owner, derivatives::partial_block<value_type> const* block, value_t* value) noexcept
+        : m_owner(owner), m_block(block), m_value(value) {}
+    material_interface const* m_owner{nullptr};
+    derivatives::partial_block<value_type> const* m_block{nullptr};
+    value_t* m_value{nullptr};
+  };
 
 protected:
   /// True while the running callback is to fill its declared partials: a requested derivative passes through it.
@@ -414,7 +441,8 @@ protected:
     if (!m_want_partials)
       return false;
     return std::ranges::any_of(m_partials, [&](auto const& p) {
-      return p.callback == m_running && (p.requested || m_all_partials) && p.output_value == static_cast<void const*>(&output) &&
+      return p.callback == m_running && (m_all_partials || (p.block->readers() & m_want_readers)) &&
+             p.output_value == static_cast<void const*>(&output) &&
              p.read_value == static_cast<void const*>(&read);
     });
   }
@@ -422,13 +450,25 @@ protected:
   /// The partial d output / d read the callback fills, declared by partials(): rank(output) + rank(read).
   template <typename Out, typename In>
   auto& partial(Out const& output, In const& read) {
+    return block_of("partial", output, read).value;
+  }
+
+  /// partial(), found once: a handle for a member, set in the constructor after partials().
+  template <typename Out, typename In>
+  auto partial_of(Out const& output, In const& read) {
+    auto& block{block_of("partial_of", output, read)};
+    return partial_handle<derivatives::value_of_t<Out>, derivatives::value_of_t<In>>{this, &block, &block.value};
+  }
+
+  template <typename Out, typename In>
+  auto& block_of(char const* what, Out const& output, In const& read) {
     using block_type = derivatives::typed_partial<value_type, Traits::Dim, Out, In>;
     auto const it{std::ranges::find_if(m_partials, [&](auto const& p) {
       return p.output_value == static_cast<void const*>(&output) && p.read_value == static_cast<void const*>(&read);
     })};
     if (it == m_partials.end() || it->type != &derivatives::type_tag<block_type>)
-      throw std::logic_error("partial(): material '" + m_name + "' fills a partial its callback did not declare in partials()");
-    return static_cast<block_type*>(it->block.get())->value;
+      throw std::logic_error(std::string{what} + "(): material '" + m_name + "' fills a partial its callback did not declare in partials()");
+    return *static_cast<block_type*>(it->block.get());
   }
 
   /// The callback filling `callback` (after its reads()) fills d output / d read through partial().
@@ -736,6 +776,7 @@ private:
   std::vector<property_base_type const*> m_partials_requested; ///< callbacks filling their partials
   std::vector<fill_declaration> m_fills;
   bool m_want_partials{false};
+  std::uint8_t m_want_readers{derivatives::every_reader}; ///< the readers the running fill writes for
   bool m_all_partials{false};
   property_base_type const* m_running{nullptr}; ///< the callback run_callback() runs
   std::size_t* m_revision{nullptr};

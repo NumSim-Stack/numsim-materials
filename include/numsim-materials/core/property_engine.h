@@ -680,10 +680,10 @@ private:
     auto const& [mat, outputs]{m_checks.at(prop)};
     auto const checks{outputs | std::views::transform([](auto const* d) { return d->take(); }) | std::ranges::to<std::vector>()};
     auto const* fill{mat->fill_of(prop)};
-    auto const ran{fill && fill->ran};
+    auto const filled{fill ? fill->filled : std::uint8_t{0}};
     prop->traits().update();
     if (fill)
-      fill->ran = ran; // the outputs are checked unchanged below, so are the partials
+      fill->filled = filled; // the outputs are checked unchanged below, so are the partials
     for (auto const& [check, d] : std::views::zip(checks, outputs))
       if (auto const verdict{check()}; verdict != detail::verdict::same)
         throw std::logic_error("constant_output(): '" + mat->name() + "::" + d->output->traits().id.name + "' " +
@@ -828,7 +828,7 @@ private:
       for (auto* prop : m_callbacks | std::views::filter(reruns))
         prop->traits().update();
       for (auto& [mat, fill] : plan.fills) {
-        fill->ran = true; // the new plan may read blocks the last fill skipped
+        fill->filled = 0; // the new plan may read blocks the last fill skipped
         mat->fill_partials(*fill);
       }
     });

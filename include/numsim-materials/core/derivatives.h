@@ -314,6 +314,9 @@ public:
 template <typename B>
 inline constexpr char type_tag{};
 
+/// Who reads a partial block, as bits: a fill writes the blocks of the readers asking.
+enum reader : std::uint8_t { derivative_reader = 1, jacobian_reader = 2, every_reader = 3 };
+
 /// One declared partial d output / d read of a callback: the value the callback fills, packed on demand.
 template <typename T>
 class partial_block : public read_probe<T> {
@@ -330,8 +333,13 @@ public:
   /// The output's value, rows() Mandel components.
   virtual void pack_output(T* value) const = 0;
 
+  /// The readers (reader bits) of the block.
+  std::uint8_t readers() const noexcept { return m_readers; }
+  void add_readers(std::uint8_t readers) noexcept { m_readers |= readers; }
+
 private:
   std::size_t m_rows, m_cols;
+  std::uint8_t m_readers{0};
 };
 
 template <typename T, std::size_t Dim, typename Out, typename In>
