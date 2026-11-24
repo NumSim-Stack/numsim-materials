@@ -99,6 +99,28 @@ TEST(ElasticStrain, TheSameEigenstrainTwiceIsRejected) {
   }
 }
 
+TEST(ElasticStrain, AnEntryWithoutMaterialOrPropertyIsRejected) {
+  for (auto const *source : {"thermal::", "::eigenstrain", ""}) {
+    ctx_type ctx;
+    try {
+      nm::umat::make_json_builder<policy>(deck("\"" + std::string{source} + "\""))(ctx, {});
+      ADD_FAILURE() << "'" << source << "' built";
+    } catch (std::invalid_argument const &e) {
+      EXPECT_NE(std::string{e.what()}.find("eigenstrain_sources: '" + std::string{source} + "' is not"), std::string::npos) << e.what();
+    }
+  }
+}
+
+TEST(ParseSource, ABareNameReadsTheDefaultProperty) {
+  auto const bare{nm::parse_source("thermal", "eigenstrain")}, full{nm::parse_source("shrinkage::strain", "eigenstrain")};
+  EXPECT_EQ(bare.material, "thermal");
+  EXPECT_EQ(bare.property, "eigenstrain");
+  EXPECT_EQ(full.material, "shrinkage");
+  EXPECT_EQ(full.property, "strain");
+  for (auto const *source : {"thermal::", "::eigenstrain", "", "::"})
+    EXPECT_THROW(nm::parse_source(source, "eigenstrain"), std::invalid_argument) << source;
+}
+
 // #240 moved the eigenstrain out of linear_elasticity: an old deck must not lose it silently
 TEST(LinearElasticity, TheRemovedEigenstrainSourceIsAnError) {
   ctx_type ctx;
