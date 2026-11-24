@@ -29,7 +29,7 @@ Abaqus or CalculiX.
 | [docs/plasticity.md](docs/plasticity.md) | Using the plasticity materials: parameters, wiring, worked decks |
 | [docs/plasticity-theory.md](docs/plasticity-theory.md) | J2 and Drucker-Prager from kinematics to the consistent tangent |
 | [docs/mean_field.md](docs/mean_field.md) | Composites: phase nodes, tangent homogenisation, strain localisation, the self-consistent and nonlinear fixed points |
-| [docs/finite-strain.md](docs/finite-strain.md) | The Hencky chain (log strain → elastic strain → linear elasticity → push-forward) and what the user must ensure: an isotropic law, stress and tangent from one node |
+| [docs/finite-strain.md](docs/finite-strain.md) | The finite-strain chains: Eulerian Hencky (ln V, push-forward) for isotropic laws, Lagrangian Seth–Hill strains ((C^{m/2} − I)/m, pull-back) for anisotropic ones, and what the user must ensure: stress and tangent from one node |
 
 ## Architecture
 
@@ -52,6 +52,7 @@ material_context (facade)
     once while every read is constant (`set_parameter()` and `get_mutable()` recompute the constants)
   - `.reads()` — the parameters alone; `.reads_all_inputs()` — every input the material has at `finalize()`
   - `.stateful()` — keeps state of its own or acts outside its outputs: runs on every update
+  - `.on_demand(further outputs...)` — filled only while a node reads them; the callback asks `is_read(output)`
   - `.drives(local inputs...)` — reruns their source callbacks (a solver): runs after what those read
   - `.converges(residual, "tolerance", "max_passes")` — a fixed point over local edges, `residual` one of the
     callback's outputs and the other two parameter keys: `update()` reruns the callbacks between the local edge

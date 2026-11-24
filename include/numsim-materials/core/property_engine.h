@@ -104,6 +104,7 @@ public:
     m_stateful.clear();
     for (auto const* mat : interfaces)
       m_stateful.insert(mat->stateful_outputs().begin(), mat->stateful_outputs().end());
+    mark_unread(interfaces);
     collect_history_properties(properties);
     form_groups(interfaces);
     find_constants(interfaces, writers);
@@ -270,6 +271,9 @@ public:
     if (!p)
       throw std::runtime_error("property_engine::get(): property '" +
                                material + "::" + prop_name + "' not found");
+    if (m_unread.contains(p))
+      throw std::logic_error("property_engine::get(): '" + material + "::" + prop_name +
+                             "' is computed on demand and no material reads it");
     if (auto* typed = dynamic_cast<const numsim_core::property<T, property_traits>*>(p))
       return typed->get();
     if (auto* hist = dynamic_cast<const numsim_core::history_property<T, property_traits>*>(p))
@@ -564,6 +568,19 @@ private:
     for (auto const* kinds : {&str_kinds, &str_local})
       for (auto const& [ends, kind] : *kinds)
         m_edges.push_back({m_key_to_prop.at(ends.first), m_key_to_prop.at(ends.second), kind});
+  }
+
+  /// An on-demand output is read when an edge leaves it; a written_by edge leaves the writer, not the output.
+  void mark_unread(const std::vector<material_interface_type*>& interfaces) {
+    m_unread.clear();
+    for (auto* mat : interfaces) {
+      std::vector<const property_base*> unread;
+      for (auto const* output : mat->on_demand_outputs())
+        if (std::ranges::none_of(m_edges, [output](auto const& e) { return e.from == output && e.kind != edge_kind::written_by; }))
+          unread.push_back(output);
+      m_unread.insert(unread.begin(), unread.end());
+      mat->set_unread(std::move(unread));
+    }
   }
 
   /// One cycle among the nodes the sort could not place (each lies on a cycle or behind one), starting at its smallest key.
@@ -1788,6 +1805,7 @@ private:
   std::unordered_map<property_base*, std::vector<property_base*>> m_reverse_edges;  // pointer-based
   std::vector<graph_edge> m_edges;                                               ///< global edges sorted by key, then local ones sorted by key
   mutable std::unordered_map<const property_base*, std::unordered_set<property_base*>> m_upstream; ///< upstream_of() cache
+  std::unordered_set<const property_base*> m_unread;                             ///< on-demand outputs no material reads
   std::unordered_set<const property_base*> m_stateful;                           ///< outputs declared stateful()
   std::vector<property_base*> m_history_properties;
   using declaration = typename material_interface_type::constant_declaration;
