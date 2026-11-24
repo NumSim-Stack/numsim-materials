@@ -18,7 +18,7 @@ F source ─► log_strain ─► elastic_strain ─► linear_stress / linear_e
 
 For fixed K and G, `linear_elasticity` replaces `linear_stress` and the
 `isotropic_tangent`, and the push-forward's `tangent_source` is that
-`linear_elasticity`. A complete JSON deck is in `tests/test_hencky_elasticity.cpp`
+`linear_elasticity`. A complete JSON deck is in `tests/test_hencky_chain.cpp`
 (`deck()`).
 
 ## What the user is responsible for

@@ -99,6 +99,32 @@ TEST(ElasticStrain, TheSameEigenstrainTwiceIsRejected) {
   }
 }
 
+// sigma = C : (eps - eps_th(T) - eps_sh(c)): d sigma / dT = -3 K alpha I and d sigma / dc = -3 K beta I, through both
+// eigenstrains at once
+TEST(ElasticStrain, StressDerivativesWithRespectToBothEigenstrainDriversMatchFiniteDifferences) {
+  ctx_type ctx;
+  std::string text{deck(R"("thermal", "shrinkage")")};
+  text.insert(text.rfind("]}"), R"(,
+    {"type": "linear_elasticity", "name": "elastic", "strain_producer_name": "ee", "K": 100.0, "G": 40.0})");
+  nm::umat::make_json_builder<policy>(text)(ctx, {});
+  auto const &dT{ctx.derivative<tensor2>("elastic", "stress", "temperature", "state")};
+  auto const &dc{ctx.derivative<tensor2>("elastic", "stress", "cure", "state")};
+  T const theta{70}, cure{0.5}, hT{1e-3}, hc{1e-5};
+  load(ctx, theta, cure);
+  tensor2 const analytic_T{dT}, analytic_c{dc};
+  auto const stress_at{[&](T temperature, T c) {
+    load(ctx, temperature, c);
+    return tensor2{ctx.get<tensor2>("elastic", "stress")};
+  }};
+  tensor2 const fd_T{(stress_at(theta + hT, cure) - stress_at(theta - hT, cure)) / (2 * hT)};
+  tensor2 const fd_c{(stress_at(theta, cure + hc) - stress_at(theta, cure - hc)) / (2 * hc)};
+  EXPECT_LT(tmech::norm(tensor2{analytic_T - fd_T}), 1e-8 * tmech::norm(fd_T));
+  EXPECT_LT(tmech::norm(tensor2{analytic_c - fd_c}), 1e-8 * tmech::norm(fd_c));
+  auto const I{tmech::eye<T, 3, 2>()};
+  EXPECT_LT(tmech::norm(tensor2{analytic_T + 3 * 100.0 * alpha * I}), 1e-12) << "-3 K alpha I";
+  EXPECT_LT(tmech::norm(tensor2{analytic_c + 3 * 100.0 * beta * I}), 1e-12) << "-3 K beta I";
+}
+
 TEST(ElasticStrain, AnEntryWithoutMaterialOrPropertyIsRejected) {
   for (auto const *source : {"thermal::", "::eigenstrain", ""}) {
     ctx_type ctx;
