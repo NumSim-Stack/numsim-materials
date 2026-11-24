@@ -31,6 +31,8 @@ public:
         m_T(base::template add_input_history<value_type>(
             connection_source{base::template get_parameter<std::string>("temperature_source"), "state"}, EdgeKind::Global)) {
     base::add_callback(&thermal_eigenstrain::compute, m_eigenstrain).reads(m_alpha, m_T).partials(m_eigenstrain, m_alpha, m_T);
+    m_deig_dalpha = base::partial_of(m_eigenstrain, m_alpha);
+    m_deig_dT = base::partial_of(m_eigenstrain, m_T);
   }
 
   static input_parameter_controller parameters() {
@@ -43,10 +45,10 @@ public:
 
   void compute() {
     m_eigenstrain = m_alpha.get() * (m_T.new_value() - m_T_ref) * tmech::eye<value_type, Dim, 2>();
-    if (base::want_partials()) {
-      base::partial(m_eigenstrain, m_alpha) = (m_T.new_value() - m_T_ref) * tmech::eye<value_type, Dim, 2>();
-      base::partial(m_eigenstrain, m_T) = m_alpha.get() * tmech::eye<value_type, Dim, 2>();
-    }
+    if (m_deig_dalpha.wanted())
+      m_deig_dalpha.value() = (m_T.new_value() - m_T_ref) * tmech::eye<value_type, Dim, 2>();
+    if (m_deig_dT.wanted())
+      m_deig_dT.value() = m_alpha.get() * tmech::eye<value_type, Dim, 2>();
   }
 
 private:
@@ -55,6 +57,7 @@ private:
   input_property<value_type, property_traits> const &m_alpha;
   value_type const &m_T_ref;
   input_history<value_type, property_traits> const &m_T;
+  typename base::template partial_handle<tensor2, value_type> m_deig_dalpha, m_deig_dT;
 };
 
 } // namespace numsim::materials

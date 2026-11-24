@@ -15,6 +15,7 @@
 #include "numsim-materials/driver/material_point.h"
 #include "numsim-materials/materials/constant_scalar.h"
 #include "numsim-materials/postprocessing/property_recorder.h"
+#include "numsim-materials/solvers/system.h"
 
 namespace {
 
@@ -105,7 +106,8 @@ public:
     if (base::template get_parameter<bool>("stateful"))
       handle.stateful();
     auto const &tolerance{base::template get_parameter<std::string>("tolerance_key")};
-    handle.converges(m_residual, tolerance, "max_passes");
+    if (base::template get_parameter<bool>("converges"))
+      handle.converges(m_residual, tolerance, "max_passes");
     if (base::template get_parameter<bool>("twice"))
       handle.converges(m_check, tolerance, "max_passes");
   }
@@ -118,6 +120,7 @@ public:
     nm::optional<int>(para, "max_passes", 100);
     nm::optional<bool>(para, "stateful", false);
     nm::optional<bool>(para, "twice", false);
+    nm::optional<bool>(para, "converges", true);
     nm::optional<std::string>(para, "tolerance_key", std::string{"tolerance"});
     return para;
   }
@@ -636,6 +639,37 @@ TEST(IterationGroups, InvalidSettingsThrowAtFinalize) {
   relax.insert<int>("max_passes", 0);
   auto ctx{build(relax, false, false)};
   EXPECT_NE(thrown<std::invalid_argument>([&] { ctx->finalize(); }).find("relax::residual"), std::string::npos);
+}
+
+// converges() is shorthand for a picard system without unknowns (#218)
+TEST(IterationGroups, APicardSystemWithoutUnknownsIsTheGroup) {
+  auto const with_system{[](int max_iter) {
+    param_type relax;
+    relax.insert<bool>("converges", false);
+    auto ctx{build(relax, false, false)};
+    param_type p;
+    p.insert<std::string>("name", "fix");
+    p.insert<std::string>("method", "picard");
+    p.insert<std::vector<nm::system_equation>>("equations", {{"relax::residual", ""}});
+    p.insert<T>("tolerance", 1e-8);
+    p.insert<int>("max_iter", max_iter);
+    ctx->create<nm::residual_system<policy>>(p);
+    ctx->finalize();
+    return ctx;
+  }};
+  auto ctx{with_system(99)};
+  auto reference{build()};
+  for (int n{1}; n <= 3; ++n) {
+    ctx->update();
+    reference->update();
+    EXPECT_EQ(ctx->get<T>("relax", "x"), reference->get<T>("relax", "x"));
+    EXPECT_EQ(ctx->get<T>("probe", "calls"), n);
+    if (n == 1) {
+      EXPECT_GT(dynamic_cast<nm::residual_system<policy> &>(*ctx->find("fix")).iterations(), 10) << "the passes of the first update";
+    }
+  }
+  auto short_of_it{with_system(2)};
+  EXPECT_NE(thrown<nm::cutback_error>([&] { short_of_it->update(); }).find("'fix'"), std::string::npos);
 }
 
 TEST(IterationGroups, ConvergesNamesAnOutputOfItsCallback) {

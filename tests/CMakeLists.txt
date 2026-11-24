@@ -138,6 +138,10 @@ add_numsim_test(test_voigt_composite test_voigt_composite.cpp)
 add_numsim_test(test_hencky_elasticity test_hencky_elasticity.cpp)
 add_numsim_test(test_material_point test_material_point.cpp)
 add_numsim_test(test_iteration_groups test_iteration_groups.cpp)
+add_numsim_test(test_residual_system test_residual_system.cpp)
+add_numsim_test(test_system_plasticity test_system_plasticity.cpp)
+# Two sources: the counting operator new must not be batched with other tests.
+add_numsim_test(test_system_allocations test_system_allocations.cpp counting_new.cpp)
 
 # One executable per batch: shared templates are instantiated and compiled once per batch, not once per file.
 list(LENGTH _numsim_batched_sources _nbatched)
