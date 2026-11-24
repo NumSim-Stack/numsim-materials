@@ -125,8 +125,9 @@ file.
 Small-strain materials are valid for large rotation with small strain. Finite
 strain is available for C++ hosts (FFT homogenisation, for one): an
 `external_deformation_gradient_source` publishes F at t_n and t_{n+1}
-(`deformation_gradient`) together with `inverse` (F^-1) and `determinant`
-(det F) of the new F, so models share them instead of each inverting F; the
+(`deformation_gradient`); a `deformation_gradient_kinematics` reading it
+produces `inverse` (F^-1) and `determinant` (det F) of the new F, so models
+share them instead of each inverting F; the
 hyperelastic models `saint_venant_kirchhoff` and `neo_hooke` publish the first
 Piola-Kirchhoff stress as `stress` and dP/dF as `tangent`, and
 `material_point_evaluator` evaluates them through
@@ -147,7 +148,8 @@ The types registered by `register_default_materials<policy>()`.
 `_spheroid` / `_ellipsoid`, `poisson_ratio_from_moduli`, `isotropic_moduli`
 
 **Hyperelasticity (finite strain)** — `saint_venant_kirchhoff`, `neo_hooke`
-(driven by `external_deformation_gradient_source`)
+(driven by `external_deformation_gradient_source`), `deformation_gradient_kinematics`
+(F^-1 and det F, shared by `neo_hooke` and `kirchhoff_to_first_piola`)
 
 **Plasticity** — `j2_plasticity`, `j2_rk_plasticity`,
 `drucker_prager_plasticity`, `j2_kinematic_plasticity`,

@@ -11,7 +11,8 @@ namespace numsim::materials {
 
 /// Push-forward of a Kirchhoff stress tau of the logarithmic strain to the first Piola-Kirchhoff stress
 /// P = tau F^-T and its consistent dP/dF. Reads tau ("stress_source"), d tau / d eps_e ("tangent_source"),
-/// d ln V / dF ("strain_source": a log_strain) and F^-1 ("deformation_gradient_source"). Outputs "stress", "tangent".
+/// d ln V / dF ("strain_source": a log_strain) and F^-1 ("kinematics_source": a deformation_gradient_kinematics).
+/// Outputs "stress", "tangent".
 /// Valid for an isotropic stress law only; this is not checked (docs/finite-strain.md).
 template <typename Traits>
 class kirchhoff_to_first_piola final : public material_base<kirchhoff_to_first_piola<Traits>, Traits> {
@@ -34,7 +35,7 @@ public:
                                               base::template get_parameter<std::string>("tangent_property"), EdgeKind::Global)),
         m_dlog(base::template add_input<tensor4>(base::template get_parameter<std::string>("strain_source"),
                                                  "d_strain_d_deformation_gradient", EdgeKind::Global)),
-        m_F_inv(base::template add_input<tensor2>(base::template get_parameter<std::string>("deformation_gradient_source"),
+        m_F_inv(base::template add_input<tensor2>(base::template get_parameter<std::string>("kinematics_source"),
                                                   "inverse", EdgeKind::Global)) {
     base::add_callback(&kirchhoff_to_first_piola::compute, m_P, m_A).reads(m_tau, m_C, m_dlog, m_F_inv);
   }
@@ -46,7 +47,7 @@ public:
     required<std::string>(para, "tangent_source");
     optional<std::string>(para, "tangent_property", std::string{"tangent"});
     required<std::string>(para, "strain_source");
-    required<std::string>(para, "deformation_gradient_source");
+    required<std::string>(para, "kinematics_source");
     return para;
   }
 

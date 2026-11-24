@@ -7,6 +7,8 @@ logarithmic strain, composed from producers:
 F source ─► log_strain ─► elastic_strain ─► linear_stress / linear_elasticity ─► kirchhoff_to_first_piola
             ln V,           ε_e = ln V − Σ ε*    τ = C : ε_e                        P = τ F⁻ᵀ, dP/dF
             d lnV/dF
+F source ─► deformation_gradient_kinematics ─────────────────────────────────────► kirchhoff_to_first_piola
+            F⁻¹, det F
 ```
 
 | Node | Reads | Outputs |
@@ -14,7 +16,8 @@ F source ─► log_strain ─► elastic_strain ─► linear_stress / linear_e
 | `log_strain` | `deformation_gradient_source` | `strain` = ln V = ½ ln(F Fᵀ), `d_strain_d_deformation_gradient` |
 | `elastic_strain` | `strain_source`, `eigenstrain_sources` | `strain` = ε − Σ ε*ᵢ |
 | `linear_stress` | `strain_source`, `tangent_source` | `stress` = τ = C : ε_e |
-| `kirchhoff_to_first_piola` | `stress_source`, `tangent_source`, `strain_source` (the `log_strain`), `deformation_gradient_source` | `stress` = P, `tangent` = dP/dF |
+| `deformation_gradient_kinematics` | `deformation_gradient_source` | `inverse` = F⁻¹, `determinant` = det F |
+| `kirchhoff_to_first_piola` | `stress_source`, `tangent_source`, `strain_source` (the `log_strain`), `kinematics_source` (the `deformation_gradient_kinematics`) | `stress` = P, `tangent` = dP/dF |
 
 For fixed K and G, `linear_elasticity` replaces `linear_stress` and the
 `isotropic_tangent`, and the push-forward's `tangent_source` is that
@@ -29,6 +32,10 @@ An inelastic law in log strain, such as J2 between `elastic_strain` and the
 push-forward, must be isotropic too. The chain does not check this: a transversely isotropic or mean-field tangent is
 accepted and gives results that depend on the rigid rotation. An anisotropic
 material needs the Lagrangian chain below.
+
+**F and its kinematics name the same source.** `log_strain` and `neo_hooke` read F, while
+`kirchhoff_to_first_piola` and `neo_hooke` read F⁻¹ and det F from a `deformation_gradient_kinematics`.
+That node's `deformation_gradient_source` must be the F the model reads; another F gives a wrong P without an error.
 
 **Stress and tangent come from the same law.** The push-forward reads τ and
 dτ/dε_e through two parameters. Both must name the same stress law: the
