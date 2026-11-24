@@ -2,6 +2,7 @@
 #define PROPERTY_ENGINE_H
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <format>
@@ -319,14 +320,15 @@ public:
       throw std::logic_error(std::format("{} has rank {}, the requested type rank {}", what(), *target_rank + *seed_rank,
                                          derivatives::rank_of<R>()));
     auto plan{plan_derivative(target, seed, *seed_rank, what())};
-    auto slot{std::make_unique<slot_type>(*target_rank)};
-    std::vector<value_type> const zero(derivatives::width<Traits::Dim>(*target_rank) * derivatives::width<Traits::Dim>(*seed_rank));
-    slot->unpack(zero.data());
+    if (auto const n{plan.target_nodes.front()}; n && plan.ranks[*n] != *target_rank)
+      throw std::logic_error(std::format("{}: the plan's target has rank {}, the property {}", what(), plan.ranks[*n], *target_rank));
+    auto slot{std::make_unique<slot_type>()};
+    compile(plan, slot.get());
     auto& value{slot->value};
     plan.slot = std::move(slot);
     for (auto const& step : plan.steps) {
       step.material->request_partials(step.callback, true);
-      step.material->request_partial(m_blocks[step.block].first);
+      step.material->request_partial(step.block);
       if (auto* fill{step.material->fill_of(step.callback)}; fill && !std::ranges::contains(plan.fills, fill, &fill_ref::second))
         plan.fills.emplace_back(step.material, fill);
     }
@@ -351,8 +353,6 @@ public:
     for (auto& plan : m_plans)
       for (auto& [mat, fill] : plan.fills)
         mat->fill_partials(*fill);
-    for (auto& [block, packed] : m_blocks)
-      block->pack(packed.data());
     for (auto& plan : m_plans)
       finish(plan);
   }
@@ -938,13 +938,22 @@ private:
   void jacobian(system_stage& s) {
     fill_jacobian(s);
     auto& plan{*s.jacobian};
-    for (auto const b : plan.blocks)
-      m_blocks[b].first->pack(m_blocks[b].second.data());
     accumulate(plan);
     s.J.setZero(s.height, s.width);
     for (std::size_t i{0}; i < s.residuals.size(); ++i)
       if (auto const node{plan.target_nodes[i]})
-        s.J.middleRows(s.rows[i], plan.D[*node].rows()) = plan.D[*node];
+        for (std::size_t j{0}; j < s.unknowns.size(); ++j)
+          if (auto* d{plan.D[*node][j]})
+            pack_block(s.J, s.rows[i], s.columns[j], s.residual_ranks[i], s.ranks[j], d->data());
+  }
+
+  /// Packs d out / d in, given in full notation, into the Mandel block of `m` at (row, col): the boundary to an LU.
+  static void pack_block(matrix& m, Eigen::Index row, Eigen::Index col, std::size_t out_rank, std::size_t in_rank, value_type const* d) {
+    std::array<value_type, derivatives::width<Traits::Dim>(2) * derivatives::width<Traits::Dim>(4)> packed;
+    auto const rows{static_cast<Eigen::Index>(derivatives::width<Traits::Dim>(out_rank))};
+    auto const cols{static_cast<Eigen::Index>(derivatives::width<Traits::Dim>(in_rank))};
+    derivatives::pack_full<Traits::Dim>(out_rank, in_rank, d, packed.data());
+    m.block(row, col, rows, cols) = Eigen::Map<matrix const>(packed.data(), rows, cols);
   }
 
   /// J by forward differences, one Mandel component of x at a time, with a step relative to the size of x (1 when
@@ -1266,34 +1275,46 @@ private:
   using fill_ref = std::pair<material_interface_type*, typename material_interface_type::fill_declaration const*>;
   struct derivative_step {
     std::size_t out, in; ///< nodes of the plan
-    std::size_t block;   ///< in m_blocks
+    derivatives::partial_block<value_type> const* block;
     material_interface_type* material;
     const property_base* callback;
-    derivatives::product_kernel<value_type> kernel; ///< fixed to the block's shape
-    derivatives::seed_kernel<value_type> from_seed;  ///< in is a seed: D[out] += P in its columns
   };
-  /// A residual system a derivative passes: its unknowns are seeds in `column`..., its residuals the targets from
-  /// `first_target` on; fold() replaces their columns by the implicit function theorem.
+  /// One tmech product of a plan: out = or += P * in; `in` is unused from a seed.
+  struct derivative_op {
+    derivatives::step_kernel<value_type> kernel;
+    void const* P;
+    void const* in;
+    void* out;
+    void* scratch{nullptr};
+  };
+  using value_holder = derivatives::value_holder<value_type>;
+  /// A residual system a derivative passes: its unknowns are the seeds from `first_seed` on, its residuals the
+  /// targets from `first_target` on; fold() applies the implicit function theorem to them.
   struct system_fold {
-    system_stage* system;
-    Eigen::Index column;
-    std::size_t first_target;
-    matrix J, B, dx_dp; ///< reused by every fold of the plan
-    Eigen::PartialPivLU<matrix> lu;
+    system_stage* system{nullptr};
+    std::size_t first_seed{0}, first_target{0};
     std::vector<std::size_t> nodes; ///< read after this fold: the target and the residuals of the later systems
-    std::vector<derivatives::product_kernel<value_type>> kernels; ///< per node; null: no fixed shape
+    std::vector<std::unique_ptr<value_holder>> dx; ///< dx/dp per unknown
+    derivatives::scale_kernel<value_type> scale{nullptr}; ///< of a scalar system: dx/dp = -(1 / J) B
+    matrix J, B, dx_dp;             ///< in Mandel components for the LU, unless the system is scalar
+    Eigen::PartialPivLU<matrix> lu;
+    std::vector<derivative_op> ops; ///< D[node][p] += D[node][x] dx/dp
   };
-  /// D = d node / d seeds over the nodes between the seeds and the targets that carry one, in topological order.
+  /// D[k][j] = d node k / d seed j in full notation over the nodes between the seeds and the targets, in topological
+  /// order; seed j is node j.
   struct derivative_plan {
-    const property_base* seed{nullptr};       ///< of a requested derivative, whose target is targets.front()
+    const property_base* seed{nullptr}; ///< of a requested derivative, whose target is targets.front()
     std::vector<const property_base*> targets;
     std::vector<std::optional<std::size_t>> target_nodes;
-    std::vector<std::pair<Eigen::Index, Eigen::Index>> seeds; ///< (first column, width) of node k
-    Eigen::Index seed_width{0};                               ///< the columns of `seed`, first
-    std::vector<matrix> D;
-    std::vector<derivative_step> steps;  ///< in topological order of their outputs
-    std::vector<std::size_t> blocks;     ///< the partials the steps read, in m_blocks
-    std::vector<system_fold> folds;      ///< in the order of the systems' stages
+    std::vector<std::size_t> seed_ranks;
+    std::vector<std::size_t> ranks;          ///< per node
+    std::vector<std::vector<value_holder*>> D; ///< null: zero
+    std::vector<std::unique_ptr<value_holder>> values;
+    std::array<std::unique_ptr<value_holder>, 5> scratch; ///< per rank / 2, shared by the ops
+    std::vector<derivative_step> steps; ///< in topological order of their outputs
+    std::vector<derivative_op> ops;     ///< the steps per seed; the first into a D assigns it
+    std::vector<value_holder*> zeroed; ///< D written by folds only
+    std::vector<system_fold> folds;     ///< in the order of the systems' stages
     std::unique_ptr<derivatives::derivative_slot_base<value_type>> slot;
     std::vector<fill_ref> fills; ///< of the steps' callbacks that fill their partials on request
   };
@@ -1319,12 +1340,16 @@ private:
   };
   std::vector<std::unique_ptr<system_stage>> m_systems;
 
-  /// D from the packed blocks, folded through the systems it passes, into the slot of a requested derivative.
+  /// D from the partials, folded through the systems it passes; the target's D is the slot's value.
   void finish(derivative_plan& plan) {
-    accumulate(plan);
-    fold(plan);
-    if (auto const target{plan.target_nodes.front()})
-      plan.slot->unpack(plan.D[*target].data());
+    try {
+      accumulate(plan);
+      fold(plan);
+    } catch (...) {
+      if (plan.slot) // no half-folded derivative
+        plan.slot->fill(std::numeric_limits<value_type>::quiet_NaN());
+      throw;
+    }
   }
 
   /// Reruns the callbacks of a new plan at the values held, or fills their partials when they fill them on request,
@@ -1344,15 +1369,12 @@ private:
         mat->fill_partials(*fill);
       }
     });
-    for (auto& [block, packed] : m_blocks)
-      block->pack(packed.data());
     finish(plan);
   }
 
   /// Indexes the declared reads by output and runs every callback declaring partials with want_partials() as requested.
   void index_partials(const std::vector<material_interface_type*>& interfaces) {
     m_plans.clear();
-    m_blocks.clear();
     m_read_declarations.clear();
     for (auto* mat : interfaces) {
       for (auto const& d : mat->declared_reads())
@@ -1384,28 +1406,28 @@ private:
       if (s.declared->method != system_method::newton)
         continue;
       std::unordered_set<property_base*> up;
-      std::vector<std::pair<const property_base*, Eigen::Index>> seeds;
+      std::vector<std::pair<const property_base*, std::size_t>> seeds;
       for (auto const* residual : s.residuals)
         up.insert(upstream_of(residual).begin(), upstream_of(residual).end());
       for (std::size_t j{0}; j < s.unknowns.size(); ++j)
-        seeds.emplace_back(s.unknowns[j], static_cast<Eigen::Index>(derivatives::width<Traits::Dim>(s.ranks[j])));
+        seeds.emplace_back(s.unknowns[j], s.ranks[j]);
       s.jacobian = plan_columns(std::vector<const property_base*>(s.residuals.begin(), s.residuals.end()), seeds, up, describe(s) + ": its Jacobian");
+      compile(*s.jacobian, nullptr);
       for (auto const& step : s.jacobian->steps) {
         step.material->request_partials(step.callback, true);
-        step.material->request_partial(m_blocks[step.block].first, derivatives::jacobian_reader);
+        step.material->request_partial(step.block, derivatives::jacobian_reader);
         if (auto* fill{step.material->fill_of(step.callback)}; fill && !std::ranges::contains(s.jacobian->fills, fill, &fill_ref::second))
           s.jacobian->fills.emplace_back(step.material, fill);
       }
       auto const& steps{s.jacobian->steps};
       if (s.scalar && steps.size() == 1 && steps.front().in == 0 && s.jacobian->target_nodes.front() == steps.front().out)
-        s.dr_dx = m_blocks[steps.front().block].first->scalar();
+        s.dr_dx = steps.front().block->scalar();
     }
   }
 
   /// d target / d seed: the systems whose unknowns the target reads (also through another system) add their
   /// unknowns as seeds and their residuals as targets, so fold() can apply the implicit function theorem.
   derivative_plan plan_derivative(const property_base* target, const property_base* seed, std::size_t seed_rank, std::string const& what) {
-    auto const seed_width{static_cast<Eigen::Index>(derivatives::width<Traits::Dim>(seed_rank))};
     auto up{upstream_of(target)};
     std::vector<system_stage*> passed;
     for (bool grown{true}; grown;) {
@@ -1432,57 +1454,54 @@ private:
                                " and solved again; seed an input of the system or its unknown instead");
 
     std::vector<const property_base*> targets{target};
-    std::vector<std::pair<const property_base*, Eigen::Index>> seeds{{seed, seed_width}};
+    std::vector<std::pair<const property_base*, std::size_t>> seeds{{seed, seed_rank}};
     std::vector<system_fold> folds;
-    auto column{seed_width};
     for (auto* s : passed) {
-      folds.push_back({s, column, targets.size(), matrix::Zero(s->height, s->width), matrix::Zero(s->height, seed_width),
-                       matrix::Zero(s->width, seed_width), {}, {}, {}});
-      for (std::size_t j{0}; j < s->unknowns.size(); ++j)
-        seeds.emplace_back(s->unknowns[j], static_cast<Eigen::Index>(derivatives::width<Traits::Dim>(s->ranks[j])));
-      column += s->width;
+      system_fold f;
+      f.system = s;
+      f.first_seed = seeds.size();
+      f.first_target = targets.size();
+      for (std::size_t j{0}; j < s->unknowns.size(); ++j) {
+        f.dx.push_back(derivatives::make_value<value_type, Traits::Dim>(s->ranks[j] + seed_rank));
+        seeds.emplace_back(s->unknowns[j], s->ranks[j]);
+      }
+      if (s->scalar)
+        f.scale = derivatives::scale_kernel_for<value_type, Traits::Dim>(seed_rank);
+      if (!s->scalar) {
+        auto const p{static_cast<Eigen::Index>(derivatives::width<Traits::Dim>(seed_rank))};
+        f.J = matrix::Zero(s->height, s->width);
+        f.B = matrix::Zero(s->height, p);
+        f.dx_dp = matrix::Zero(s->width, p);
+      }
+      folds.push_back(std::move(f));
       targets.insert(targets.end(), s->residuals.begin(), s->residuals.end());
     }
     auto plan{plan_columns(std::move(targets), seeds, up, what)};
     plan.seed = seed;
-    plan.seed_width = seed_width;
     plan.folds = std::move(folds);
     for (auto& f : plan.folds) {
       auto const later{f.first_target + f.system->residuals.size()};
       for (std::size_t i{0}; i < plan.target_nodes.size(); ++i)
         if (auto const n{plan.target_nodes[i]}; n && (i == 0 || i >= later) && !std::ranges::contains(f.nodes, *n))
           f.nodes.push_back(*n);
-      for (auto const k : f.nodes)
-        f.kernels.push_back(fixed_kernel(plan.D[k].rows(), f.system->width));
     }
     return plan;
   }
 
-  /// The product kernel of a rows x inner block when both are widths of node values, else null.
-  static derivatives::product_kernel<value_type> fixed_kernel(Eigen::Index rows, Eigen::Index inner) {
-    constexpr auto W{static_cast<Eigen::Index>(derivatives::pair_width<Traits::Dim>)};
-    auto const fits{[](Eigen::Index w) { return w == 1 || w == W || w == W * W; }};
-    return fits(rows) && fits(inner) ? derivatives::product_kernel_for<value_type, Traits::Dim>(static_cast<std::size_t>(rows),
-                                                                                                static_cast<std::size_t>(inner))
-                                     : nullptr;
-  }
 
   /// D = d node / d seeds over `up`: seed k is the identity in its own columns. Every node a seed reaches needs
   /// the partial of each read that carries one, declared or declared zero (independent_of()).
-  derivative_plan plan_columns(std::vector<const property_base*> targets, std::vector<std::pair<const property_base*, Eigen::Index>> const& seeds,
+  derivative_plan plan_columns(std::vector<const property_base*> targets, std::vector<std::pair<const property_base*, std::size_t>> const& seeds,
                                std::unordered_set<property_base*> const& up, std::string const& what) {
     derivative_plan plan;
     plan.targets = std::move(targets);
     std::unordered_map<const property_base*, std::size_t> node;
     std::unordered_map<const property_base*, const property_base*> via; ///< the read each node is first reached over
-    Eigen::Index columns{0};
-    for (auto const& [seed, width] : seeds) {
-      node.emplace(seed, plan.seeds.size());
-      plan.seeds.emplace_back(columns, width);
-      columns += width;
+    for (auto const& [seed, rank] : seeds) {
+      node.emplace(seed, plan.seed_ranks.size());
+      plan.seed_ranks.push_back(rank);
     }
-    for (auto const& [first, width] : plan.seeds)
-      plan.D.emplace_back(width, columns);
+    plan.ranks = plan.seed_ranks;
     for (auto const* prop : m_property_execution_order | std::views::filter([&](auto* p) { return up.contains(p) && !node.contains(p); })) {
       std::vector<const property_base*> reached;
       if (auto const edges{m_reverse_edges.find(const_cast<property_base*>(prop))}; edges != m_reverse_edges.end())
@@ -1496,7 +1515,7 @@ private:
       auto const& d{*declared->second.second};
       std::vector<derivative_step> steps;
       std::vector<const property_base*> sources;
-      Eigen::Index width{0};
+      std::size_t rank{0};
       auto const take{[&](input_wire_base const* input, const property_base* own, const property_base* src) {
         sources.push_back(src);
         if (!node.contains(src))
@@ -1505,10 +1524,8 @@ private:
         auto const& partials{mat->partials()};
         if (auto const p{std::ranges::find_if(partials, [&](auto const& q) { return q.output == prop && same_read(q); })};
             p != partials.end()) {
-          steps.push_back({0, node.at(src), block_of(*p->block), mat, p->callback,
-                           derivatives::product_kernel_for<value_type, Traits::Dim>(p->block->rows(), p->block->cols()),
-                           derivatives::seed_kernel_for<value_type, Traits::Dim>(p->block->rows(), p->block->cols())});
-          width = static_cast<Eigen::Index>(p->block->rows());
+          steps.push_back({0, node.at(src), p->block.get(), mat, p->callback});
+          rank = p->block->out_rank();
           via.try_emplace(prop, src);
         } else if (!std::ranges::any_of(mat->independent_reads(), [&](auto const& i) { return i.callback == d.callback && same_read(i); })) {
           throw missing_partial(what, plan.targets, src, prop, via, "its callback declares neither partials() nor independent_of() for that read");
@@ -1526,43 +1543,143 @@ private:
                                                                         "' edge, not a declared read, which carries no partials");
       if (steps.empty())
         continue;
-      auto const index{plan.D.size()};
-      plan.D.emplace_back(width, columns);
-      for (auto const& step : steps) {
-        plan.steps.push_back({index, step.in, step.block, step.material, step.callback, step.kernel, step.from_seed});
-        if (!std::ranges::contains(plan.blocks, step.block))
-          plan.blocks.push_back(step.block);
-      }
+      auto const index{plan.ranks.size()};
+      plan.ranks.push_back(rank);
+      for (auto const& step : steps)
+        plan.steps.push_back({index, step.in, step.block, step.material, step.callback});
       node.emplace(prop, index);
     }
     for (auto const* target : plan.targets) {
       auto const it{node.find(target)};
       plan.target_nodes.push_back(it != node.end() ? std::optional{it->second} : std::nullopt);
     }
+    // only steps toward a target: another output of the same callback (stress beside a residual) leads nowhere
+    std::vector<char> needed(plan.ranks.size(), 0);
+    for (auto const& t : plan.target_nodes)
+      if (t)
+        needed[*t] = 1;
+    for (auto it{plan.steps.rbegin()}; it != plan.steps.rend(); ++it)
+      if (needed[it->out])
+        needed[it->in] = 1;
+    std::erase_if(plan.steps, [&](auto const& step) { return !needed[step.out]; });
     return plan;
   }
 
-  /// D[out] += P * D[in] from the packed partials, the seeds the identity in their columns.
-  void accumulate(derivative_plan& plan) {
-    for (std::size_t k{0}; k < plan.D.size(); ++k) {
-      plan.D[k].setZero();
-      if (k < plan.seeds.size())
-        plan.D[k].middleCols(plan.seeds[k].first, plan.seeds[k].second).setIdentity();
+  /// Allocates the D a plan writes (the requested target's in `target`, the slot's value) and lists its ops: per
+  /// step and seed reaching its read, D[out] = or += P D[in], straight from P when the read is that seed.
+  void compile(derivative_plan& plan, value_holder* target) {
+    auto const seeds{plan.seed_ranks.size()};
+    auto const nodes{plan.ranks.size()};
+    check_ranks(plan);
+    plan.D.assign(nodes, std::vector<value_holder*>(seeds, nullptr));
+    auto const scratch{[&](std::size_t a, std::size_t b, std::size_t s, bool assign) -> void* {
+      if (!derivatives::needs_scratch(a, b, s, assign))
+        return nullptr;
+      auto& value{plan.scratch[(a + s) / 2]};
+      if (!value)
+        value = derivatives::make_value<value_type, Traits::Dim>(a + s);
+      return value->object();
+    }};
+    auto const target_node{target ? plan.target_nodes.front() : std::nullopt};
+    auto const buffer{[&](std::size_t k, std::size_t j) {
+      if (!plan.D[k][j]) {
+        if (target_node == k && j == 0) {
+          plan.D[k][j] = target;
+        } else {
+          plan.values.push_back(derivatives::make_value<value_type, Traits::Dim>(plan.ranks[k] + plan.seed_ranks[j]));
+          plan.D[k][j] = plan.values.back().get();
+        }
+      }
+      return plan.D[k][j];
+    }};
+    std::vector<std::vector<char>> reached(nodes, std::vector<char>(seeds, 0)), written(nodes, std::vector<char>(seeds, 0));
+    for (std::size_t j{0}; j < seeds; ++j) // the seeds' own D: the identity
+      reached[j][j] = written[j][j] = 1;
+    for (auto const& step : plan.steps)
+      for (std::size_t j{0}; j < seeds; ++j) {
+        if (!reached[step.in][j])
+          continue;
+        bool const assign{!written[step.out][j]};
+        reached[step.out][j] = written[step.out][j] = 1;
+        auto const a{plan.ranks[step.out]}, s{plan.seed_ranks[j]};
+        auto* out{buffer(step.out, j)};
+        if (step.in == j)
+          plan.ops.push_back({derivatives::seed_kernel_for<value_type, Traits::Dim>(a, s, assign), step.block->object(), nullptr, out->object()});
+        else
+          plan.ops.push_back({derivatives::step_kernel_for<value_type, Traits::Dim>(a, plan.ranks[step.in], s, assign), step.block->object(),
+                              plan.D[step.in][j]->object(), out->object(), scratch(a, plan.ranks[step.in], s, assign)});
+      }
+    auto const identity{[&](std::size_t j) {
+      if (!plan.D[j][j])
+        derivatives::identity<value_type, Traits::Dim>(plan.seed_ranks[j], buffer(j, j)->object());
+      return plan.D[j][j];
+    }};
+    auto const zeroed{[&](std::size_t k) { // D[k][p] written by a fold, maybe by no op
+      auto* d{buffer(k, 0)};
+      if (!written[k][0]) {
+        written[k][0] = 1;
+        plan.zeroed.push_back(d);
+      }
+      return d;
+    }};
+    for (auto& f : plan.folds) {
+      auto const& s{*f.system};
+      for (std::size_t i{0}; i < s.residuals.size(); ++i)
+        if (auto const r{plan.target_nodes[f.first_target + i]}) {
+          zeroed(*r);
+          for (std::size_t u{0}; u < s.unknowns.size(); ++u)
+            if (!plan.D[*r][f.first_seed + u]) // no path from the unknown: a zero block of J
+              buffer(*r, f.first_seed + u); // zero from make_value
+        }
+      for (auto const k : f.nodes)
+        for (std::size_t u{0}; u < s.unknowns.size(); ++u) {
+          auto const j{f.first_seed + u};
+          auto* dx{k == j ? identity(j) : (reached[k][j] ? plan.D[k][j] : nullptr)};
+          if (!dx)
+            continue;
+          f.ops.push_back({derivatives::step_kernel_for<value_type, Traits::Dim>(plan.ranks[k], s.ranks[u], plan.seed_ranks[0], false),
+                           dx->object(), f.dx[u]->object(), zeroed(k)->object(), scratch(plan.ranks[k], s.ranks[u], plan.seed_ranks[0], false)});
+        }
     }
+    if (target_node == 0) // the seed itself: its identity, written into the target
+      identity(0);
+  }
+
+  /// The ranks the kernels cast the values to: each partial's against its nodes, each system's against its seeds.
+  static void check_ranks(derivative_plan const& plan) {
+    auto const mismatch{[](std::string const& what, std::size_t has, std::size_t plan_rank) {
+      return std::logic_error(std::format("derivative plan: {} has rank {}, its node rank {}", what, has, plan_rank));
+    }};
     for (auto const& step : plan.steps) {
-      auto const* P{m_blocks[step.block].second.data()};
-      auto& out{plan.D[step.out]};
-      if (step.in < plan.seeds.size())
-        step.from_seed(P, out.data() + plan.seeds[step.in].first * out.rows());
-      else
-        step.kernel(P, plan.D[step.in].data(), out.data(), out.cols());
+      if (step.block->out_rank() != plan.ranks[step.out])
+        throw mismatch("the output of a partial", step.block->out_rank(), plan.ranks[step.out]);
+      if (step.block->in_rank() != plan.ranks[step.in])
+        throw mismatch("the read of a partial", step.block->in_rank(), plan.ranks[step.in]);
+    }
+    for (auto const& f : plan.folds) {
+      auto const& s{*f.system};
+      for (std::size_t u{0}; u < s.unknowns.size(); ++u)
+        if (s.ranks[u] != plan.seed_ranks[f.first_seed + u])
+          throw mismatch("an unknown", s.ranks[u], plan.seed_ranks[f.first_seed + u]);
+      for (std::size_t i{0}; i < s.residuals.size(); ++i)
+        if (auto const n{plan.target_nodes[f.first_target + i]}; n && s.residual_ranks[i] != plan.ranks[*n])
+          throw mismatch("a residual", s.residual_ranks[i], plan.ranks[*n]);
     }
   }
 
-  /// Per system passed, at its converged point R(x, p) = 0: dx/dp = -J^-1 B with J = dR/dx and B = dR/dp taken
-  /// with the unknowns as seeds, then every node's D_p += D_x dx/dp. A singular J throws a cutback_error.
+  /// The ops of a plan, after zeroing the D only folds write.
+  static void accumulate(derivative_plan& plan) {
+    for (auto* d : plan.zeroed)
+      d->zero();
+    for (auto const& op : plan.ops)
+      op.kernel(op.P, op.in, op.out, op.scratch);
+  }
+
+  /// Per system passed, at its converged point R(x, p) = 0: dx/dp = -J^-1 B with J = dR/dx and B = dR/dp, then
+  /// D[node][p] += D[node][x] dx/dp for the nodes read later. A scalar system divides; others solve in Mandel
+  /// components. A singular J throws a cutback_error.
   static void fold(derivative_plan& plan) {
-    auto const p{plan.seed_width};
+    auto const p_rank{plan.seed_ranks[0]};
     for (auto& f : plan.folds) {
       auto const& s{*f.system};
       auto const singular{[&] { return cutback_error(std::format("derivative(): system '{}' has a singular Jacobian at its converged point", s.name)); }};
@@ -1570,41 +1687,35 @@ private:
         auto const node{plan.target_nodes[f.first_target]};
         if (!node)
           throw singular();
-        f.dx_dp = plan.D[*node].leftCols(p) / -plan.D[*node](0, f.column);
-        if (!f.dx_dp.allFinite())
+        auto& dx{*f.dx.front()};
+        f.scale(value_type{-1} / *plan.D[*node][f.first_seed]->data(), plan.D[*node][0]->object(), dx.object());
+        if (!std::all_of(dx.data(), dx.data() + derivatives::full_size<Traits::Dim>(p_rank), [](value_type v) { return std::isfinite(v); }))
           throw singular();
       } else {
         f.J.setZero();
         f.B.setZero();
         for (std::size_t i{0}; i < s.residuals.size(); ++i)
           if (auto const node{plan.target_nodes[f.first_target + i]}) {
-            auto const& d{plan.D[*node]};
-            f.J.middleRows(s.rows[i], d.rows()) = d.middleCols(f.column, s.width);
-            f.B.middleRows(s.rows[i], d.rows()) = d.leftCols(p);
+            for (std::size_t u{0}; u < s.unknowns.size(); ++u)
+              pack_block(f.J, s.rows[i], s.columns[u], s.residual_ranks[i], s.ranks[u], plan.D[*node][f.first_seed + u]->data());
+            pack_block(f.B, s.rows[i], 0, s.residual_ranks[i], p_rank, plan.D[*node][0]->data());
           }
         f.lu.compute(f.J);
         f.dx_dp = f.lu.solve(f.B);
         if (!f.dx_dp.allFinite())
           throw singular();
         f.dx_dp = -f.dx_dp;
+        for (std::size_t u{0}; u < s.unknowns.size(); ++u) {
+          std::array<value_type, derivatives::width<Traits::Dim>(2) * derivatives::width<Traits::Dim>(4)> packed;
+          auto const rows{static_cast<Eigen::Index>(derivatives::width<Traits::Dim>(s.ranks[u]))};
+          auto const cols{f.dx_dp.cols()};
+          Eigen::Map<matrix>(packed.data(), rows, cols) = f.dx_dp.middleRows(s.columns[u], rows);
+          derivatives::unpack_full<Traits::Dim>(s.ranks[u], p_rank, packed.data(), f.dx[u]->data());
+        }
       }
-      for (std::size_t i{0}; i < f.nodes.size(); ++i) {
-        auto& d{plan.D[f.nodes[i]]};
-        if (auto const kernel{f.kernels[i]})
-          kernel(d.data() + f.column * d.rows(), f.dx_dp.data(), d.data(), p);
-        else
-          d.leftCols(p).noalias() += d.middleCols(f.column, s.width).lazyProduct(f.dx_dp);
-      }
+      for (auto const& op : f.ops)
+        op.kernel(op.P, op.in, op.out, op.scratch);
     }
-  }
-
-  /// The packed block of a partial, shared by every plan through it.
-  std::size_t block_of(const derivatives::partial_block<value_type>& block) {
-    if (auto const it{std::ranges::find(m_blocks, &block, &std::pair<const derivatives::partial_block<value_type>*, matrix>::first)};
-        it != m_blocks.end())
-      return static_cast<std::size_t>(it - m_blocks.begin());
-    m_blocks.emplace_back(&block, matrix(static_cast<Eigen::Index>(block.rows()), static_cast<Eigen::Index>(block.cols())));
-    return m_blocks.size() - 1;
   }
 
   edge_kind kind_of(const property_base* from, const property_base* to) const {
@@ -1639,7 +1750,6 @@ private:
   }
 
   std::vector<derivative_plan> m_plans;
-  std::vector<std::pair<const derivatives::partial_block<value_type>*, matrix>> m_blocks; ///< packed once per differentiate()
   std::unordered_map<const property_base*, std::pair<material_interface_type*, const read_declaration*>> m_read_declarations;
   std::unordered_set<const property_base*> m_partials_wrapped; ///< callbacks wrapped by index_partials()
 
