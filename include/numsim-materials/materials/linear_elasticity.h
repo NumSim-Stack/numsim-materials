@@ -49,6 +49,8 @@ public:
     base::add_callback(&linear_elasticity::update_stress, m_sig)
         .reads(m_C, m_eps)
         .partials(m_sig, m_C, m_eps);
+    m_dsig_deps = base::partial_of(m_sig, m_eps);
+    m_dsig_dC = base::partial_of(m_sig, m_C);
   }
 
   /**
@@ -77,9 +79,10 @@ public:
 
   /// d sigma / d eps = C, d sigma / d C = Isym (x) eps.
   void update_partials() {
-    base::partial(m_sig, m_eps) = m_C;
-    if (base::want_partial(m_sig, m_C))
-      base::partial(m_sig, m_C) = tmech::otimes(sym_identity<value_type, Dim>(), m_eps.get());
+    if (m_dsig_deps.wanted())
+      m_dsig_deps.value() = m_C;
+    if (m_dsig_dC.wanted())
+      m_dsig_dC.value() = tmech::otimes(sym_identity<value_type, Dim>(), m_eps.get());
   }
 
   void update_tangent(){
@@ -98,6 +101,9 @@ private:
 
   /// Consumed properties
   const input_property<tensor2, property_traits> &m_eps;
+
+  typename base::template partial_handle<tensor2, tensor2> m_dsig_deps;
+  typename base::template partial_handle<tensor2, tensor4> m_dsig_dC;
 };
 
 }

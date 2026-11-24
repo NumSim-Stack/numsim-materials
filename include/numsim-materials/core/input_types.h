@@ -1,6 +1,8 @@
 #ifndef INPUT_TYPES_H
 #define INPUT_TYPES_H
 #include <algorithm>
+#include <stdexcept>
+#include <string>
 #include <vector>
 #include <numsim-core/property_graph/input_types.h>
 #include "numsim-materials/core/property_traits.h"
@@ -19,6 +21,15 @@
 namespace numsim::materials {
 using numsim_core::input_wire_base;
 using numsim_core::connection_source;
+
+/// "material" (reads `default_property`) or "material::property"; throws std::invalid_argument for an empty part.
+inline connection_source parse_source(std::string const& source, std::string const& default_property) {
+  auto const split{source.find("::")};
+  connection_source parsed{source.substr(0, split), split == std::string::npos ? default_property : source.substr(split + 2)};
+  if (parsed.material.empty() || parsed.property.empty())
+    throw std::invalid_argument("'" + source + "' is not \"material\" or \"material::property\"");
+  return parsed;
+}
 
 namespace detail {
 /// The inputs the running callback declared (null: it declared none); with the read check on, the first read

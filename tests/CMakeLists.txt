@@ -1,5 +1,30 @@
 find_package(Threads REQUIRED)
 
+# Without a build type the tests would compile at -O0, where the uninlined expression templates make every
+# test binary ~5x larger and slower. "auto" is resolved on every configure: -O1 only if CMAKE_BUILD_TYPE is empty,
+# the generator is single-config and CMAKE_CXX_FLAGS has no -O option. Any other value is used verbatim, empty is off.
+set(NUMSIM_MATERIALS_TEST_OPT_FLAGS auto CACHE STRING
+    "Optimisation flags for the test executables (plain and sanitizer builds): auto, a flag list, or empty for none")
+get_property(_numsim_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(NUMSIM_MATERIALS_TEST_OPT_FLAGS STREQUAL "auto")
+  set(_numsim_test_opt "")
+  if(NOT CMAKE_BUILD_TYPE AND NOT _numsim_multi_config
+     AND NOT CMAKE_CXX_FLAGS MATCHES "(^| )-O[0-9sgz]*( |$)")
+    set(_numsim_test_opt -O1)
+  endif()
+else()
+  separate_arguments(_numsim_test_opt UNIX_COMMAND "${NUMSIM_MATERIALS_TEST_OPT_FLAGS}")
+endif()
+
+# The optimisation flags above, on a test executable and its sanitizer variants.
+function(numsim_materials_test_options TARGET_NAME)
+  foreach(_target IN ITEMS ${TARGET_NAME} ${TARGET_NAME}_asan ${TARGET_NAME}_tsan)
+    if(TARGET ${_target})
+      target_compile_options(${_target} PRIVATE ${_numsim_test_opt})
+    endif()
+  endforeach()
+endfunction()
+
 option(NUMSIM_MATERIALS_BATCH_TESTS "Compile single-file tests several to a translation unit" ON)
 set(NUMSIM_MATERIALS_TEST_BATCH_SIZE 6 CACHE STRING "Test files per batch")
 # Tests that need their own flags or check what a lone translation unit includes.
@@ -21,6 +46,7 @@ macro(add_numsim_test TARGET_NAME)
   else()
     numsim_add_test(${TARGET_NAME} SOURCES ${ARGN}
       LINK numsim-materials::numsim-materials Threads::Threads)
+    numsim_materials_test_options(${TARGET_NAME})
     list(APPEND _numsim_test_targets ${TARGET_NAME})
   endif()
 endmacro()
@@ -35,6 +61,7 @@ add_numsim_test(test_read_check test_read_check.cpp)
 add_numsim_test(test_read_check_layout test_read_check_layout.cpp read_check_layout_release.cpp)
 add_numsim_test(test_engine_contracts test_engine_contracts.cpp)
 add_numsim_test(test_checkpoint test_checkpoint.cpp)
+add_numsim_test(test_history_checkpoint test_history_checkpoint.cpp)
 add_numsim_test(test_console_logger test_console_logger.cpp)
 add_numsim_test(test_proving_case test_proving_case.cpp)
 add_numsim_test(test_execution_guards test_execution_guards.cpp)
@@ -51,6 +78,7 @@ add_numsim_test(test_unknown_layout test_unknown_layout.cpp)
 add_numsim_test(test_vector_newton test_vector_newton.cpp)
 add_numsim_test(test_umat_conversion test_umat_conversion.cpp)
 add_numsim_test(test_external_state_source test_external_state_source.cpp)
+add_numsim_test(test_derivative_check test_derivative_check.cpp)
 add_numsim_test(test_host_neutral_headers test_host_neutral_headers.cpp)
 add_numsim_test(test_host_neutral_includes test_host_neutral_includes.cpp)
 add_numsim_test(test_umat_forwarder_includes test_umat_forwarder_includes.cpp)
@@ -110,10 +138,15 @@ add_numsim_test(test_curing_eigenstrain test_curing_eigenstrain.cpp)
 add_numsim_test(test_damage_laws test_damage_laws.cpp)
 add_numsim_test(test_uvwmaterial_cards test_uvwmaterial_cards.cpp)
 add_numsim_test(test_voigt_composite test_voigt_composite.cpp)
-add_numsim_test(test_hencky_elasticity test_hencky_elasticity.cpp)
+add_numsim_test(test_hencky_chain test_hencky_chain.cpp)
 add_numsim_test(test_lagrangian_strain test_lagrangian_strain.cpp)
 add_numsim_test(test_elastic_strain test_elastic_strain.cpp)
 add_numsim_test(test_material_point test_material_point.cpp)
+add_numsim_test(test_iteration_groups test_iteration_groups.cpp)
+add_numsim_test(test_residual_system test_residual_system.cpp)
+add_numsim_test(test_system_plasticity test_system_plasticity.cpp)
+# Two sources: the counting operator new must not be batched with other tests.
+add_numsim_test(test_system_allocations test_system_allocations.cpp counting_new.cpp)
 
 # One executable per batch: shared templates are instantiated and compiled once per batch, not once per file.
 list(LENGTH _numsim_batched_sources _nbatched)
@@ -130,6 +163,7 @@ while(_first LESS _nbatched)
   add_custom_target(${_name}_source DEPENDS "${_out}")
   numsim_add_test(${_name} SOURCES "${_out}" INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}"
     LINK numsim-materials::numsim-materials Threads::Threads)
+  numsim_materials_test_options(${_name})
   list(APPEND _numsim_test_targets ${_name})
   foreach(_t ${_name} ${_name}_asan ${_name}_tsan)
     if(TARGET ${_t})

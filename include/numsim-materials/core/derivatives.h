@@ -5,11 +5,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <numbers>
 #include <optional>
 #include <stdexcept>
+#include <string>
 #include <type_traits>
 #include <utility>
+#include <vector>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/history_property.h"
 #include "numsim-materials/core/input_types.h"
@@ -174,6 +177,26 @@ struct mandel_tables {
 template <std::size_t Dim, std::size_t Rank, std::size_t OutRank>
 inline constexpr mandel_tables<Dim, Rank, OutRank> mandel_table{};
 
+/// The tables for a loop: a rank-8 table exceeds clang's constant-evaluation limit, so it is built at first use.
+template <std::size_t Dim, std::size_t Rank, std::size_t OutRank>
+mandel_tables<Dim, Rank, OutRank> const& mandel_table_of() noexcept {
+  if constexpr (Rank <= 6) {
+    return mandel_table<Dim, Rank, OutRank>;
+  } else {
+    static mandel_tables<Dim, Rank, OutRank> const table{};
+    return table;
+  }
+}
+
+/// The sum of the tensor entries of block position Q (its index pairs swapped), indices as constants.
+template <std::size_t Dim, std::size_t Rank, std::size_t OutRank, std::size_t Q, typename T, std::size_t... C>
+T entry_sum(T const* data, std::index_sequence<C...>) noexcept {
+  return (data[mandel_table<Dim, Rank, OutRank>.entries[Q][C]] + ...);
+}
+
+/// pack() and unpack() of up to this many entries run with the table indices as constants.
+inline constexpr std::size_t unroll_limit{256};
+
 /// sqrt(2)^c for c = 0..n, multiplied up one factor at a time.
 template <typename T, std::size_t N>
 constexpr std::array<T, N + 1> sqrt2_powers() {
@@ -185,22 +208,45 @@ constexpr std::array<T, N + 1> sqrt2_powers() {
 }
 } // namespace detail
 
+template <std::size_t Dim, std::size_t Rank, std::size_t OutRank, typename T>
+void pack_data(T const* data, T* block);
+template <std::size_t Dim, std::size_t Rank, std::size_t OutRank, typename T>
+void unpack_data(T const* block, T* data);
+
 /// Packs P = d out / d in (rank(out) = OutRank) into a width(OutRank) x width(rank(P) - OutRank) column-major block;
 /// each index pair is projected onto its symmetric part. Table driven: packing is the boundary to the matrices.
 template <std::size_t Dim, std::size_t OutRank, typename P, typename T>
 void pack(P const& p, T* block) {
-  if constexpr (std::is_arithmetic_v<P>) {
+  if constexpr (std::is_arithmetic_v<P>)
     *block = p;
+  else
+    pack_data<Dim, P::rank(), OutRank>(p.raw_data(), block);
+}
+
+/// pack() of a tensor of rank `Rank` given by its storage.
+template <std::size_t Dim, std::size_t Rank, std::size_t OutRank, typename T>
+void pack_data(T const* data, T* block) {
+  if constexpr (Rank == 0) {
+    *block = *data;
   } else {
-    constexpr std::size_t rank{P::rank()};
-    constexpr auto const& table{detail::mandel_table<Dim, rank, OutRank>};
-    constexpr auto scale{detail::sqrt2_powers<T, table.n>()};
-    T const* const data{p.raw_data()};
-    for (std::size_t q{0}; q < table.rows * table.cols; ++q) {
-      T sum{0};
-      for (auto const flat : table.entries[q])
-        sum += data[flat];
-      block[q] = (scale[table.weight_count[q]] / T(table.copies)) * sum;
+    constexpr std::size_t rank{Rank};
+    using table_type = detail::mandel_tables<Dim, rank, OutRank>;
+    constexpr auto scale{detail::sqrt2_powers<T, table_type::n>()};
+    if constexpr (table_type::rows * table_type::cols <= detail::unroll_limit) {
+      constexpr auto const& table{detail::mandel_table<Dim, rank, OutRank>};
+      [&]<std::size_t... q>(std::index_sequence<q...>) {
+        ((block[q] = (scale[table.weight_count[q]] / T(table_type::copies)) *
+                     detail::entry_sum<Dim, rank, OutRank, q>(data, std::make_index_sequence<table_type::copies>{})),
+         ...);
+      }(std::make_index_sequence<table_type::rows * table_type::cols>{});
+    } else {
+      auto const& table{detail::mandel_table_of<Dim, rank, OutRank>()};
+      for (std::size_t q{0}; q < table_type::rows * table_type::cols; ++q) {
+        T sum{0};
+        for (auto const flat : table.entries[q])
+          sum += data[flat];
+        block[q] = (scale[table.weight_count[q]] / T(table_type::copies)) * sum;
+      }
     }
   }
 }
@@ -208,16 +254,70 @@ void pack(P const& p, T* block) {
 /// The inverse of pack(): a minor-symmetric tensor (or a scalar) from its column-major Mandel block.
 template <std::size_t Dim, std::size_t OutRank, typename P, typename T>
 void unpack(T const* block, P& p) {
-  if constexpr (std::is_arithmetic_v<P>) {
+  if constexpr (std::is_arithmetic_v<P>)
     p = *block;
+  else
+    unpack_data<Dim, P::rank(), OutRank>(block, p.raw_data());
+}
+
+/// unpack() into the storage of a tensor of rank `Rank`.
+template <std::size_t Dim, std::size_t Rank, std::size_t OutRank, typename T>
+void unpack_data(T const* block, T* data) {
+  if constexpr (Rank == 0) {
+    *data = *block;
   } else {
-    constexpr std::size_t rank{P::rank()};
-    constexpr auto const& table{detail::mandel_table<Dim, rank, OutRank>};
-    constexpr auto scale{detail::sqrt2_powers<T, table.n>()};
-    T* const data{p.raw_data()};
-    for (std::size_t flat{0}; flat < table.size; ++flat)
-      data[flat] = block[table.position[flat]] / scale[table.count[flat]];
+    constexpr std::size_t rank{Rank};
+    using table_type = detail::mandel_tables<Dim, rank, OutRank>;
+    constexpr auto scale{detail::sqrt2_powers<T, table_type::n>()};
+    if constexpr (table_type::size <= detail::unroll_limit) {
+      constexpr auto const& table{detail::mandel_table<Dim, rank, OutRank>};
+      [&]<std::size_t... flat>(std::index_sequence<flat...>) {
+        ((data[flat] = block[table.position[flat]] / scale[table.count[flat]]), ...);
+      }(std::make_index_sequence<table_type::size>{});
+    } else {
+      auto const& table{detail::mandel_table_of<Dim, rank, OutRank>()};
+      for (std::size_t flat{0}; flat < table_type::size; ++flat)
+        data[flat] = block[table.position[flat]] / scale[table.count[flat]];
+    }
   }
+}
+
+namespace detail {
+/// f.template operator()<OutRank, InRank>() for a system row of rank 0 or 2 and a column of rank 0, 2 or 4.
+template <typename F>
+void with_ranks(std::size_t out_rank, std::size_t in_rank, F&& f) {
+  auto const in{[&]<std::size_t A>() {
+    switch (in_rank) {
+    case 0: f.template operator()<A, 0>(); return;
+    case 2: f.template operator()<A, 2>(); return;
+    case 4: f.template operator()<A, 4>(); return;
+    default: throw std::logic_error("derivatives: no node value has rank " + std::to_string(in_rank));
+    }
+  }};
+  switch (out_rank) {
+  case 0: in.template operator()<0>(); return;
+  case 2: in.template operator()<2>(); return;
+  default: throw std::logic_error("derivatives: a system row has rank 0 or 2, not " + std::to_string(out_rank));
+  }
+}
+} // namespace detail
+
+/// pack() of d out / d in (ranks known at run time) given in full notation: the boundary to an LU solve.
+template <std::size_t Dim, typename T>
+void pack_full(std::size_t out_rank, std::size_t in_rank, T const* data, T* block) {
+  detail::with_ranks(out_rank, in_rank, [&]<std::size_t A, std::size_t B>() { pack_data<Dim, A + B, A>(data, block); });
+}
+
+/// unpack() of d out / d in into full notation.
+template <std::size_t Dim, typename T>
+void unpack_full(std::size_t out_rank, std::size_t in_rank, T const* block, T* data) {
+  detail::with_ranks(out_rank, in_rank, [&]<std::size_t A, std::size_t B>() { unpack_data<Dim, A + B, A>(block, data); });
+}
+
+/// Entries of a value of rank `rank` in full notation.
+template <std::size_t Dim>
+constexpr std::size_t full_size(std::size_t rank) {
+  return detail::power(Dim, rank);
 }
 
 /// The value of `source` as V: a property's value or a history property's new value.
@@ -286,24 +386,46 @@ public:
   }
 };
 
+/// A distinct address per type: identifies a type-erased block without a dynamic_cast. Writable, so no linker
+/// folds the tags of different types as identical read-only data.
+template <typename B>
+inline char type_tag{};
+
+/// Who reads a partial block, as bits: a fill writes the blocks of the readers asking.
+enum reader : std::uint8_t { derivative_reader = 1, jacobian_reader = 2, every_reader = 3 };
+
 /// One declared partial d output / d read of a callback: the value the callback fills, packed on demand.
 template <typename T>
 class partial_block : public read_probe<T> {
 public:
-  partial_block(std::size_t rows, std::size_t cols) noexcept : m_rows(rows), m_cols(cols) {}
+  partial_block(std::size_t out_rank, std::size_t in_rank, std::size_t rows, std::size_t cols) noexcept
+      : m_out_rank(out_rank), m_in_rank(in_rank), m_rows(rows), m_cols(cols) {}
   partial_block(partial_block const&) = delete;
   partial_block& operator=(partial_block const&) = delete;
 
+  std::size_t out_rank() const noexcept { return m_out_rank; }
+  std::size_t in_rank() const noexcept { return m_in_rank; }
   std::size_t rows() const noexcept { return m_rows; }
   std::size_t cols() const noexcept { return m_cols; }
+  /// The partial as its tmech value: the plans read it here.
+  virtual void const* object() const noexcept = 0;
   std::size_t width() const noexcept override { return m_cols; }
   /// The partial as a rows() x cols() column-major Mandel block.
   virtual void pack(T* block) const = 0;
   /// The output's value, rows() Mandel components.
   virtual void pack_output(T* value) const = 0;
+  /// The value of a scalar by scalar partial, else null.
+  virtual T const* scalar() const noexcept { return nullptr; }
+  /// |P - sym(P)| / |P| over every index pair: plans use partials as written, so they must be minor-symmetric.
+  virtual T asymmetry() const = 0;
+
+  /// The readers (reader bits) of the block.
+  std::uint8_t readers() const noexcept { return m_readers; }
+  void add_readers(std::uint8_t readers) noexcept { m_readers |= readers; }
 
 private:
-  std::size_t m_rows, m_cols;
+  std::size_t m_out_rank, m_in_rank, m_rows, m_cols;
+  std::uint8_t m_readers{0};
 };
 
 template <typename T, std::size_t Dim, typename Out, typename In>
@@ -314,11 +436,34 @@ public:
   static constexpr std::size_t out_rank{rank_of<output_value>()};
 
   explicit typed_partial(Out const& output)
-      : partial_block<T>{derivatives::width<Dim>(out_rank), derivatives::width<Dim>(rank_of<read_value>())}, m_output(output) {}
+      : partial_block<T>{out_rank, rank_of<read_value>(), derivatives::width<Dim>(out_rank), derivatives::width<Dim>(rank_of<read_value>())},
+        m_output(output) {}
 
   partial_t<output_value, read_value, T, Dim> value{};
 
   void pack(T* block) const override { derivatives::pack<Dim, out_rank>(value, block); }
+
+  void const* object() const noexcept override { return &value; }
+
+  T asymmetry() const override {
+    if constexpr (std::is_arithmetic_v<decltype(value)>) {
+      return T{0};
+    } else {
+      std::vector<T> block(this->rows() * this->cols());
+      pack(block.data());
+      auto symmetric{std::make_unique<std::remove_cvref_t<decltype(value)>>()};
+      derivatives::unpack<Dim, out_rank>(block.data(), *symmetric);
+      T const size{tmech::norm(value)};
+      return size > T{0} ? tmech::norm(value - *symmetric) / size : T{0};
+    }
+  }
+
+  T const* scalar() const noexcept override {
+    if constexpr (std::is_same_v<decltype(value), T>)
+      return &value;
+    else
+      return nullptr;
+  }
 
   void pack_output(T* out) const override {
     if constexpr (requires(Out const& o) { o.new_value(); })
@@ -336,39 +481,44 @@ private:
   typed_read<T, Dim, read_value> m_read;
 };
 
-/// A requested derivative as the host reads it, unpacked from its accumulated block.
+/// A value of a plan, d node / d seed, held as its tmech type; a requested derivative is the host's view of one.
 template <typename T>
-class derivative_slot_base {
+class value_holder {
 public:
-  virtual ~derivative_slot_base() = default;
-  virtual void unpack(T const* block) = 0;
+  virtual ~value_holder() = default;
+  /// The tmech value, for the kernels.
+  virtual void* object() noexcept = 0;
+  /// Its storage in full notation, for the Mandel boundary of an LU.
+  virtual T* data() noexcept = 0;
+  virtual void fill(T v) noexcept = 0;
+  void zero() noexcept { fill(T{0}); }
 };
 
-template <typename T, std::size_t Dim, typename R>
-class derivative_slot final : public derivative_slot_base<T> {
+template <typename T, typename V>
+class typed_value final : public value_holder<T> {
 public:
-  explicit derivative_slot(std::size_t out_rank) : m_out_rank(out_rank) {}
+  V value{};
 
-  R value{};
-
-  void unpack(T const* block) override {
-    switch (m_out_rank) {
-    case 0: derivatives::unpack<Dim, 0>(block, value); break;
-    case 2:
-      if constexpr (rank_of<R>() >= 2)
-        derivatives::unpack<Dim, 2>(block, value);
-      break;
-    case 4:
-      if constexpr (rank_of<R>() >= 4)
-        derivatives::unpack<Dim, 4>(block, value);
-      break;
-    default: break;
-    }
+  typed_value() noexcept { this->zero(); }
+  void* object() noexcept override { return &value; }
+  T* data() noexcept override {
+    if constexpr (std::is_arithmetic_v<V>)
+      return &value;
+    else
+      return value.raw_data();
   }
-
-private:
-  std::size_t m_out_rank;
+  void fill(T v) noexcept override {
+    if constexpr (std::is_arithmetic_v<V>)
+      value = v;
+    else
+      value.fill(v);
+  }
 };
+
+template <typename T>
+using derivative_slot_base = value_holder<T>;
+template <typename T, std::size_t, typename R>
+using derivative_slot = typed_value<T, R>;
 
 } // namespace numsim::materials::derivatives
 

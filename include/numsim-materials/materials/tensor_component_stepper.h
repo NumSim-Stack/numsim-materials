@@ -59,9 +59,8 @@ public:
 
   /// Accumulates the increment into the specified tensor component.
   /// NOTE: This mutates via +=, not assignment. Calling update() multiple
-  /// times per timestep (e.g., via update_property) will double-increment.
-  /// The numerical_diff_checker handles this by excluding the stepper's
-  /// callback during perturbation.
+  /// times per timestep (e.g., via update_property) will double-increment;
+  /// check_derivative() needs a host-bound input (external_strain_source).
   void update() {
     if constexpr (Rank == 1){
       m_tensor(m_indices[0]) += m_inc;
