@@ -51,7 +51,8 @@ jobs:
           -DNUMSIM_MATERIALS_DEBUG_CHECKS=ON
 
     - name: Build
-      run: cmake --build build -j$(nproc) ${{ matrix.asan && '--target numsim_materials_asan_tests' || '' }}
+      # ASan test batches take up to 4.7 GB each to compile (g++-14 -O3): two at a time fit the runner's 16 GB.
+      run: cmake --build build -j${{ matrix.asan && '2' || '$(nproc)' }} ${{ matrix.asan && '--target numsim_materials_asan_tests' || '' }}
 
     - name: Test
       run: cd build && ctest --output-on-failure -j$(nproc) ${{ matrix.asan && '-R _asan$' || '' }}
