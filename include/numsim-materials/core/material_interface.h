@@ -249,6 +249,16 @@ public:
   };
   const std::vector<read_declaration>& declared_reads() const noexcept { return m_declared_reads; }
 
+  /// An output the engine iterates to (callback_handle::converges): the callbacks between a local edge and it rerun
+  /// in update() until |*value| <= *tolerance, at most *max_passes times.
+  struct convergence_declaration {
+    property_base_type const* residual;
+    value_type const* value;
+    value_type const* tolerance;
+    int const* max_passes;
+  };
+  const std::vector<convergence_declaration>& converging_outputs() const noexcept { return m_converging; }
+
   /// The names of the materials this one reaches through material_ref.
   auto material_ref_targets() const {
     return m_material_refs | std::views::transform([](auto const& ref) -> const std::string& { return ref->target_name(); });
@@ -580,6 +590,18 @@ protected:
     }
   }
 
+  /// `residual` is one of `outputs` (a callback's); `tolerance` and `max_passes` live in the parameter handler.
+  void declare_converges(std::vector<void const*> const& outputs, value_type const& residual, value_type const& tolerance,
+                         int const& max_passes) {
+    auto const& entry{output_entry_of("converges", &residual)};
+    if (!std::ranges::contains(outputs, static_cast<void const*>(&residual)))
+      throw std::logic_error("converges(): '" + key_of(entry) + "' is not an output of the callback of '" +
+                             key_of(output_entry_of("converges", outputs.front())) + "'");
+    if (std::ranges::contains(m_converging, entry.property, &convergence_declaration::residual))
+      throw std::logic_error("converges(): '" + key_of(entry) + "' is declared twice");
+    m_converging.push_back({entry.property, &residual, &tolerance, &max_passes});
+  }
+
   void declare_written_by(void const* output, void const* writer) {
     auto const& out{output_entry_of("written_by", output)};
     auto const& by{output_entry_of("written_by", writer)};
@@ -634,6 +656,7 @@ private:
   std::vector<property_base_type const*> m_read_declared; ///< callbacks with declared reads
   std::vector<read_declaration> m_declared_reads;
   std::vector<property_base_type const*> m_stateful;      ///< outputs never constant
+  std::vector<convergence_declaration> m_converging;
   std::vector<std::pair<property_base_type const*, property_base_type const*>> m_written_by, m_callback_order;
 
   /// The entry of an output of this material; declarations end at finalize(), when the engine reads them.
