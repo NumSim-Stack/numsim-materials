@@ -2,9 +2,13 @@
 #define PROPERTY_ENGINE_H
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstddef>
+#include <format>
 #include <functional>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <print>
@@ -12,6 +16,7 @@
 #include <ranges>
 #include <map>
 #include <set>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -19,6 +24,10 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include <Eigen/Dense>
+#include "numsim-materials/core/derivative_kernels.h"
+#include "numsim-materials/core/derivatives.h"
+#include "numsim-materials/core/errors.h"
 #include "numsim-materials/core/property_traits.h"
 #include "numsim-materials/core/property.h"
 #include "numsim-materials/core/history_property.h"
@@ -64,6 +73,17 @@ struct property_graph {
   std::vector<graph_edge> edges;
 };
 
+template <typename Traits>
+class property_engine;
+
+/// Old and new value of every history property of one context at one moment, as bytes in the engine's order.
+template <typename Traits>
+class history_checkpoint {
+  friend class property_engine<Traits>;
+  std::vector<std::string> m_bytes;
+  const property_engine<Traits>* m_owner{nullptr};
+};
+
 /// Manages the property dependency graph, topological sort, and execution.
 template<typename Traits>
 class property_engine {
@@ -85,21 +105,26 @@ public:
     for (auto const* mat : interfaces)
       m_stateful.insert(mat->stateful_outputs().begin(), mat->stateful_outputs().end());
     collect_history_properties(properties);
+    form_groups(interfaces);
     find_constants(interfaces, writers);
     if constexpr (NUMSIM_MATERIALS_DEBUG_CHECKS)
       track_reads(interfaces);
     route_to_writers(interfaces);
+    index_partials(interfaces);
+    plan_systems();
   }
 
-  /// Run the callbacks still to run, in topological order: a constant one only until it has run.
+  /// Run the callbacks still to run, in topological order: a constant one only until it has run. A residual system
+  /// (solvers/system.h, callback_handle::converges) is solved between what it reads and the rest.
   void update() {
     guarded("update", [this] {
       refresh_constants();
       if (m_verify)
         std::ranges::for_each(m_retired, [this](property_base* prop) { verify(prop); });
-      for (auto* prop : m_active)
-        prop->traits().update();
+      for (auto const& s : m_stages)
+        s.system ? solve(*s.system, s.callbacks) : run(s.callbacks);
       retire([](property_base*) { return true; });
+      m_evaluated = true;
     });
   }
 
@@ -136,8 +161,15 @@ public:
       if (m_verify)
         for (auto* prop : m_retired | std::views::filter(runs))
           verify(prop);
-      for (auto* prop : m_active | std::views::filter(runs))
-        prop->traits().update();
+      for (auto const& s : m_stages) {
+        if (!s.system || s.system->unknowns.empty()) { // a converges() group runs once, as a member asked for directly
+          for (auto* prop : s.callbacks | std::views::filter(runs))
+            prop->traits().update();
+        } else if (std::ranges::any_of(s.callbacks, runs) || std::ranges::any_of(s.system->unknowns, runs)) {
+          auto const members{s.callbacks | std::views::filter([&](auto* prop) { return !exclude.contains(prop); }) | std::ranges::to<std::vector>()};
+          solve(*s.system, members);
+        }
+      }
       retire(runs);
     });
   }
@@ -188,6 +220,36 @@ public:
   /// Whether `input` is upstream of `output` (or is it).
   bool depends_on(const property_base* output, const property_base* input) const {
     return upstream_of(output).contains(const_cast<property_base*>(input));
+  }
+
+  /// The history now, both values: restore() returns to it after any number of commits. Only history properties are
+  /// saved; state a material keeps outside them across calls is not restored.
+  history_checkpoint<Traits> checkpoint() const {
+    if (m_failed)
+      throw std::logic_error("checkpoint(): the last update threw, the context is partly updated: revert() first");
+    history_checkpoint<Traits> cp;
+    cp.m_owner = this;
+    cp.m_bytes.reserve(m_history_properties.size());
+    for (auto const* hp : m_history_properties) {
+      std::ostringstream out;
+      hp->serialize(out);
+      cp.m_bytes.push_back(std::move(out).str());
+    }
+    return cp;
+  }
+
+  /// Back to a checkpoint of this engine; clears a failed update like revert().
+  void restore(history_checkpoint<Traits> const& cp) {
+    if (cp.m_owner != this)
+      throw std::logic_error("restore(): the checkpoint was taken from another context");
+    if (cp.m_bytes.size() != m_history_properties.size())
+      throw std::logic_error("restore(): the checkpoint holds a different number of history properties");
+    m_failed = true; // a throw while deserializing leaves the history partly restored
+    for (auto const& [hp, bytes] : std::views::zip(m_history_properties, cp.m_bytes)) {
+      std::istringstream in{bytes};
+      hp->deserialize(in);
+    }
+    m_failed = false;
   }
 
   property_base* find_property(property_handler& properties,
@@ -249,6 +311,67 @@ public:
       g.nodes.push_back({prop, prop->is_history(), is_constant(prop), m_stateful.contains(prop), m_routed.contains(prop),
                          has_callback(prop) && !m_routed.contains(prop)});
     return g;
+  }
+
+  /// d target / d seed as R (rank(target) + rank(seed), a scalar for two scalars), filled by differentiate().
+  /// Resolved once: a path from the seed to the target through a callback without the partial it needs throws.
+  /// On an evaluated context the callbacks on the path run once more and fill the result at once.
+  template <typename R>
+    requires derivatives::derivative_value<R, typename Traits::value_type, Traits::Dim>
+  const R& derivative(const property_base* target, const property_base* seed) {
+    using slot_type = derivatives::derivative_slot<value_type, Traits::Dim, R>;
+    auto const what{[&] { return "derivative(): d '" + prop_key(target->traits().id) + "' / d '" + prop_key(seed->traits().id) + "'"; }};
+    if (m_running)
+      throw std::logic_error(what() + ": called from a callback");
+    if (auto const it{std::ranges::find_if(m_plans, [&](auto const& p) { return p.targets.front() == target && p.seed == seed; })};
+        it != m_plans.end()) {
+      if (auto* slot{dynamic_cast<slot_type*>(it->slot.get())})
+        return slot->value;
+      throw std::logic_error(what() + " is requested as another type already");
+    }
+    auto const target_rank{derivatives::property_rank<value_type, Traits::Dim>(*target)};
+    auto const seed_rank{derivatives::property_rank<value_type, Traits::Dim>(*seed)};
+    if (!target_rank || !seed_rank)
+      throw std::logic_error(what() + ": both must be scalars or symmetric tensors of rank 2 or 4");
+    if (*target_rank + *seed_rank != derivatives::rank_of<R>())
+      throw std::logic_error(std::format("{} has rank {}, the requested type rank {}", what(), *target_rank + *seed_rank,
+                                         derivatives::rank_of<R>()));
+    auto plan{plan_derivative(target, seed, *seed_rank, what())};
+    if (auto const n{plan.target_nodes.front()}; n && plan.ranks[*n] != *target_rank)
+      throw std::logic_error(std::format("{}: the plan's target has rank {}, the property {}", what(), plan.ranks[*n], *target_rank));
+    auto slot{std::make_unique<slot_type>()};
+    compile(plan, slot.get());
+    auto& value{slot->value};
+    plan.slot = std::move(slot);
+    for (auto const& step : plan.steps) {
+      step.material->request_partials(step.callback, true);
+      step.material->request_partial(step.block);
+      if (auto* fill{step.material->fill_of(step.callback)}; fill && !std::ranges::contains(plan.fills, fill, &fill_ref::second))
+        plan.fills.emplace_back(step.material, fill);
+    }
+    m_plans.push_back(std::move(plan));
+    reactivate(); // a constant callback fills its partials once more
+    if (m_evaluated)
+      fill_now(m_plans.back());
+    return value;
+  }
+
+  /// Whether `seed` is upstream of `target` (or the target itself): a derivative of one by the other can be non-zero.
+  /// Without a path derivative() stays zero.
+  bool has_path(const property_base* target, const property_base* seed) const {
+    return upstream_of(target).contains(const_cast<property_base*>(seed));
+  }
+
+  /// Accumulates the requested derivatives from the partials the last update filled: D[out] += P * D[in], through a
+  /// residual system by the implicit function theorem.
+  void differentiate() {
+    if (m_plans.empty())
+      return;
+    for (auto& plan : m_plans)
+      for (auto& [mat, fill] : plan.fills)
+        mat->fill_partials(*fill);
+    for (auto& plan : m_plans)
+      finish(plan);
   }
 
   void dump() const {
@@ -594,6 +717,7 @@ private:
     } catch (...) {
       m_running = false;
       m_failed = true;
+      m_evaluated = false;
       throw;
     }
     m_running = false;
@@ -603,10 +727,13 @@ private:
   void reactivate() {
     m_active = m_callbacks;
     m_retired.clear();
+    distribute();
   }
 
   void refresh_constants() {
     if (*m_revision != m_seen_revision) {
+      for (auto const& s : m_systems)
+        check_settings(*s); // set_parameter() may have changed them
       reactivate();
       m_seen_revision = *m_revision;
     }
@@ -622,13 +749,18 @@ private:
     })};
     m_retired.insert(m_retired.end(), done.begin(), done.end());
     m_active.erase(done.begin(), done.end());
+    distribute();
   }
 
   /// Reruns a constant callback and throws when one of its material's constant outputs changes.
   void verify(property_base* prop) {
     auto const& [mat, outputs]{m_checks.at(prop)};
     auto const checks{outputs | std::views::transform([](auto const* d) { return d->take(); }) | std::ranges::to<std::vector>()};
+    auto const* fill{mat->fill_of(prop)};
+    auto const filled{fill ? fill->filled : std::uint8_t{0}};
     prop->traits().update();
+    if (fill)
+      fill->filled = filled; // the outputs are checked unchanged below, so are the partials
     for (auto const& [check, d] : std::views::zip(checks, outputs))
       if (auto const verdict{check()}; verdict != detail::verdict::same)
         throw std::logic_error("constant_output(): '" + mat->name() + "::" + d->output->traits().id.name + "' " +
@@ -700,6 +832,441 @@ private:
   }
   std::unordered_set<const property_base*> m_routed; ///< outputs whose update reruns their writer
 
+  using value_type = typename Traits::value_type;
+  using matrix = Eigen::Matrix<value_type, Eigen::Dynamic, Eigen::Dynamic>;
+  using column_vector = Eigen::Matrix<value_type, Eigen::Dynamic, 1>;
+  using tensor2 = tmech::tensor<value_type, Traits::Dim, 2>;
+  using system_declaration = typename material_interface_type::system_declaration;
+  struct system_stage;
+  /// A scalar or a symmetric tensor a system reads or writes, by address: properties keep theirs.
+  struct value_ref {
+    value_type* scalar{nullptr};
+    tensor2* tensor{nullptr};
+    void pack(value_type* out) const {
+      if (scalar)
+        *out = *scalar;
+      else
+        derivatives::pack<Traits::Dim, 2>(*tensor, out);
+    }
+    void unpack(value_type const* in) const {
+      if (scalar)
+        *scalar = *in;
+      else
+        derivatives::unpack<Traits::Dim, 2>(in, *tensor);
+    }
+  };
+
+  /// Callbacks run in sequence (no system) or as a residual system's members until it converges.
+  struct stage {
+    system_stage* system{nullptr};
+    std::vector<property_base*> callbacks; ///< the active ones, in topological order
+  };
+
+  static void run(std::vector<property_base*> const& callbacks) {
+    for (auto* prop : callbacks)
+      prop->traits().update();
+  }
+
+  /// Throws when tolerance or max_iter (max_passes) of a system is unusable (NaN included).
+  static void check_settings(system_stage const& s) {
+    auto const converges{s.declared->own_residual != nullptr};
+    if (!(*s.declared->tolerance >= 0) || *s.declared->max_iter < (converges ? 1 : 0))
+      throw std::invalid_argument(describe(s) + " needs a tolerance >= 0 and " + (converges ? "max_passes >= 1" : "max_iter >= 0"));
+  }
+
+  /// Sets the unknowns, reruns the members and gathers the residuals until |R|_inf <= tolerance (a non-finite residual never
+  /// converges); max_iter counts the updates of the unknowns, converges() counts passes.
+  void solve(system_stage& s, std::vector<property_base*> const& callbacks) {
+    if (s.scalar)
+      return solve_scalar(s, callbacks);
+    auto const& d{*s.declared};
+    auto const limit{d.own_residual ? *d.max_iter - 1 : *d.max_iter};
+    start(s);
+    for (int it{0};; ++it) {
+      if (d.report)
+        d.report->iterations = it;
+      scatter(s, s.x);
+      run(callbacks);
+      gather(s, s.R);
+      auto const norm{s.R.hasNaN() ? std::numeric_limits<value_type>::quiet_NaN() : s.R.template lpNorm<Eigen::Infinity>()};
+      if (std::isfinite(norm) && norm <= *d.tolerance)
+        return;
+      if (it >= limit || !s.R.allFinite())
+        throw cutback_error(d.own_residual ? std::format("'{}' did not reach {:g} in {} pass{} (last {:g})", s.name, *d.tolerance, it + 1,
+                                                         it == 0 ? "" : "es", norm)
+                                           : std::format("system '{}' did not reach {:g} in {} iteration{} (last |R| {:g})", s.name,
+                                                         *d.tolerance, it, it == 1 ? "" : "s", norm));
+      step(s, callbacks, it);
+    }
+  }
+
+  /// One update of the unknowns from the residual at x.
+  void step(system_stage& s, std::vector<property_base*> const& callbacks, int it) {
+    switch (s.declared->method) {
+    case system_method::picard:
+      if (s.width > 0)
+        s.x -= s.R;
+      return;
+    case system_method::newton: jacobian(s); break;
+    case system_method::newton_fd: jacobian_by_differences(s, callbacks); break;
+    }
+    s.lu.compute(s.J);
+    s.dx = s.lu.solve(s.R);
+    if (!s.dx.allFinite())
+      throw cutback_error(std::format("system '{}': the Jacobian is singular at iteration {}", s.name, it));
+    s.x -= s.dx;
+  }
+
+  /// solve() for one scalar unknown and one scalar residual, in plain arithmetic: J is the residual's own partial
+  /// when it reads the unknown directly, else from the Jacobian's plan.
+  void solve_scalar(system_stage& s, std::vector<property_base*> const& callbacks) {
+    auto const& d{*s.declared};
+    auto& u{*s.unknown_values.front().scalar};
+    auto const& r{*s.residual_values.front().scalar};
+    auto x{s.unknowns.front()->is_history() ? *s.unknown_old.front().scalar : static_cast<value_type>(d.seeds.front())};
+    for (int it{0};; ++it) {
+      if (d.report)
+        d.report->iterations = it;
+      u = x;
+      run(callbacks);
+      auto const R{r};
+      if (std::abs(R) <= *d.tolerance && std::isfinite(R))
+        return;
+      if (it >= *d.max_iter || !std::isfinite(R))
+        throw cutback_error(std::format("system '{}' did not reach {:g} in {} iteration{} (last |R| {:g})", s.name, *d.tolerance, it,
+                                        it == 1 ? "" : "s", std::abs(R)));
+      auto dx{R};
+      if (d.method == system_method::newton) {
+        dx = R / (s.dr_dx ? (fill_jacobian(s), *s.dr_dx) : (jacobian(s), s.J(0, 0)));
+      } else if (d.method == system_method::newton_fd) {
+        auto const h{std::sqrt(std::numeric_limits<value_type>::epsilon()) * (x != 0 ? std::abs(x) : value_type{1})};
+        auto const xh{x + h};
+        u = xh;
+        try {
+          run(callbacks);
+        } catch (...) {
+          u = x;
+          throw;
+        }
+        dx = R / ((r - R) / (xh - x));
+        u = x;
+      }
+      if (!std::isfinite(dx))
+        throw cutback_error(std::format("system '{}': the Jacobian is singular at iteration {}", s.name, it));
+      x -= dx;
+    }
+  }
+
+  /// The members filling their partials on request fill J's blocks at the x they last ran at.
+  void fill_jacobian(system_stage& s) {
+    for (auto& [mat, fill] : s.jacobian->fills)
+      mat->fill_partials(*fill, derivatives::jacobian_reader);
+  }
+
+  /// J = dR/dx from the partials the members filled at x.
+  void jacobian(system_stage& s) {
+    fill_jacobian(s);
+    auto& plan{*s.jacobian};
+    accumulate(plan);
+    s.J.setZero(s.height, s.width);
+    for (std::size_t i{0}; i < s.residuals.size(); ++i)
+      if (auto const node{plan.target_nodes[i]})
+        for (std::size_t j{0}; j < s.unknowns.size(); ++j)
+          if (auto* d{plan.D[*node][j]})
+            pack_block(s.J, s.rows[i], s.columns[j], s.residual_ranks[i], s.ranks[j], d->data());
+  }
+
+  /// Packs d out / d in, given in full notation, into the Mandel block of `m` at (row, col): the boundary to an LU.
+  static void pack_block(matrix& m, Eigen::Index row, Eigen::Index col, std::size_t out_rank, std::size_t in_rank, value_type const* d) {
+    std::array<value_type, derivatives::width<Traits::Dim>(2) * derivatives::width<Traits::Dim>(4)> packed;
+    auto const rows{static_cast<Eigen::Index>(derivatives::width<Traits::Dim>(out_rank))};
+    auto const cols{static_cast<Eigen::Index>(derivatives::width<Traits::Dim>(in_rank))};
+    derivatives::pack_full<Traits::Dim>(out_rank, in_rank, d, packed.data());
+    m.block(row, col, rows, cols) = Eigen::Map<matrix const>(packed.data(), rows, cols);
+  }
+
+  /// J by forward differences, one Mandel component of x at a time, with a step relative to the size of x (1 when
+  /// x is zero); the unknowns are back at x afterwards, also when a member throws.
+  void jacobian_by_differences(system_stage& s, std::vector<property_base*> const& callbacks) {
+    s.J.resize(s.height, s.width);
+    auto& x{s.x_fd};
+    auto& R{s.R_fd};
+    x = s.x;
+    auto const norm{s.x.template lpNorm<Eigen::Infinity>()};
+    auto const scale{norm > 0 ? norm : value_type{1}};
+    try {
+      for (Eigen::Index j{0}; j < s.width; ++j) {
+        auto const h{std::sqrt(std::numeric_limits<value_type>::epsilon()) * std::max(std::abs(s.x[j]), scale)};
+        x[j] = s.x[j] + h;
+        scatter(s, x);
+        run(callbacks);
+        gather(s, R);
+        s.J.col(j) = (R - s.R) / (x[j] - s.x[j]);
+        x[j] = s.x[j];
+      }
+    } catch (...) {
+      scatter(s, s.x);
+      throw;
+    }
+    scatter(s, s.x);
+  }
+
+  /// x from the seeds, a history unknown from its value at the end of the last step.
+  void start(system_stage& s) {
+    s.x.setZero(s.width);
+    for (std::size_t i{0}; i < s.unknowns.size(); ++i)
+      if (s.unknowns[i]->is_history())
+        s.unknown_old[i].pack(s.x.data() + s.columns[i]);
+      else if (s.ranks[i] == 0)
+        s.x[s.columns[i]] = s.declared->seeds[i];
+  }
+
+  void scatter(system_stage& s, column_vector const& x) {
+    for (std::size_t i{0}; i < s.unknowns.size(); ++i)
+      s.unknown_values[i].unpack(x.data() + s.columns[i]);
+  }
+
+  void gather(system_stage& s, column_vector& R) {
+    for (std::size_t i{0}; i < s.residuals.size(); ++i)
+      s.residual_values[i].pack(R.data() + s.rows[i]);
+  }
+
+  /// The value of `prop` (rank 0 or 2) by address, resolved once; `old`: a history property's old value.
+  static value_ref value_of(property_base& prop, std::size_t rank, bool old) {
+    auto const value{[&]<typename V>(std::type_identity<V>) -> V& {
+      if (old)
+        return dynamic_cast<numsim_core::history_property<V, property_traits>&>(prop).old_value();
+      return derivatives::value_in<V>(prop);
+    }};
+    if (rank == 0)
+      return {&value(std::type_identity<value_type>{}), nullptr};
+    return {nullptr, &value(std::type_identity<tensor2>{})};
+  }
+
+  /// A declaration with its properties: the unknowns and residuals in Mandel rows and columns.
+  std::unique_ptr<system_stage> make_system(const material_interface_type& mat, const system_declaration& d) {
+    auto s{std::make_unique<system_stage>()};
+    s->declared = &d;
+    s->name = d.own_residual ? prop_key(d.own_residual->traits().id) : mat.name();
+    auto const rank{[&](property_base* prop) {
+      auto const r{derivatives::property_rank<value_type, Traits::Dim>(*prop)};
+      if (!r || *r > 2)
+        throw std::logic_error(describe(*s) + ": '" + prop_key(prop->traits().id) + "' is neither a scalar nor a symmetric tensor");
+      return *r;
+    }};
+    for (auto const* unknown : d.unknowns) {
+      s->unknowns.push_back(find_in_graph(mat.name(), unknown->traits().id.name));
+      s->ranks.push_back(rank(s->unknowns.back()));
+      s->columns.push_back(s->width);
+      s->width += static_cast<Eigen::Index>(derivatives::width<Traits::Dim>(s->ranks.back()));
+    }
+    if (d.own_residual)
+      s->residuals.push_back(find_in_graph(mat.name(), d.own_residual->traits().id.name));
+    for (auto const* input : d.residuals)
+      s->residuals.push_back(find_in_graph(input->source_owner(), input->source_name()));
+    for (auto* residual : s->residuals) {
+      s->residual_ranks.push_back(rank(residual));
+      s->rows.push_back(s->height);
+      s->height += static_cast<Eigen::Index>(derivatives::width<Traits::Dim>(s->residual_ranks.back()));
+    }
+    for (std::size_t i{0}; i < s->unknowns.size(); ++i) {
+      s->unknown_values.push_back(value_of(*s->unknowns[i], s->ranks[i], false));
+      s->unknown_old.push_back(s->unknowns[i]->is_history() ? value_of(*s->unknowns[i], s->ranks[i], true) : value_ref{});
+    }
+    for (std::size_t i{0}; i < s->residuals.size(); ++i)
+      s->residual_values.push_back(value_of(*s->residuals[i], s->residual_ranks[i], false));
+    s->scalar = s->width == 1 && s->height == 1;
+    s->R.resize(s->height);
+    s->R_fd.resize(s->height);
+    s->dx.resize(s->width);
+    s->x_fd.resize(s->width);
+    return s;
+  }
+
+  static std::string describe(system_stage const& s) {
+    return s.declared->own_residual ? "converges(): '" + s.name + "'" : "system '" + s.name + "'";
+  }
+
+  /// Per system, by residual order. The members of a system with unknowns are the callbacks downstream of its
+  /// unknowns and upstream of its residuals. converges(): the callbacks on a path from the consumer Q of a closed
+  /// local edge P->Q (P downstream of Q, upstream of the residual) to the residual; its group must not share a
+  /// callback with an earlier one (nested loops). Each stage runs after the callbacks it reads, before the rest;
+  /// a system with unknowns shares no member.
+  void form_groups(const std::vector<material_interface_type*>& interfaces) {
+    m_systems.clear();
+    for (auto const* mat : interfaces)
+      for (auto const& d : mat->systems())
+        m_systems.push_back(make_system(*mat, d));
+    auto const position{[this](auto const& s) {
+      return std::ranges::min(s->residuals | std::views::transform([this](auto const* r) {
+                                return std::ranges::find(m_property_execution_order, r) - m_property_execution_order.begin();
+                              }));
+    }};
+    std::ranges::stable_sort(m_systems, {}, position);
+
+    std::unordered_map<const property_base*, std::vector<const property_base*>> downstream_edges;
+    std::unordered_map<const property_base*, std::vector<const property_base*>> writers_of;
+    for (auto const& e : m_edges) {
+      if (e.kind != edge_kind::local)
+        downstream_edges[e.from].push_back(e.to);
+      if (e.kind == edge_kind::written_by)
+        writers_of[e.to].push_back(e.from);
+    }
+    // the callbacks that fill a property: itself, or its writers
+    auto const callbacks_filling{[&](const property_base* prop) {
+      return has_callback(prop) ? std::vector{prop} : writers_of[prop];
+    }};
+    std::unordered_map<const property_base*, std::unordered_set<const property_base*>> reach_cache;
+    auto const reach{[&](const property_base* from) -> const std::unordered_set<const property_base*>& {
+      if (auto const it{reach_cache.find(from)}; it != reach_cache.end())
+        return it->second;
+      std::unordered_set<const property_base*> seen{from};
+      std::vector<const property_base*> todo{from};
+      while (!todo.empty()) {
+        auto const* prop{todo.back()};
+        todo.pop_back();
+        for (auto const* next : downstream_edges[prop])
+          if (seen.insert(next).second)
+            todo.push_back(next);
+      }
+      return reach_cache.emplace(from, std::move(seen)).first->second;
+    }};
+    auto const callbacks{m_property_execution_order | std::views::filter(has_callback) | std::ranges::to<std::vector>()};
+    std::unordered_map<const property_base*, system_stage*> member_of;
+    std::vector<std::pair<system_stage*, std::vector<property_base*>>> groups;
+    for (auto const& owned_system : m_systems) {
+      auto& s{*owned_system};
+      auto const converges{s.declared->own_residual != nullptr};
+      auto const loop{s.unknowns.empty()}; // converges(), or picard iterating a local loop
+      check_settings(s);
+      std::unordered_set<const property_base*> upstream;
+      for (auto const* residual : s.residuals)
+        upstream.insert(upstream_of(residual).begin(), upstream_of(residual).end());
+      std::unordered_set<const property_base*> path;
+      std::unordered_set<const system_stage*> owners; // earlier groups whose loops this residual also sees
+      auto const converging_owner{[&](const property_base* prop) {
+        auto const it{member_of.find(prop)};
+        return it != member_of.end() && it->second->unknowns.empty() ? it->second : nullptr;
+      }};
+      if (!loop) {
+        std::vector<const property_base*> todo{s.unknowns.begin(), s.unknowns.end()};
+        while (!todo.empty()) {
+          auto const* prop{todo.back()};
+          todo.pop_back();
+          for (auto const* next : downstream_edges[prop])
+            if (path.insert(next).second)
+              todo.push_back(next);
+        }
+      } else
+        for (auto const& e : m_edges) {
+          if (e.kind != edge_kind::local)
+            continue;
+          auto const producers{callbacks_filling(e.from)};
+          for (auto const* q : callbacks_filling(e.to)) {
+            auto const closing{std::ranges::find_if(producers, [&](auto const* p) { return upstream.contains(p) && reach(q).contains(p); })};
+            if (closing == producers.end())
+              continue;
+            // the callbacks of the loop q ... p
+            auto const body{callbacks | std::views::filter([&](auto const* prop) { return reach(q).contains(prop) && reach(prop).contains(*closing); }) |
+                            std::ranges::to<std::vector<const property_base*>>()};
+            auto const owned{std::ranges::count_if(body, [&](auto const* prop) { return converging_owner(prop) != nullptr; })};
+            if (owned == static_cast<std::ptrdiff_t>(body.size())) { // the loop of an earlier group
+              owners.insert(converging_owner(body.front()));
+              continue;
+            }
+            if (owned != 0) {
+              auto const* other{converging_owner(*std::ranges::find_if(body, [&](auto const* prop) { return converging_owner(prop) != nullptr; }))};
+              throw std::logic_error((converges ? "converges(): the loop " : "system '" + s.name + "': the loop ") + prop_key((*closing)->traits().id) +
+                                     " -> " + prop_key(q->traits().id) + (converges ? " of '" + s.name + "'" : std::string{}) +
+                                     " runs through the iteration group of '" + other->name + "': nested loops are not supported");
+            }
+            path.insert(reach(q).begin(), reach(q).end());
+          }
+        }
+      std::vector<property_base*> members;
+      for (auto* prop : callbacks) {
+        if (!upstream.contains(prop) || !path.contains(prop))
+          continue;
+        if (auto const it{member_of.find(prop)}; it != member_of.end()) {
+          if (!s.unknowns.empty() || !it->second->unknowns.empty())
+            throw std::logic_error(describe(s) + ": '" + prop_key(prop->traits().id) + "' is a member of " + describe(*it->second) +
+                                   " too; systems are disjoint");
+          continue;
+        }
+        if (m_stateful.contains(prop))
+          throw std::logic_error(converges ? "converges(): '" + prop_key(prop->traits().id) +
+                                                 "' is stateful() and inside the iteration group of '" + s.name +
+                                                 "'; a pass must not count or record"
+                                           : describe(s) + ": '" + prop_key(prop->traits().id) +
+                                                 "' is stateful() and between its unknowns and residuals; a pass must not count or record");
+        members.push_back(prop);
+      }
+      if (members.empty())
+        throw std::logic_error(!loop ? describe(s) + ": no callback lies between its unknowns and its residuals"
+                                     : describe(s) + " " +
+                                                (owners.empty() ? std::string{"has no closed local loop behind it: nothing to iterate (a local edge whose producer is "
+                                                                              "downstream of its consumer and upstream of the residual)"}
+                                                                : "iterates no loop outside the group of '" + (*owners.begin())->name +
+                                                                      "': one residual per group"));
+      s.members.assign(members.begin(), members.end());
+      for (auto* prop : members)
+        member_of.emplace(prop, &s);
+      for (auto const* unknown : s.unknowns)
+        member_of.emplace(unknown, &s); // what reads an unknown waits for its system
+      groups.emplace_back(&s, std::move(members));
+    }
+
+    // each system after the systems it reads; before it, the callbacks it reads that have not run yet
+    m_stages.clear();
+    m_stage_of.clear();
+    std::unordered_set<const system_stage*> placed;
+    auto const place{[&](auto&& props, system_stage* system) {
+      for (auto* prop : props)
+        m_stage_of[prop] = m_stages.size();
+      m_stages.push_back({system, {}});
+      if (system)
+        placed.insert(system);
+    }};
+    while (!groups.empty()) {
+      auto const reads{[&](auto const& group) {
+        std::unordered_set<const property_base*> all;
+        for (auto const* member : group.second)
+          all.insert(upstream_of(member).begin(), upstream_of(member).end());
+        return all;
+      }};
+      auto const next{std::ranges::find_if(groups, [&](auto const& group) {
+        return std::ranges::none_of(reads(group), [&](auto const* prop) {
+          auto const it{member_of.find(prop)};
+          return it != member_of.end() && it->second != group.first && !placed.contains(it->second);
+        });
+      })};
+      if (next == groups.end())
+        throw std::logic_error(groups.front().first->declared->own_residual && groups.back().first->declared->own_residual
+                                   ? "converges(): the iteration groups of '" + groups.front().first->name + "' and '" +
+                                         groups.back().first->name + "' read each other"
+                                   : describe(*groups.front().first) + " and " + describe(*groups.back().first) + " read each other");
+      auto const before{reads(*next)};
+      place(callbacks | std::views::filter([&](auto const* prop) {
+              return before.contains(prop) && !member_of.contains(prop) && !m_stage_of.contains(prop);
+            }),
+            nullptr);
+      place(next->second, next->first);
+      groups.erase(next);
+    }
+    place(callbacks | std::views::filter([&](auto const* prop) { return !m_stage_of.contains(prop); }), nullptr);
+  }
+
+  /// The active callbacks into their stages.
+  void distribute() {
+    for (auto& s : m_stages)
+      s.callbacks.clear();
+    for (auto* prop : m_active)
+      m_stages[m_stage_of.at(prop)].callbacks.push_back(prop);
+  }
+
+  std::vector<stage> m_stages;                                      ///< in execution order
+  std::unordered_map<const property_base*, std::size_t> m_stage_of; ///< callback -> its stage
+
   /// The upstream set of a property, computed once per finalize().
   const std::unordered_set<property_base*>& upstream_of(const property_base* target) const {
     if (auto const it{m_upstream.find(target)}; it != m_upstream.end())
@@ -731,6 +1298,490 @@ private:
     return result;
   }
 
+  // --- derivatives (#217) ---
+  using read_declaration = typename material_interface_type::read_declaration;
+
+  using fill_ref = std::pair<material_interface_type*, typename material_interface_type::fill_declaration const*>;
+  struct derivative_step {
+    std::size_t out, in; ///< nodes of the plan
+    derivatives::partial_block<value_type> const* block;
+    material_interface_type* material;
+    const property_base* callback;
+  };
+  /// One tmech product of a plan: out = or += P * in; `in` is unused from a seed.
+  struct derivative_op {
+    derivatives::step_kernel<value_type> kernel;
+    void const* P;
+    void const* in;
+    void* out;
+    void* scratch{nullptr};
+  };
+  using value_holder = derivatives::value_holder<value_type>;
+  /// A residual system a derivative passes: its unknowns are the seeds from `first_seed` on, its residuals the
+  /// targets from `first_target` on; fold() applies the implicit function theorem to them.
+  struct system_fold {
+    system_stage* system{nullptr};
+    std::size_t first_seed{0}, first_target{0};
+    std::vector<std::size_t> nodes; ///< read after this fold: the target and the residuals of the later systems
+    std::vector<std::unique_ptr<value_holder>> dx; ///< dx/dp per unknown
+    derivatives::scale_kernel<value_type> scale{nullptr}; ///< of a scalar system: dx/dp = -(1 / J) B
+    matrix J, B, dx_dp;             ///< in Mandel components for the LU, unless the system is scalar
+    Eigen::PartialPivLU<matrix> lu;
+    std::vector<derivative_op> ops; ///< D[node][p] += D[node][x] dx/dp
+  };
+  /// D[k][j] = d node k / d seed j in full notation over the nodes between the seeds and the targets, in topological
+  /// order; seed j is node j.
+  struct derivative_plan {
+    const property_base* seed{nullptr}; ///< of a requested derivative, whose target is targets.front()
+    std::vector<const property_base*> targets;
+    std::vector<std::optional<std::size_t>> target_nodes;
+    std::vector<std::size_t> seed_ranks;
+    std::vector<std::size_t> ranks;          ///< per node
+    std::vector<std::vector<value_holder*>> D; ///< null: zero
+    std::vector<std::unique_ptr<value_holder>> values;
+    std::array<std::unique_ptr<value_holder>, 5> scratch; ///< per rank / 2, shared by the ops
+    std::vector<derivative_step> steps; ///< in topological order of their outputs
+    std::vector<derivative_op> ops;     ///< the steps per seed; the first into a D assigns it
+    std::vector<value_holder*> zeroed; ///< D written by folds only
+    std::vector<system_fold> folds;     ///< in the order of the systems' stages
+    std::unique_ptr<derivatives::derivative_slot_base<value_type>> slot;
+    std::vector<fill_ref> fills; ///< of the steps' callbacks that fill their partials on request
+  };
+
+  /// A declared system as update() solves it, in Mandel components: unknown i in the columns from columns[i],
+  /// its residual in the rows from rows[i].
+  struct system_stage {
+    const system_declaration* declared{nullptr};
+    std::string name; ///< the system's, or the residual's for converges()
+    std::vector<property_base*> unknowns, residuals;
+    std::vector<const property_base*> members; ///< the callbacks it reruns, from finalize()
+    std::vector<std::size_t> ranks, residual_ranks;
+    std::vector<Eigen::Index> columns, rows;
+    std::vector<value_ref> unknown_values, unknown_old, residual_values; ///< resolved by make_system()
+    Eigen::Index width{0}, height{0};
+    column_vector x, R;
+    column_vector dx, x_fd, R_fd; ///< scratch of step() and newton_fd, sized once
+    matrix J;
+    Eigen::PartialPivLU<matrix> lu;
+    std::optional<derivative_plan> jacobian; ///< newton: J from the partials, the unknowns as seeds
+    bool scalar{false};                      ///< one scalar unknown, one scalar residual: solve_scalar()
+    value_type const* dr_dx{nullptr};        ///< scalar newton: J, when the residual reads the unknown directly
+  };
+  std::vector<std::unique_ptr<system_stage>> m_systems;
+
+  /// D from the partials, folded through the systems it passes; the target's D is the slot's value.
+  void finish(derivative_plan& plan) {
+    try {
+      accumulate(plan);
+      fold(plan);
+    } catch (...) {
+      if (plan.slot) // no half-folded derivative
+        plan.slot->fill(std::numeric_limits<value_type>::quiet_NaN());
+      throw;
+    }
+  }
+
+  /// Reruns the callbacks of a new plan at the values held, or fills their partials when they fill them on request,
+  /// and accumulates it. A stateful callback is not rerun: its partials come with the next update().
+  void fill_now(derivative_plan& plan) {
+    auto const reruns{[&](auto const* prop) {
+      return std::ranges::any_of(plan.steps, [&](auto const& step) { return step.callback == prop; }) &&
+             !std::ranges::any_of(plan.fills, [&](auto const& f) { return f.second->callback == prop; });
+    }};
+    if (std::ranges::any_of(m_callbacks, [&](auto const* prop) { return reruns(prop) && m_stateful.contains(prop); }))
+      return;
+    guarded("derivative", [&] {
+      for (auto* prop : m_callbacks | std::views::filter(reruns))
+        prop->traits().update();
+      for (auto& [mat, fill] : plan.fills) {
+        fill->filled = 0; // the new plan may read blocks the last fill skipped
+        mat->fill_partials(*fill);
+      }
+    });
+    finish(plan);
+  }
+
+  /// Indexes the declared reads by output and runs every callback declaring partials with want_partials() as requested.
+  void index_partials(const std::vector<material_interface_type*>& interfaces) {
+    m_plans.clear();
+    m_read_declarations.clear();
+    for (auto* mat : interfaces) {
+      for (auto const& d : mat->declared_reads())
+        for (auto const* out : d.outputs)
+          m_read_declarations.emplace(out, std::pair{mat, &d});
+      for (auto const& p : mat->partials())
+        if (auto* prop{find_in_graph(mat->name(), p.callback->traits().id.name)}; m_partials_wrapped.insert(prop).second) {
+          auto& update{prop->traits().update};
+          update = [inner = std::move(update), mat, callback = p.callback, fill = mat->fill_of(p.callback)] {
+            mat->run_callback(callback, inner, fill);
+          };
+        }
+    }
+  }
+
+  /// Per system, its structural zero blocks (no path from the unknown to the residual) and, for newton, the plan
+  /// of J = dR/dx; members with a fill (fills_partials()) fill only J's blocks, before a Newton step.
+  void plan_systems() {
+    for (auto& owned : m_systems) {
+      auto& s{*owned};
+      if (auto* report{s.declared->report}) {
+        report->zero_blocks.clear();
+        report->planned = true;
+        for (std::size_t i{0}; i < s.residuals.size(); ++i)
+          for (std::size_t j{0}; j < s.unknowns.size(); ++j)
+            if (!upstream_of(s.residuals[i]).contains(s.unknowns[j]))
+              report->zero_blocks.emplace_back(i, j);
+      }
+      if (s.declared->method != system_method::newton)
+        continue;
+      std::unordered_set<property_base*> up;
+      std::vector<std::pair<const property_base*, std::size_t>> seeds;
+      for (auto const* residual : s.residuals)
+        up.insert(upstream_of(residual).begin(), upstream_of(residual).end());
+      for (std::size_t j{0}; j < s.unknowns.size(); ++j)
+        seeds.emplace_back(s.unknowns[j], s.ranks[j]);
+      s.jacobian = plan_columns(std::vector<const property_base*>(s.residuals.begin(), s.residuals.end()), seeds, up, describe(s) + ": its Jacobian");
+      compile(*s.jacobian, nullptr);
+      for (auto const& step : s.jacobian->steps) {
+        step.material->request_partials(step.callback, true);
+        step.material->request_partial(step.block, derivatives::jacobian_reader);
+        if (auto* fill{step.material->fill_of(step.callback)}; fill && !std::ranges::contains(s.jacobian->fills, fill, &fill_ref::second))
+          s.jacobian->fills.emplace_back(step.material, fill);
+      }
+      auto const& steps{s.jacobian->steps};
+      if (s.scalar && steps.size() == 1 && steps.front().in == 0 && s.jacobian->target_nodes.front() == steps.front().out)
+        s.dr_dx = steps.front().block->scalar();
+    }
+  }
+
+  /// d target / d seed: the systems whose unknowns the target reads (also through another system) add their
+  /// unknowns as seeds and their residuals as targets, so fold() can apply the implicit function theorem.
+  derivative_plan plan_derivative(const property_base* target, const property_base* seed, std::size_t seed_rank, std::string const& what) {
+    auto up{upstream_of(target)};
+    std::vector<system_stage*> passed;
+    for (bool grown{true}; grown;) {
+      grown = false;
+      for (auto const& st : m_stages) {
+        auto* s{st.system};
+        if (s && !std::ranges::contains(passed, s) && !std::ranges::contains(s->unknowns, seed) &&
+            std::ranges::any_of(s->unknowns, [&](auto* u) { return up.contains(u); })) {
+          passed.push_back(s);
+          grown = true;
+          for (auto const* residual : s->residuals)
+            up.insert(upstream_of(residual).begin(), upstream_of(residual).end());
+        }
+      }
+    }
+    if (!up.contains(const_cast<property_base*>(seed)))
+      passed.clear();
+    auto const stage_index{[this](system_stage* s) { return std::ranges::find(m_stages, s, &stage::system) - m_stages.begin(); }};
+    std::ranges::sort(passed, {}, stage_index);
+    for (auto const* s : passed)
+      if (std::ranges::contains(s->members, seed) ||
+          std::ranges::any_of(m_edges, [&](auto const& e) { return e.kind == edge_kind::written_by && e.to == seed && std::ranges::contains(s->members, e.from); }))
+        throw std::logic_error(what + ": '" + prop_key(seed->traits().id) + "' is rerun by " + describe(*s) +
+                               " and solved again; seed an input of the system or its unknown instead");
+
+    std::vector<const property_base*> targets{target};
+    std::vector<std::pair<const property_base*, std::size_t>> seeds{{seed, seed_rank}};
+    std::vector<system_fold> folds;
+    for (auto* s : passed) {
+      system_fold f;
+      f.system = s;
+      f.first_seed = seeds.size();
+      f.first_target = targets.size();
+      for (std::size_t j{0}; j < s->unknowns.size(); ++j) {
+        f.dx.push_back(derivatives::make_value<value_type, Traits::Dim>(s->ranks[j] + seed_rank));
+        seeds.emplace_back(s->unknowns[j], s->ranks[j]);
+      }
+      if (s->scalar)
+        f.scale = derivatives::scale_kernel_for<value_type, Traits::Dim>(seed_rank);
+      if (!s->scalar) {
+        auto const p{static_cast<Eigen::Index>(derivatives::width<Traits::Dim>(seed_rank))};
+        f.J = matrix::Zero(s->height, s->width);
+        f.B = matrix::Zero(s->height, p);
+        f.dx_dp = matrix::Zero(s->width, p);
+      }
+      folds.push_back(std::move(f));
+      targets.insert(targets.end(), s->residuals.begin(), s->residuals.end());
+    }
+    auto plan{plan_columns(std::move(targets), seeds, up, what)};
+    plan.seed = seed;
+    plan.folds = std::move(folds);
+    for (auto& f : plan.folds) {
+      auto const later{f.first_target + f.system->residuals.size()};
+      for (std::size_t i{0}; i < plan.target_nodes.size(); ++i)
+        if (auto const n{plan.target_nodes[i]}; n && (i == 0 || i >= later) && !std::ranges::contains(f.nodes, *n))
+          f.nodes.push_back(*n);
+    }
+    return plan;
+  }
+
+
+  /// D = d node / d seeds over `up`: seed k is the identity in its own columns. Every node a seed reaches needs
+  /// the partial of each read that carries one, declared or declared zero (independent_of()).
+  derivative_plan plan_columns(std::vector<const property_base*> targets, std::vector<std::pair<const property_base*, std::size_t>> const& seeds,
+                               std::unordered_set<property_base*> const& up, std::string const& what) {
+    derivative_plan plan;
+    plan.targets = std::move(targets);
+    std::unordered_map<const property_base*, std::size_t> node;
+    std::unordered_map<const property_base*, const property_base*> via; ///< the read each node is first reached over
+    for (auto const& [seed, rank] : seeds) {
+      node.emplace(seed, plan.seed_ranks.size());
+      plan.seed_ranks.push_back(rank);
+    }
+    plan.ranks = plan.seed_ranks;
+    for (auto const* prop : m_property_execution_order | std::views::filter([&](auto* p) { return up.contains(p) && !node.contains(p); })) {
+      std::vector<const property_base*> reached;
+      if (auto const edges{m_reverse_edges.find(const_cast<property_base*>(prop))}; edges != m_reverse_edges.end())
+        std::ranges::copy_if(edges->second, std::back_inserter(reached), [&](auto const* src) { return node.contains(src); });
+      if (reached.empty())
+        continue;
+      auto const declared{m_read_declarations.find(prop)};
+      if (declared == m_read_declarations.end())
+        throw missing_partial(what, plan.targets, reached.front(), prop, via, "its callback declares no reads");
+      auto* mat{declared->second.first};
+      auto const& d{*declared->second.second};
+      std::vector<derivative_step> steps;
+      std::vector<const property_base*> sources;
+      std::size_t rank{0};
+      auto const take{[&](input_wire_base const* input, const property_base* own, const property_base* src) {
+        sources.push_back(src);
+        if (!node.contains(src))
+          return;
+        auto const same_read{[&](auto const& p) { return p.input == input && p.own == own; }};
+        auto const& partials{mat->partials()};
+        if (auto const p{std::ranges::find_if(partials, [&](auto const& q) { return q.output == prop && same_read(q); })};
+            p != partials.end()) {
+          steps.push_back({0, node.at(src), p->block.get(), mat, p->callback});
+          rank = p->block->out_rank();
+          via.try_emplace(prop, src);
+        } else if (!std::ranges::any_of(mat->independent_reads(), [&](auto const& i) { return i.callback == d.callback && same_read(i); })) {
+          throw missing_partial(what, plan.targets, src, prop, via, "its callback declares neither partials() nor independent_of() for that read");
+        }
+      }};
+      for (auto const* input : d.inputs)
+        if (input->edge_kind() == EdgeKind::Global)
+          if (auto const* src{find_in_graph(input->source_owner(), input->source_name())})
+            take(input, nullptr, src);
+      for (auto const* own : d.own_reads)
+        take(nullptr, own, own);
+      for (auto const* src : reached)
+        if (!std::ranges::contains(sources, src) && !std::ranges::contains(d.outputs, src))
+          throw missing_partial(what, plan.targets, src, prop, via, "it is reached over a '" + std::string{to_string(kind_of(src, prop))} +
+                                                                        "' edge, not a declared read, which carries no partials");
+      if (steps.empty())
+        continue;
+      auto const index{plan.ranks.size()};
+      plan.ranks.push_back(rank);
+      for (auto const& step : steps)
+        plan.steps.push_back({index, step.in, step.block, step.material, step.callback});
+      node.emplace(prop, index);
+    }
+    for (auto const* target : plan.targets) {
+      auto const it{node.find(target)};
+      plan.target_nodes.push_back(it != node.end() ? std::optional{it->second} : std::nullopt);
+    }
+    // only steps toward a target: another output of the same callback (stress beside a residual) leads nowhere
+    std::vector<char> needed(plan.ranks.size(), 0);
+    for (auto const& t : plan.target_nodes)
+      if (t)
+        needed[*t] = 1;
+    for (auto it{plan.steps.rbegin()}; it != plan.steps.rend(); ++it)
+      if (needed[it->out])
+        needed[it->in] = 1;
+    std::erase_if(plan.steps, [&](auto const& step) { return !needed[step.out]; });
+    return plan;
+  }
+
+  /// Allocates the D a plan writes (the requested target's in `target`, the slot's value) and lists its ops: per
+  /// step and seed reaching its read, D[out] = or += P D[in], straight from P when the read is that seed.
+  void compile(derivative_plan& plan, value_holder* target) {
+    auto const seeds{plan.seed_ranks.size()};
+    auto const nodes{plan.ranks.size()};
+    check_ranks(plan);
+    plan.D.assign(nodes, std::vector<value_holder*>(seeds, nullptr));
+    auto const scratch{[&](std::size_t a, std::size_t b, std::size_t s, bool assign) -> void* {
+      if (!derivatives::needs_scratch(a, b, s, assign))
+        return nullptr;
+      auto& value{plan.scratch[(a + s) / 2]};
+      if (!value)
+        value = derivatives::make_value<value_type, Traits::Dim>(a + s);
+      return value->object();
+    }};
+    auto const target_node{target ? plan.target_nodes.front() : std::nullopt};
+    auto const buffer{[&](std::size_t k, std::size_t j) {
+      if (!plan.D[k][j]) {
+        if (target_node == k && j == 0) {
+          plan.D[k][j] = target;
+        } else {
+          plan.values.push_back(derivatives::make_value<value_type, Traits::Dim>(plan.ranks[k] + plan.seed_ranks[j]));
+          plan.D[k][j] = plan.values.back().get();
+        }
+      }
+      return plan.D[k][j];
+    }};
+    std::vector<std::vector<char>> reached(nodes, std::vector<char>(seeds, 0)), written(nodes, std::vector<char>(seeds, 0));
+    for (std::size_t j{0}; j < seeds; ++j) // the seeds' own D: the identity
+      reached[j][j] = written[j][j] = 1;
+    for (auto const& step : plan.steps)
+      for (std::size_t j{0}; j < seeds; ++j) {
+        if (!reached[step.in][j])
+          continue;
+        bool const assign{!written[step.out][j]};
+        reached[step.out][j] = written[step.out][j] = 1;
+        auto const a{plan.ranks[step.out]}, s{plan.seed_ranks[j]};
+        auto* out{buffer(step.out, j)};
+        if (step.in == j)
+          plan.ops.push_back({derivatives::seed_kernel_for<value_type, Traits::Dim>(a, s, assign), step.block->object(), nullptr, out->object()});
+        else
+          plan.ops.push_back({derivatives::step_kernel_for<value_type, Traits::Dim>(a, plan.ranks[step.in], s, assign), step.block->object(),
+                              plan.D[step.in][j]->object(), out->object(), scratch(a, plan.ranks[step.in], s, assign)});
+      }
+    auto const identity{[&](std::size_t j) {
+      if (!plan.D[j][j])
+        derivatives::identity<value_type, Traits::Dim>(plan.seed_ranks[j], buffer(j, j)->object());
+      return plan.D[j][j];
+    }};
+    auto const zeroed{[&](std::size_t k) { // D[k][p] written by a fold, maybe by no op
+      auto* d{buffer(k, 0)};
+      if (!written[k][0]) {
+        written[k][0] = 1;
+        plan.zeroed.push_back(d);
+      }
+      return d;
+    }};
+    for (auto& f : plan.folds) {
+      auto const& s{*f.system};
+      for (std::size_t i{0}; i < s.residuals.size(); ++i)
+        if (auto const r{plan.target_nodes[f.first_target + i]}) {
+          zeroed(*r);
+          for (std::size_t u{0}; u < s.unknowns.size(); ++u)
+            if (!plan.D[*r][f.first_seed + u]) // no path from the unknown: a zero block of J
+              buffer(*r, f.first_seed + u); // zero from make_value
+        }
+      for (auto const k : f.nodes)
+        for (std::size_t u{0}; u < s.unknowns.size(); ++u) {
+          auto const j{f.first_seed + u};
+          auto* dx{k == j ? identity(j) : (reached[k][j] ? plan.D[k][j] : nullptr)};
+          if (!dx)
+            continue;
+          f.ops.push_back({derivatives::step_kernel_for<value_type, Traits::Dim>(plan.ranks[k], s.ranks[u], plan.seed_ranks[0], false),
+                           dx->object(), f.dx[u]->object(), zeroed(k)->object(), scratch(plan.ranks[k], s.ranks[u], plan.seed_ranks[0], false)});
+        }
+    }
+    if (target_node == 0) // the seed itself: its identity, written into the target
+      identity(0);
+  }
+
+  /// The ranks the kernels cast the values to: each partial's against its nodes, each system's against its seeds.
+  static void check_ranks(derivative_plan const& plan) {
+    auto const mismatch{[](std::string const& what, std::size_t has, std::size_t plan_rank) {
+      return std::logic_error(std::format("derivative plan: {} has rank {}, its node rank {}", what, has, plan_rank));
+    }};
+    for (auto const& step : plan.steps) {
+      if (step.block->out_rank() != plan.ranks[step.out])
+        throw mismatch("the output of a partial", step.block->out_rank(), plan.ranks[step.out]);
+      if (step.block->in_rank() != plan.ranks[step.in])
+        throw mismatch("the read of a partial", step.block->in_rank(), plan.ranks[step.in]);
+    }
+    for (auto const& f : plan.folds) {
+      auto const& s{*f.system};
+      for (std::size_t u{0}; u < s.unknowns.size(); ++u)
+        if (s.ranks[u] != plan.seed_ranks[f.first_seed + u])
+          throw mismatch("an unknown", s.ranks[u], plan.seed_ranks[f.first_seed + u]);
+      for (std::size_t i{0}; i < s.residuals.size(); ++i)
+        if (auto const n{plan.target_nodes[f.first_target + i]}; n && s.residual_ranks[i] != plan.ranks[*n])
+          throw mismatch("a residual", s.residual_ranks[i], plan.ranks[*n]);
+    }
+  }
+
+  /// The ops of a plan, after zeroing the D only folds write.
+  static void accumulate(derivative_plan& plan) {
+    for (auto* d : plan.zeroed)
+      d->zero();
+    for (auto const& op : plan.ops)
+      op.kernel(op.P, op.in, op.out, op.scratch);
+  }
+
+  /// Per system passed, at its converged point R(x, p) = 0: dx/dp = -J^-1 B with J = dR/dx and B = dR/dp, then
+  /// D[node][p] += D[node][x] dx/dp for the nodes read later. A scalar system divides; others solve in Mandel
+  /// components. A singular J throws a cutback_error.
+  static void fold(derivative_plan& plan) {
+    auto const p_rank{plan.seed_ranks[0]};
+    for (auto& f : plan.folds) {
+      auto const& s{*f.system};
+      auto const singular{[&] { return cutback_error(std::format("derivative(): system '{}' has a singular Jacobian at its converged point", s.name)); }};
+      if (s.scalar) {
+        auto const node{plan.target_nodes[f.first_target]};
+        if (!node)
+          throw singular();
+        auto& dx{*f.dx.front()};
+        f.scale(value_type{-1} / *plan.D[*node][f.first_seed]->data(), plan.D[*node][0]->object(), dx.object());
+        if (!std::all_of(dx.data(), dx.data() + derivatives::full_size<Traits::Dim>(p_rank), [](value_type v) { return std::isfinite(v); }))
+          throw singular();
+      } else {
+        f.J.setZero();
+        f.B.setZero();
+        for (std::size_t i{0}; i < s.residuals.size(); ++i)
+          if (auto const node{plan.target_nodes[f.first_target + i]}) {
+            for (std::size_t u{0}; u < s.unknowns.size(); ++u)
+              pack_block(f.J, s.rows[i], s.columns[u], s.residual_ranks[i], s.ranks[u], plan.D[*node][f.first_seed + u]->data());
+            pack_block(f.B, s.rows[i], 0, s.residual_ranks[i], p_rank, plan.D[*node][0]->data());
+          }
+        f.lu.compute(f.J);
+        f.dx_dp = f.lu.solve(f.B);
+        if (!f.dx_dp.allFinite())
+          throw singular();
+        f.dx_dp = -f.dx_dp;
+        for (std::size_t u{0}; u < s.unknowns.size(); ++u) {
+          std::array<value_type, derivatives::width<Traits::Dim>(2) * derivatives::width<Traits::Dim>(4)> packed;
+          auto const rows{static_cast<Eigen::Index>(derivatives::width<Traits::Dim>(s.ranks[u]))};
+          auto const cols{f.dx_dp.cols()};
+          Eigen::Map<matrix>(packed.data(), rows, cols) = f.dx_dp.middleRows(s.columns[u], rows);
+          derivatives::unpack_full<Traits::Dim>(s.ranks[u], p_rank, packed.data(), f.dx[u]->data());
+        }
+      }
+      for (auto const& op : f.ops)
+        op.kernel(op.P, op.in, op.out, op.scratch);
+    }
+  }
+
+  edge_kind kind_of(const property_base* from, const property_base* to) const {
+    auto const it{std::ranges::find_if(m_edges, [&](auto const& e) { return e.from == from && e.to == to; })};
+    return it != m_edges.end() ? it->kind : edge_kind::dependency;
+  }
+
+  /// Names the path seed -> ... -> from -> at -> ... -> target in the error, toward the first target behind `at`.
+  std::logic_error missing_partial(std::string const& what, std::vector<const property_base*> const& targets, const property_base* from,
+                                   const property_base* at, const std::unordered_map<const property_base*, const property_base*>& via,
+                                   const std::string& why) const {
+    std::vector<const property_base*> path{from, at};
+    for (auto it{via.find(from)}; it != via.end(); it = via.find(it->second))
+      path.insert(path.begin(), it->second);
+    auto const target{std::ranges::find_if(targets, [&](auto const* t) { return upstream_of(t).contains(const_cast<property_base*>(at)); })};
+    if (target != targets.end()) {
+      auto const& up{upstream_of(*target)};
+      for (auto const* p{at}; p != *target;) { // any edge into the target's upstream leads on to the target
+        auto const next{std::ranges::find_if(m_edges, [&](auto const& e) {
+          return e.from == p && e.kind != edge_kind::local && up.contains(const_cast<property_base*>(e.to));
+        })};
+        if (next == m_edges.end())
+          break;
+        path.push_back(p = next->to);
+      }
+    }
+    std::string text;
+    for (auto const* p : path)
+      text += (text.empty() ? "" : " -> ") + prop_key(p->traits().id);
+    return std::logic_error(what + " passes '" + prop_key(at->traits().id) + "' from '" + prop_key(from->traits().id) + "', but " + why +
+                            "; path " + text);
+  }
+
+  std::vector<derivative_plan> m_plans;
+  std::unordered_map<const property_base*, std::pair<material_interface_type*, const read_declaration*>> m_read_declarations;
+  std::unordered_set<const property_base*> m_partials_wrapped; ///< callbacks wrapped by index_partials()
+
   std::vector<material_interface_type*> m_execution_order;
   std::vector<property_base*> m_property_execution_order;
   std::unordered_map<std::string, property_base*> m_key_to_prop;  // for string-based find
@@ -752,6 +1803,7 @@ private:
   bool m_verify{NUMSIM_MATERIALS_DEBUG_CHECKS != 0};
   bool m_fold{true};
   bool m_running{false}; ///< an update is in progress
+  bool m_evaluated{false}; ///< an update() ran to its end since the last failure
   bool m_failed{false};  ///< the last update threw
   std::unique_ptr<bool> m_check_reads{std::make_unique<bool>(true)}; ///< stable address for the wrapped callbacks
 };
