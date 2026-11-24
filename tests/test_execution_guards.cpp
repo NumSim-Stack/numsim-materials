@@ -60,7 +60,7 @@ private:
 };
 
 /// Calls back into its context from its callback: update() ("update"), or a perturbation through get_mutable()
-/// and update_property() of "probe::value", as numerical_diff_checker does ("reevaluate").
+/// and update_property() of "probe::value" ("reevaluate").
 template <typename Traits>
 class caller final : public nm::material_base<caller<Traits>, Traits> {
 public:

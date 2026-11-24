@@ -835,7 +835,7 @@ traceless in both index pairs is not sufficient, and the failure is total rather
 than marginal.
 
 The closed forms are also checked continuously against central differences
-through the graph by `tangent_checker` — see `plasticity.md` §5 for the load
+along the host path by `check_derivative()` — see `plasticity.md` §5 for the load
 paths and what that check can and cannot see.
 
 ---

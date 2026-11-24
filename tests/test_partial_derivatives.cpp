@@ -1,10 +1,17 @@
 #include <gtest/gtest.h>
+#include <pthread.h>
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <functional>
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <utility>
+#include <vector>
+#include <Eigen/Core>
 #include <tmech/tmech.h>
+#include "numsim-materials/core/derivative_kernels.h"
 #include "numsim-materials/core/material_base.h"
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/core/parameter_helpers.h"
@@ -12,6 +19,7 @@
 #include "numsim-materials/core/tensor_identities.h"
 #include "numsim-materials/driver/material_point.h"
 #include "numsim-materials/materials/constant_scalar.h"
+#include "numsim-materials/materials/elastic_strain.h"
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/materials/thermal_eigenstrain.h"
 #include "numsim-materials/umat/external_state_source.h"
@@ -26,6 +34,7 @@ using T = policy::value_type;
 using tensor2 = tmech::tensor<T, 3, 2>;
 using tensor4 = tmech::tensor<T, 3, 4>;
 using tensor6 = tmech::tensor<T, 3, 6>;
+using tensor8 = tmech::tensor<T, 3, 8>;
 using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
 
@@ -131,7 +140,22 @@ struct wrong_map { // declares A4 for B4 : x
   static tensor4 partial(tensor2 const &) { return A4; }
 };
 
-/// y = Law::value(x) for x read from "x_source"; "partials" is "declared" (the default), "independent" or "none".
+tensor2 const N2{0.9, 0.3, -0.2, 0.1, 1.2, 0.4, -0.5, 0.2, 0.8}; // not symmetric
+struct congruence { // tensor2 of tensor2: y = N x N^T, partial N_ik N_jl, symmetric in neither index pair
+  using in = tensor2;
+  using out = tensor2;
+  static tensor2 value(tensor2 const &x) { return tensor2{N2 * x * tmech::trans(N2)}; }
+  static tensor4 partial(tensor2 const &) { return tensor4{tmech::otimesu(N2, N2)}; }
+};
+struct map_y { // tensor4 of tensor4: z = A : Y
+  using in = tensor4;
+  using out = tensor4;
+  static tensor4 value(tensor4 const &Y) { return tmech::dcontract(A4, Y); }
+  static tensor8 partial(tensor4 const &) { return tmech::outer_product<tmech::sequence<1, 2, 5, 6>, tmech::sequence<3, 4, 7, 8>>(A4, Is); }
+};
+
+/// y = Law::value(x) for x read from "x_source"; "partials" is "declared" (the default), "independent", "on_request"
+/// (fill() fills it), "fill_only" (fill() without partials()) or "none".
 template <typename Law, typename Traits>
 class law_node final : public nm::material_base<law_node<Law, Traits>, Traits> {
 public:
@@ -146,10 +170,12 @@ public:
         m_mode(base::template get_parameter<std::string>("partials")) {
     auto handle{base::add_callback(&law_node::compute, m_y)};
     handle.reads(m_x);
-    if (m_mode == "declared")
+    if (m_mode == "declared" || m_mode == "on_request")
       handle.partials(m_y, m_x);
     else if (m_mode == "independent")
       handle.independent_of(m_x);
+    if (m_mode == "on_request" || m_mode == "fill_only")
+      handle.fills_partials(&law_node::fill);
   }
 
   static input_parameter_controller parameters() {
@@ -167,6 +193,14 @@ public:
       hook();
     m_y = Law::value(m_x.get());
     if (base::want_partials()) {
+      base::partial(m_y, m_x) = Law::partial(m_x.get());
+      ++m_fills;
+    }
+  }
+
+  /// "on_request": the partial, at the value compute() left.
+  void fill() {
+    if (base::want_partial(m_y, m_x)) {
       base::partial(m_y, m_x) = Law::partial(m_x.get());
       ++m_fills;
     }
@@ -211,6 +245,8 @@ public:
       handle.partials(m_y, m_x).independent_of(m_x);
     else if (mistake == "other_output")
       handle.partials(m_z, m_x);
+    else if (mistake == "handle_undeclared")
+      std::ignore = base::partial_of(m_y, m_x);
   }
 
   static input_parameter_controller parameters() {
@@ -227,6 +263,51 @@ private:
   tensor2 &m_z;
   nm::input_property<tensor2, nm::property_traits> const &m_x;
   nm::input_property<T, nm::property_traits> const &m_w;
+};
+
+/// y = x + w I with partials on request through handles; counts the blocks each fill wrote.
+template <typename Traits>
+class two_reads final : public nm::material_base<two_reads<Traits>, Traits> {
+public:
+  using base = nm::material_base<two_reads<Traits>, Traits>;
+  using input_parameter_controller = typename base::input_parameter_controller;
+
+  template <typename... Args>
+  explicit two_reads(Args &&...args)
+      : base(std::forward<Args>(args)...), m_y(base::template add_output<tensor2>("y")),
+        m_x(base::template add_input<tensor2>("strain", "strain", nm::EdgeKind::Global)),
+        m_w(base::template add_input<T>("temperature", "state", nm::EdgeKind::Global)) {
+    base::add_callback(&two_reads::compute, m_y).reads(m_x, m_w).partials(m_y, m_x, m_w).fills_partials(&two_reads::fill);
+    m_dy_dx = base::partial_of(m_y, m_x);
+    m_dy_dw = base::partial_of(m_y, m_w);
+  }
+
+  static input_parameter_controller parameters() { return base::parameters(); }
+
+  void compute() { m_y = m_x.get() + m_w.get() * I; }
+
+  void fill() {
+    if (m_dy_dx.wanted()) {
+      m_dy_dx.value() = Is;
+      ++m_x_fills;
+    }
+    if (m_dy_dw.wanted()) {
+      m_dy_dw.value() = I;
+      ++m_w_fills;
+    }
+  }
+
+  int x_fills() const noexcept { return m_x_fills; }
+  int w_fills() const noexcept { return m_w_fills; }
+
+private:
+  tensor2 &m_y;
+  nm::input_property<tensor2, nm::property_traits> const &m_x;
+  nm::input_property<T, nm::property_traits> const &m_w;
+  typename base::template partial_handle<tensor2, tensor2> m_dy_dx;
+  typename base::template partial_handle<tensor2, T> m_dy_dw;
+  int m_x_fills{0};
+  int m_w_fills{0};
 };
 
 /// y = a::y + b::y, both read and differentiated.
@@ -489,7 +570,7 @@ TEST(PartialDerivatives, TheResultTypeMustMatchTheRanks) {
 }
 
 TEST(PartialDerivatives, PartialsAreDeclaredForReadsAndOutputsOfTheCallback) {
-  for (auto const *mistake : {"unread", "twice", "both", "other_output", "before_reads"}) {
+  for (auto const *mistake : {"unread", "twice", "both", "other_output", "before_reads", "handle_undeclared"}) {
     chain c;
     param_type p;
     p.insert<std::string>("name", "m");
@@ -651,6 +732,128 @@ TEST(PartialDerivatives, NoPartialsAreComputedWithoutARequest) {
   EXPECT_EQ(q.fills(), 0) << "q is off the requested path";
 }
 
+// --- partials filled on request (callback_handle::fills_partials()) ---
+
+TEST(PartialDerivatives, PartialsOnRequestAreFilledOncePerUpdateOfARequestedDerivative) {
+  chain c;
+  auto &a{c.node<map_a>("a", "strain::strain", "on_request")};
+  auto &b{c.node<map_b>("b", "a::y", "on_request")};
+  auto &q{c.node<map_b>("q", "strain::strain", "on_request")};
+  c.ctx.finalize();
+  for (int i{0}; i < 3; ++i)
+    c.load(x0, s0);
+  EXPECT_EQ(a.fills() + b.fills() + q.fills(), 0) << "update() alone fills nothing";
+
+  auto const &d{c.ctx.derivative<tensor4>("b", "y", "strain", "strain")};
+  EXPECT_EQ(a.fills(), 1) << "filled at once at the held state";
+  EXPECT_EQ(b.fills(), 1);
+  EXPECT_LT(distance(d, tensor4{tmech::dcontract(B4, A4)}), 1e-12);
+  for (int i{0}; i < 2; ++i)
+    c.load(x0, s0);
+  EXPECT_EQ(a.fills(), 3);
+  EXPECT_EQ(b.fills(), 3);
+  EXPECT_EQ(q.fills(), 0) << "q is off the requested path";
+  EXPECT_EQ(a.runs(), 5) << "the values are not recomputed for the partials";
+}
+
+TEST(PartialDerivatives, PartialsOnRequestFollowTheState) {
+  chain c;
+  c.node<norm_trace>("n", "strain::strain", "on_request");
+  c.node<square>("s", "n::y", "on_request");
+  c.ctx.finalize();
+  auto const &d{c.ctx.derivative<tensor2>("s", "y", "strain", "strain")};
+  for (T const k : {T{1}, T{-2}}) {
+    tensor2 const x{k * x0};
+    c.load(x, s0);
+    EXPECT_LT(distance(d, tensor2{2 * norm_trace::value(x) * norm_trace::partial(x)}), 1e-12) << k;
+  }
+}
+
+TEST(PartialDerivatives, AConstantCallbackFillsItsPartialsOnRequestOnce) {
+  chain c;
+  param_type p;
+  p.insert<std::string>("name", "c");
+  p.insert<T>("value", s0);
+  c.ctx.create<nm::constant_scalar<policy>>(p);
+  auto &s{c.node<square>("s", "c::value", "on_request")};
+  c.ctx.finalize();
+  auto const &d{c.ctx.derivative<T>("s", "y", "c", "value")};
+  for (int i{0}; i < 3; ++i)
+    c.load(x0, s0);
+  EXPECT_NEAR(d, 2 * s0, 1e-12);
+  EXPECT_EQ(s.fills(), 1) << "it did not run again, so its partials stand";
+}
+
+TEST(PartialDerivatives, TheFiniteDifferenceCheckFillsPartialsOnRequest) {
+  chain c;
+  c.node<map_a>("a", "strain::strain", "on_request");
+  c.node<wrong_map>("w", "strain::strain", "on_request");
+  c.ctx.finalize();
+  c.load(x0, s0);
+  EXPECT_TRUE(nm::check_partials(c.ctx, "a").empty());
+  auto const mismatches{nm::check_partials(c.ctx, "w")};
+  ASSERT_FALSE(mismatches.empty());
+  EXPECT_TRUE(mismatches.front().contains("w::y")) << mismatches.front();
+}
+
+TEST(PartialDerivatives, AHandleFillsOnlyTheBlockOfARequestedDerivative) {
+  chain c;
+  param_type p;
+  p.insert<std::string>("name", "t");
+  auto &t{c.ctx.create<two_reads<policy>>(p)};
+  c.ctx.finalize();
+  auto const &dw{c.ctx.derivative<tensor2>("t", "y", "temperature", "state")};
+  for (int i{0}; i < 3; ++i)
+    c.load(x0, s0);
+  EXPECT_LT(distance(dw, I), 1e-12);
+  EXPECT_EQ(t.w_fills(), 3) << "once per update";
+  EXPECT_EQ(t.x_fills(), 0) << "no plan reads d y / d strain";
+
+  auto const &dx{c.ctx.derivative<tensor4>("t", "y", "strain", "strain")};
+  c.load(x0, s0);
+  EXPECT_LT(distance(dx, Is), 1e-12);
+  EXPECT_EQ(t.x_fills(), 2);
+}
+
+TEST(PartialDerivatives, ACallbackThatThrowsLeavesItsPartialsToBeFilledAgain) {
+  chain c;
+  param_type p;
+  p.insert<std::string>("name", "t");
+  auto &t{c.ctx.create<two_reads<policy>>(p)};
+  c.ctx.finalize();
+  (void)c.ctx.derivative<tensor2>("t", "y", "temperature", "state");
+  c.load(x0, s0);
+  ASSERT_EQ(t.w_fills(), 1);
+  auto const *callback{t.partials().front().callback};
+  auto const *fill{t.fill_of(callback)};
+  ASSERT_NE(fill, nullptr);
+  t.fill_partials(*fill);
+  EXPECT_EQ(t.w_fills(), 1) << "filled since the callback last ran";
+  EXPECT_THROW(t.run_callback(callback, [] { throw std::runtime_error("cutback"); }, fill), std::runtime_error);
+  t.fill_partials(*fill);
+  EXPECT_EQ(t.w_fills(), 2) << "a throwing run may have changed what the partials depend on";
+}
+
+TEST(PartialDerivatives, AnUnsetHandleIsNotWanted) {
+  using handle = two_reads<policy>::base::partial_handle<tensor2, T>;
+  EXPECT_FALSE(handle{}.wanted());
+}
+
+TEST(PartialDerivatives, TheCheckFillsEveryBlockThroughHandles) {
+  chain c;
+  param_type p;
+  p.insert<std::string>("name", "t");
+  c.ctx.create<two_reads<policy>>(p);
+  c.ctx.finalize();
+  c.load(x0, s0);
+  EXPECT_TRUE(nm::check_partials(c.ctx, "t").empty());
+}
+
+TEST(PartialDerivatives, FillsPartialsWithoutDeclaredPartialsThrows) {
+  chain c;
+  EXPECT_THROW(c.node<map_a>("a", "strain::strain", "fill_only"), std::logic_error);
+}
+
 // --- the per-node finite-difference check ---
 
 TEST(PartialDerivatives, TheFiniteDifferenceCheckPassesCorrectPartials) {
@@ -694,6 +897,30 @@ TEST(PartialDerivatives, TheFiniteDifferenceCheckNamesAWrongPartial) {
   EXPECT_LT(distance(c.ctx.get<tensor2>("w", "y"), wrong_map::value(x0)), 1e-15) << "the check restores the state";
 }
 
+TEST(PartialDerivatives, APartialWithoutMinorSymmetryFailsTheFiniteDifferenceCheck) {
+  chain c;
+  c.node<congruence>("n", "strain::strain");
+  c.ctx.finalize();
+  c.load(x0, s0);
+  auto const mismatches{nm::check_partials(c.ctx, "n")};
+  ASSERT_FALSE(mismatches.empty()) << "a Mandel comparison projects the partial onto its symmetric part";
+  EXPECT_TRUE(mismatches.front().contains("minor-symmetric")) << mismatches.front();
+}
+
+TEST(PartialDerivatives, TensorOfFourthOrderTensorOfFourthOrderTensor) {
+  chain c;
+  c.node<dyad>("y", "strain::strain");
+  c.node<map_y>("z", "y::y");
+  c.node<contract_e>("w", "z::y");
+  c.ctx.finalize();
+  EXPECT_TRUE(nm::check_partials(c.ctx, "z").empty());
+  auto const &dw{c.ctx.derivative<tensor6>("w", "y", "y", "y")};
+  auto const &dz{c.ctx.derivative<tensor8>("z", "y", "y", "y")};
+  c.load(x0, s0);
+  EXPECT_LT(distance(dw, tensor6{tmech::otimes(A4, E2)}), 1e-12) << "w = A : Y : E through a tensor4 seed";
+  EXPECT_LT(distance(dz, map_y::partial(tensor4{})), 1e-12);
+}
+
 // --- thermal eigenstrain with linear elasticity: the first DDSDDT ---
 
 constexpr T K{100}, G{40}, alpha{1e-5}, T_ref{20};
@@ -720,9 +947,13 @@ struct thermoelastic {
     p.insert<T>("reference_temperature", T_ref);
     ctx.create<nm::thermal_eigenstrain<policy>>(p);
     p.clear();
+    p.insert<std::string>("name", "elastic_strain");
+    p.insert<std::string>("strain_source", "strain");
+    p.insert<std::vector<std::string>>("eigenstrain_sources", {"thermal"});
+    ctx.create<nm::elastic_strain<policy>>(p);
+    p.clear();
     p.insert<std::string>("name", "elastic");
-    p.insert<std::string>("strain_producer_name", "strain");
-    p.insert<std::string>("eigenstrain_source", "thermal");
+    p.insert<std::string>("strain_producer_name", "elastic_strain");
     p.insert<T>("K", K);
     p.insert<T>("G", G);
     ctx.create<nm::linear_elasticity<policy>>(p);
@@ -772,9 +1003,236 @@ TEST(PartialDerivatives, TheMaterialPointNamesUnknownInputs) {
 TEST(PartialDerivatives, ThermoelasticPartialsPassTheFiniteDifferenceCheck) {
   thermoelastic m;
   m.evaluate(sym(1e-3, -2e-4, 5e-4, 1e-4, -3e-4, 2e-4), 60);
-  for (auto const *name : {"thermal", "elastic"})
+  for (auto const *name : {"thermal", "elastic_strain", "elastic"})
     for (auto const &mismatch : nm::check_partials(m.ctx, name))
       ADD_FAILURE() << mismatch;
 }
 
+// --- a declared partial is filled only when a requested derivative uses it ---
+
+// Largest component of the packed partial d `output` / d `read` that `material` declares for read_name.
+T filled(thermoelastic &m, std::string const &read_name, std::string const &material = "elastic") {
+  auto *mat{m.ctx.find(material)};
+  for (auto const &p : mat->partials()) {
+    bool const own{p.own && p.own->traits().id.name == read_name};
+    bool const in{p.input && p.input->source_name() == read_name};
+    if (!own && !in)
+      continue;
+    std::vector<T> packed(p.block->rows() * p.block->cols());
+    p.block->pack(packed.data());
+    T largest{0};
+    for (auto const v : packed)
+      largest = std::max(largest, std::abs(v));
+    return largest;
+  }
+  throw std::logic_error("no partial for " + read_name);
+}
+
+TEST(PartialDerivatives, APartialNoRequestedDerivativeUsesIsNotFilled) {
+  thermoelastic m;
+  auto const &ddsdde{m.point->derivative<tensor4>("elastic::stress", "strain")};
+  tensor2 const eps{sym(1e-3, -2e-4, 5e-4, 1e-4, -3e-4, 2e-4)};
+  m.evaluate(eps, T_ref);
+  auto const &tangent{m.point->output<tensor4>("elastic::tangent")};
+  EXPECT_LT(tmech::norm(tensor4{ddsdde - tangent}), 1e-12 * tmech::norm(tangent));
+  EXPECT_GT(filled(m, "strain"), 0);
+  EXPECT_EQ(filled(m, "tangent"), 0) << "d stress / d C is not on a requested path";
+  EXPECT_GT(filled(m, "strain", "elastic_strain"), 0);
+  EXPECT_EQ(filled(m, "eigenstrain", "elastic_strain"), 0) << "nor d elastic strain / d eigenstrain";
+}
+
+TEST(PartialDerivatives, ADerivativeThroughTheTangentFillsItsPartial) {
+  thermoelastic m;
+  auto const &ddsdde{m.point->derivative<tensor4>("elastic::stress", "strain")};
+  auto const &dsdc{m.point->derivative<tensor6>("elastic::stress", "elastic::tangent")};
+  tensor2 const eps{sym(1e-3, -2e-4, 5e-4, 1e-4, -3e-4, 2e-4)};
+  m.evaluate(eps, T_ref);
+  auto const &tangent{m.point->output<tensor4>("elastic::tangent")};
+  EXPECT_LT(tmech::norm(tensor4{ddsdde - tangent}), 1e-12 * tmech::norm(tangent));
+  EXPECT_LT(tmech::norm(tensor6{dsdc - tensor6{tmech::otimes(Is, eps)}}), 1e-12 * tmech::norm(dsdc));
+  EXPECT_GT(filled(m, "tangent"), 0);
+}
+
+// --- pack and unpack against the index-loop definition ---
+
+// The definition pack and unpack replaced: each index pair projected onto its Mandel component.
+template <std::size_t Dim, std::size_t Rank>
+tmech::tensor<T, Dim, Rank> minor_symmetric(unsigned seed) {
+  tmech::tensor<T, Dim, Rank> t;
+  std::array<std::size_t, Rank> idx{};
+  auto value{[&](std::array<std::size_t, Rank> i) {
+    unsigned h{seed};
+    for (std::size_t k{0}; k < Rank; k += 2) {
+      auto const lo{std::min(i[k], i[k + 1])}, hi{std::max(i[k], i[k + 1])};
+      h = h * 31u + static_cast<unsigned>(lo * 7 + hi * 3 + 1);
+    }
+    return T(h % 1000u) / 100 - 5;
+  }};
+  std::size_t total{1};
+  for (std::size_t k{0}; k < Rank; ++k)
+    total *= Dim;
+  for (std::size_t flat{0}; flat < total; ++flat) {
+    for (std::size_t k{Rank}, rest{flat}; k-- > 0; rest /= Dim)
+      idx[k] = rest % Dim;
+    [&]<std::size_t... I>(std::index_sequence<I...>) { t(idx[I]...) = value(idx); }(std::make_index_sequence<Rank>{});
+  }
+  return t;
+}
+
+template <std::size_t Dim, std::size_t Rank, std::size_t OutRank>
+void expect_round_trip() {
+  namespace dv = numsim::materials::derivatives;
+  auto const t{minor_symmetric<Dim, Rank>(Rank + Dim)};
+  constexpr std::size_t rows{dv::width<Dim>(OutRank)}, cols{dv::width<Dim>(Rank - OutRank)};
+  std::vector<T> block(rows * cols);
+  dv::pack<Dim, OutRank>(t, block.data());
+  // Mandel components: a sqrt(2) per off-diagonal pair makes A : A the sum of squares of the block.
+  T squares{0};
+  for (auto const v : block)
+    squares += v * v;
+  T full{0};
+  std::size_t total{1};
+  for (std::size_t k{0}; k < Rank; ++k)
+    total *= Dim;
+  for (std::size_t k{0}; k < total; ++k)
+    full += t.raw_data()[k] * t.raw_data()[k];
+  EXPECT_NEAR(squares, full, 1e-10 * full);
+  tmech::tensor<T, Dim, Rank> back;
+  dv::unpack<Dim, OutRank>(block.data(), back);
+  for (std::size_t k{0}; k < total; ++k)
+    EXPECT_NEAR(back.raw_data()[k], t.raw_data()[k], 1e-12) << "rank " << Rank << " dim " << Dim << " flat " << k;
+}
+
+TEST(PartialDerivatives, PackAndUnpackRoundTripMinorSymmetricTensors) {
+  expect_round_trip<3, 2, 0>();
+  expect_round_trip<3, 4, 2>();
+  expect_round_trip<3, 4, 0>();
+  expect_round_trip<3, 6, 2>();
+  expect_round_trip<3, 6, 4>();
+  expect_round_trip<3, 8, 4>();
+  expect_round_trip<2, 2, 0>();
+  expect_round_trip<2, 4, 2>();
+  expect_round_trip<2, 6, 2>();
+  expect_round_trip<2, 6, 4>();
+}
+
 } // namespace
+
+namespace {
+/// Entries of a value of rank r in full notation: Dim^r.
+template <std::size_t Dim>
+std::size_t entries(std::size_t rank) {
+  std::size_t n{1};
+  for (std::size_t k{0}; k < rank; ++k)
+    n *= Dim;
+  return n;
+}
+
+/// The tmech product of a kernel is the chain rule in full notation: out (Dim^a x Dim^s) [+]= P (Dim^a x Dim^b) *
+/// in (Dim^b x Dim^s), all row-major, tmech's storage order.
+template <std::size_t Dim>
+void expect_kernels_match_the_row_major_product() {
+  using matrix = Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
+  auto const random{[](std::size_t rank) {
+    auto v{nm::derivatives::make_value<T, Dim>(rank)};
+    Eigen::Map<matrix>(v->data(), 1, static_cast<Eigen::Index>(entries<Dim>(rank))) = matrix::Random(1, static_cast<Eigen::Index>(entries<Dim>(rank)));
+    return v;
+  }};
+  for (std::size_t const a : {0, 2, 4})
+    for (std::size_t const b : {0, 2, 4})
+      for (std::size_t const s : {0, 2, 4})
+        for (bool const assign : {false, true}) {
+          auto const rows{static_cast<Eigen::Index>(entries<Dim>(a))}, inner{static_cast<Eigen::Index>(entries<Dim>(b))},
+              cols{static_cast<Eigen::Index>(entries<Dim>(s))};
+          auto P{random(a + b)}, in{random(b + s)}, out{random(a + s)};
+          Eigen::Map<matrix const> const p{P->data(), rows, inner}, d{in->data(), inner, cols};
+          Eigen::Map<matrix> o{out->data(), rows, cols};
+          matrix const expected{assign ? matrix{p * d} : matrix{o + p * d}};
+          auto scratch{nm::derivatives::make_value<T, Dim>(a + s)};
+          nm::derivatives::step_kernel_for<T, Dim>(a, b, s, assign)(P->object(), in->object(), out->object(), scratch->object());
+          EXPECT_LT((o - expected).cwiseAbs().maxCoeff(), 1e-12) << a << " " << b << " " << s << " " << assign;
+          if (b != s)
+            continue;
+          auto seeded{random(a + s)};
+          Eigen::Map<matrix> q{seeded->data(), rows, cols};
+          matrix const added{assign ? matrix{p} : matrix{q + p}};
+          nm::derivatives::seed_kernel_for<T, Dim>(a, s, assign)(P->object(), nullptr, seeded->object(), nullptr);
+          EXPECT_EQ(q, added) << a << " " << s << " " << assign;
+        }
+}
+} // namespace
+
+TEST(PartialDerivatives, TheTmechKernelsAreTheRowMajorProduct) {
+  expect_kernels_match_the_row_major_product<2>();
+  expect_kernels_match_the_row_major_product<3>();
+}
+
+TEST(PartialDerivatives, TheSeedIdentityMapsASymmetricValueToItself) {
+  tensor4 I2;
+  nm::derivatives::identity<T, 3>(2, &I2);
+  tensor2 const S2{0.5 * (N2 + tmech::trans(N2))};
+  EXPECT_LT(distance(tensor2{tmech::dcontract(I2, N2)}, S2), 1e-12) << "projects onto the symmetric part";
+  EXPECT_LT(distance(tensor2{tmech::dcontract(N2, I2)}, S2), 1e-12);
+  tensor8 I4;
+  nm::derivatives::identity<T, 3>(4, &I4);
+  tensor4 X;
+  X.randn();
+  tensor4 const S4{0.25 * (X + tmech::basis_change<tmech::sequence<2, 1, 3, 4>>(X) + tmech::basis_change<tmech::sequence<1, 2, 4, 3>>(X) +
+                           tmech::basis_change<tmech::sequence<2, 1, 4, 3>>(X))};
+  EXPECT_LT(distance(tensor4{tmech::ddcontract(I4, X)}, S4), 1e-12) << "projects onto the minor-symmetric part";
+  EXPECT_LT(distance(tensor4{tmech::ddcontract(X, I4)}, S4), 1e-12);
+  T one{};
+  nm::derivatives::identity<T, 3>(0, &one);
+  EXPECT_EQ(one, 1.0);
+}
+
+#if defined(__SANITIZE_ADDRESS__)
+#define NM_TEST_ASAN 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define NM_TEST_ASAN 1
+#endif
+#endif
+
+TEST(PartialDerivatives, AnAccumulatingRankEightProductFitsASmallThreadStack) {
+#if !defined(__OPTIMIZE__) || defined(NM_TEST_ASAN)
+  GTEST_SKIP() << "unoptimised or ASan builds keep tmech's contraction temporaries in the frame";
+#endif
+  auto P{nm::derivatives::make_value<T, 3>(8)}, in{nm::derivatives::make_value<T, 3>(8)}, out{nm::derivatives::make_value<T, 3>(8)},
+      scratch{nm::derivatives::make_value<T, 3>(8)};
+  struct job {
+    void const *P, *in;
+    void *out, *scratch;
+  } j{P->object(), in->object(), out->object(), scratch->object()};
+  pthread_attr_t attr;
+  pthread_attr_init(&attr);
+  pthread_attr_setstacksize(&attr, 128 * 1024); // small thread stacks, as HPX's
+  pthread_t thread;
+  void *(*const run)(void *){[](void *p) -> void * {
+    auto const &k{*static_cast<job *>(p)};
+    nm::derivatives::step_kernel_for<T, 3>(4, 4, 4, false)(k.P, k.in, k.out, k.scratch);
+    return nullptr;
+  }};
+  ASSERT_EQ(pthread_create(&thread, &attr, run, &j), 0);
+  pthread_join(thread, nullptr);
+  pthread_attr_destroy(&attr);
+}
+
+TEST(PartialDerivatives, TheScalarFoldScalesThroughTmech) {
+  tensor4 out;
+  nm::derivatives::scale_kernel_for<T, 3>(4)(-0.5, &A4, &out);
+  EXPECT_LT(distance(out, tensor4{-0.5 * A4}), 1e-12);
+}
+
+TEST(PartialDerivatives, TheLuBoundaryPacksOnlySystemRowsOfRankTwoAtMost) {
+  std::vector<T> full(6561), block(36 * 36);
+  EXPECT_NO_THROW(nm::derivatives::pack_full<3>(2, 4, full.data(), block.data()));
+  EXPECT_THROW(nm::derivatives::pack_full<3>(4, 4, full.data(), block.data()), std::logic_error);
+  EXPECT_THROW(nm::derivatives::unpack_full<3>(4, 2, block.data(), full.data()), std::logic_error);
+}
+
+TEST(PartialDerivatives, ARankOfNoNodeValueHasNoKernel) {
+  EXPECT_THROW((void)(nm::derivatives::step_kernel_for<T, 3>(1, 2, 2, false)), std::logic_error);
+  EXPECT_THROW((void)(nm::derivatives::step_kernel_for<T, 3>(2, 6, 2, false)), std::logic_error);
+  EXPECT_THROW((void)(nm::derivatives::seed_kernel_for<T, 3>(2, 3, false)), std::logic_error);
+}

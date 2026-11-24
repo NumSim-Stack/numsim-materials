@@ -6,6 +6,7 @@
 #include "numsim-materials/solvers/backward_euler.h"
 #include "numsim-materials/solvers/local_newton.h"
 #include "numsim-materials/solvers/rk_integrator.h"
+#include "numsim-materials/solvers/system.h"
 #include "numsim-materials/solvers/vector_newton.h"
 #include "numsim-materials/materials/scalar_stepper.h"
 #include "numsim-materials/materials/constant_scalar.h"
@@ -45,7 +46,12 @@
 #include "numsim-materials/materials/power_damage_law.h"
 #include "numsim-materials/materials/saturation_damage_law.h"
 #include "numsim-materials/materials/peerlings_damage_law.h"
-#include "numsim-materials/materials/hencky_elasticity.h"
+#include "numsim-materials/materials/elastic_strain.h"
+#include "numsim-materials/materials/deformation_gradient_kinematics.h"
+#include "numsim-materials/materials/log_strain.h"
+#include "numsim-materials/materials/kirchhoff_to_first_piola.h"
+#include "numsim-materials/materials/seth_hill_strain.h"
+#include "numsim-materials/materials/lagrangian_stress_to_first_piola.h"
 #include "numsim-materials/materials/neo_hooke.h"
 #include "numsim-materials/materials/saint_venant_kirchhoff.h"
 #include "numsim-materials/materials/linear_stress.h"
@@ -135,7 +141,12 @@ void register_default_materials() {
   factory.template register_type<power_damage_law<Traits>>("power_damage_law");
   factory.template register_type<saturation_damage_law<Traits>>("saturation_damage_law");
   factory.template register_type<peerlings_damage_law<Traits>>("peerlings_damage_law");
-  factory.template register_type<hencky_elasticity<Traits>>("hencky_elasticity");
+  factory.template register_type<elastic_strain<Traits>>("elastic_strain");
+  factory.template register_type<deformation_gradient_kinematics<Traits>>("deformation_gradient_kinematics");
+  factory.template register_type<log_strain<Traits>>("log_strain");
+  factory.template register_type<kirchhoff_to_first_piola<Traits>>("kirchhoff_to_first_piola");
+  factory.template register_type<seth_hill_strain<Traits>>("seth_hill_strain");
+  factory.template register_type<lagrangian_stress_to_first_piola<Traits>>("lagrangian_stress_to_first_piola");
   factory.template register_type<saint_venant_kirchhoff<Traits>>("saint_venant_kirchhoff");
   factory.template register_type<neo_hooke<Traits>>("neo_hooke");
   factory.template register_type<constant_scalar<Traits>>("constant_scalar");
@@ -194,6 +205,8 @@ void register_default_materials() {
   // A single registered type covers every unknown combination — the layout is
   // dispatched from the "unknowns" parameter, not baked into the template.
   factory.template register_type<vector_newton<Traits>>("vector_newton");
+  // unknowns and equations from any nodes, solved by the engine (#218)
+  factory.template register_type<residual_system<Traits>>("system");
   // Unregistered until now, so the whole Runge-Kutta family -- every explicit
   // and implicit tableau -- was unreachable from a document. Nothing caught it
   // because the conformance scan looked only at materials/, not solvers/.

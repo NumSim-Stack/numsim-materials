@@ -9,9 +9,8 @@
 #include "numsim-materials/materials/isotropic_damage.h"
 #include "numsim-materials/materials/strain_energy_state_function.h"
 #include "numsim-materials/materials/vector_strain_state_function.h"
-#include "numsim-materials/umat/external_state_source.h"
+#include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/umat/json_model.h"
-#include "numsim-materials/postprocessing/numerical_diff_checker.h"
 
 namespace {
 
@@ -185,6 +184,21 @@ INSTANTIATE_TEST_SUITE_P(
                       R"({"type": "strain_energy_state_function", "name": "state", "strain_source": "strain", "tangent_source": "elastic", "youngs_modulus": 200.0})",
                       R"({"type": "vector_strain_state_function", "name": "state", "strain_source": "strain", "m_direction": [0], "n_direction": [1]})"));
 
+TEST_F(IsotropicDamageTest, UpdatePropertyLeavesAnExcludedProducerOut) {
+  ctx.update();
+  auto eps_before = ctx.get<tensor2>("stepper", "strain")(0,0);
+
+  auto* stepper_prop = ctx.find_property("stepper", "strain");
+  ASSERT_NE(stepper_prop, nullptr);
+
+  std::unordered_set<const numsim::materials::property_base*> exclude{stepper_prop};
+  ctx.update_property("damaged", "damaged_stress", exclude);
+
+  auto eps_after = ctx.get<tensor2>("stepper", "strain")(0,0);
+  EXPECT_NEAR(eps_before, eps_after, 1e-15)
+      << "Stepper should NOT have run when excluded";
+}
+
 // --- Tangent checker ---
 
 class TangentCheckerTest : public ::testing::Test {
@@ -194,9 +208,7 @@ protected:
 
     p.clear();
     p.insert<std::string>("name", "stepper");
-    p.insert<T>("increment", T{0.001});
-    p.insert<std::vector<std::size_t>>("indices", {0, 0});
-    ctx.create<numsim::materials::tensor_component_stepper<2, policy>>(p);
+    strain = &ctx.create<numsim::materials::external_strain_source<policy>>(p);
 
     p.clear();
     p.insert<std::string>("name", "state_func");
@@ -231,50 +243,36 @@ protected:
     p.insert<std::string>("yield_source", "yield");
     ctx.create<numsim::materials::isotropic_damage<policy>>(p);
 
-    p.clear();
-    p.insert<std::string>("name", "checker");
-    p.insert<ctx_type*>("context", &ctx);
-    p.insert<std::string>("output_source", "damaged::damaged_stress");
-    p.insert<std::string>("input_source", "stepper::strain");
-    p.insert<std::string>("analytical_source", "damaged::damaged_tangent");
-    p.insert<std::vector<std::string>>("history_sources", {"yield::kappa"});
-    p.insert<T>("epsilon", T{1e-7});
-    ctx.create<numsim::materials::tangent_checker<policy>>(p);
 
     ctx.finalize();
   }
 
   ctx_type ctx;
+  numsim::materials::external_strain_source<policy>* strain{nullptr};
+
+  /// The stepper's path, bound by the host: eps_00 grows by 0.001 per increment.
+  void step() {
+    tensor2 e{strain->strain().old_value()};
+    e(0, 0) += T{0.001};
+    strain->bind(strain->strain().old_value(), e);
+    ctx.update();
+  }
+
+  /// Relative error of the damaged tangent, differentiated along the host path.
+  T tangent_error() {
+    param_type p;
+    p.insert<std::string>("output", "damaged::damaged_stress");
+    p.insert<std::string>("input", "stepper::strain");
+    p.insert<std::string>("analytical", "damaged::damaged_tangent");
+    return ctx.check_derivative(std::move(p)).rel_error;
+  }
 };
 
-TEST_F(TangentCheckerTest, ExclusionWorks) {
-  // Verify the exclude mechanism prevents the stepper from running
-  ctx.update();
-  auto eps_before = ctx.get<tensor2>("stepper", "strain")(0,0);
-
-  auto* stepper_prop = ctx.find_property("stepper", "strain");
-  ASSERT_NE(stepper_prop, nullptr);
-
-  std::unordered_set<const numsim::materials::property_base*> exclude{stepper_prop};
-  ctx.update_property("damaged", "damaged_stress", exclude);
-
-  auto eps_after = ctx.get<tensor2>("stepper", "strain")(0,0);
-  EXPECT_NEAR(eps_before, eps_after, 1e-15)
-      << "Stepper should NOT have run when excluded";
-}
-
-// TODO: Passes in standalone test_material binary but fails in GTest.
-// Elastic steps match (1e-12), damage steps show ~100% error.
-// The get()/get_mutable() history fix didn't resolve it.
-// TODO: tmech::num_diff_sym_central produces transposed results for the
-// damage tangent in this GTest binary but works correctly in test_material.
-// Same source, same compiler, same tmech headers. Needs tmech-level debugging.
-// Non-symmetric num_diff_central produces correct results for all steps.
 TEST_F(TangentCheckerTest, MachinePrecisionAllSteps) {
   T max_rel_error = 0;
   for (int i = 0; i < 15; ++i) {
-    ctx.update();
-    auto rel = ctx.get<T>("checker", "rel_error");
+    step();
+    auto rel = tangent_error();
     if (rel > max_rel_error) max_rel_error = rel;
     ctx.commit();
   }
@@ -284,8 +282,8 @@ TEST_F(TangentCheckerTest, MachinePrecisionAllSteps) {
 
 TEST_F(TangentCheckerTest, ElasticStepsMachinePrecision) {
   for (int i = 0; i < 3; ++i) {
-    ctx.update();
-    auto rel = ctx.get<T>("checker", "rel_error");
+    step();
+    auto rel = tangent_error();
     EXPECT_LT(rel, 1e-8) << "Elastic step " << i << " should match";
     ctx.commit();
   }

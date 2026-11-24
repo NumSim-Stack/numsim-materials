@@ -9,11 +9,11 @@ is a `*_source` parameter. `tools/convert_uvwmaterial_card.py` converts the old 
 
 | uvwmaterial | numsim-materials | parameters | status |
 |---|---|---|---|
-| `linear_elasticity` (E, ν) | `linear_elasticity` | `K`, `G` (= E/(3(1−2ν)), E/(2(1+ν))), `strain_producer_name`, optional `eigenstrain_source` | existing; eigenstrain #135 |
+| `linear_elasticity` (E, ν) | `linear_elasticity` | `K`, `G` (= E/(3(1−2ν)), E/(2(1+ν))), `strain_producer_name`; an eigenstrain goes through `elastic_strain` (`eigenstrain_sources`) | existing; eigenstrain #135 |
 | `linear_elastic_incremental`, `incremental_solid_material` | `incremental_linear_elasticity` | `strain_source`, `tangent_source` | #134 |
 | `saint_venant_kirchhoff` (K, G) | `saint_venant_kirchhoff` | `K`, `G`, `deformation_gradient_source` | existing |
 | `neo_hookean_incompressible` | — | | #112 (formulation open) |
-| `hencky_strains_linear_elastic` (K, G), `_thermo_elastic`, `_thermo_chemo_elastic` | `hencky_elasticity` (+ `thermal_eigenstrain`) | `tangent_source` (an `isotropic_tangent` of produced K, G), `deformation_gradient_source`, optional `eigenstrain_source`; outputs P and dP/dF instead of S(ln C) and dS/dC | #141 |
+| `hencky_strains_linear_elastic` (K, G), `_thermo_elastic`, `_thermo_chemo_elastic` | `log_strain` → `elastic_strain` (+ `thermal_eigenstrain`) → `linear_stress` → `kirchhoff_to_first_piola` | `deformation_gradient_source`, `kinematics_source` (a `deformation_gradient_kinematics`), `eigenstrain_sources`, `tangent_source` (an `isotropic_tangent` of produced K, G; `linear_elasticity` for fixed K, G); outputs P and dP/dF instead of S(ln C) and dS/dC | #141 |
 | `incremental_saint_venant_kirchhoff` | — | | #113 |
 | `small_strain_rule_of_mixture_composite` (`kernal` voigt / reuss / vrh) | `mean_field_composite_global` + `linear_stress` | `phases` (phase nodes), `kernel` {`type`: voigt / reuss / hill}; a tangent producer, the stress is a `linear_stress` on it; nonlinear phases go through `mean_field_strain` (same kernels) and `mean_field_composite_local_linear` (Voigt) or `_nonlinear` | #130 |
 | `eshelby_tensor_solid_sphere`, `_cylinder_x1/x2/x3`, `_cylinder`, `_cylindrical_ellipsoid`, `_general_geometry` | `eshelby_sphere`, `eshelby_cylinder`, `eshelby_spheroid`, `eshelby_ellipsoid` | `nu_source` / `nu_property` (Poisson's ratio as a produced property: `poisson_ratio_from_moduli` of K and G, or `isotropic_moduli` of a tangent), `direction`, `aspect_ratio`, `semi_axes`; output `tensor` | #128 |
@@ -35,7 +35,7 @@ is a `*_source` parameter. `tools/convert_uvwmaterial_card.py` converts the old 
 | `eigenstrain_curing_material_base`, `degree_of_cure_dependent_material` | `thermal_eigenstrain` with the cure as source; `inclusion.fraction_source`; `weighted_sum` | | #137 |
 | `small_strain_rule_of_mixture_history` (Voigt) | `weighted_sum` with `constant_scalar` fractions: every phase reads the composite strain, the sum is Σ cᵢσᵢ, Σ cᵢCᵢ (`tests/test_voigt_composite.cpp`) | `terms`, weights | #117; not from JSON yet (no reader for `terms`) |
 | `small_strain_rule_of_mixture_history` (Reuss) | — | | #117, after the vector Newton lands |
-| `small_strain_mean_field_composite_history`, `_plastic`, `_damage` | `mean_field_strain` + the phase materials + `mean_field_composite_local_linear` / `_nonlinear` | the strain node produces `strain_<phase>` (history) and the concentrations; the materials consume them (`strain_source`, `strain_property`); the stress node averages what they produce; a nonlinear phase reads its tangent over a local edge (`tangent_edge`) and the point closes the fixed point with `residual` | #116 |
+| `small_strain_mean_field_composite_history`, `_plastic`, `_damage` | `mean_field_strain` + the phase materials + `mean_field_composite_local_linear` / `_nonlinear` | the strain node produces `strain_<phase>` (history) and the concentrations; the materials consume them (`strain_source`, `strain_property`); the stress node averages what they produce; a nonlinear phase reads its tangent over a local edge (`tangent_edge`) and the `_nonlinear` composite closes the fixed point in `update()` (`converges()` on its `residual`) | #116 |
 | `small_strain_short_fibre_history_composite` | — | | #118 |
 | `*_nonlocal*`, `element_deletion` | — | | #121 |
 | `finite_strain_mean_field_composite*` | — | | #122 |

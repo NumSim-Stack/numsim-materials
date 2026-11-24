@@ -75,9 +75,15 @@ std::vector<std::string> check_partials(material_context<Traits>& ctx, std::stri
     on_exit rerun{run}; // the outputs at the state the check found
     bool const requested{mat->partials_requested(callback)};
     mat->request_partials(callback, true);
+    mat->request_all_partials(true);
     {
-      on_exit reset{[&] { mat->request_partials(callback, requested); }};
+      on_exit reset{[&] {
+        mat->request_partials(callback, requested);
+        mat->request_all_partials(false);
+      }};
       run();
+      if (auto* fill{mat->fill_of(callback)})
+        mat->fill_partials(*fill, derivatives::every_reader);
     }
     auto of_callback{partials | std::views::filter([callback](auto const& q) { return q.callback == callback; })};
     // packed before any perturbed rerun overwrites them
@@ -89,6 +95,12 @@ std::vector<std::string> check_partials(material_context<Traits>& ctx, std::stri
       std::vector<T> plus(block.rows()), minus(block.rows());
       auto* source{source_of(p)};
       auto const read{key_of(source)};
+      if (T const asymmetry{block.asymmetry()}; asymmetry > tolerance) {
+        mismatches.push_back(std::format("'{}::{}' wrt '{}': the partial is not minor-symmetric (relative distance {:g} to "
+                                         "its symmetric part)",
+                                         material, p.output->traits().id.name, read, asymmetry));
+        continue;
+      }
       T scale{0};
       for (auto const a : analytic)
         scale = std::max(scale, std::abs(a));

@@ -161,10 +161,10 @@ TEST(MaterialConformance, MissingRequiredParametersThrow) {
 
 /// Materials whose callbacks declare partials or independence (.partials(), .independent_of()), checked by finite differences below.
 const std::set<std::string> kPartialsChecked = {
-    "exponential_damage_law", "incremental_linear_elasticity", "isotropic_damage", "isotropic_moduli",
-    "isotropic_tangent", "linear_damage_law", "linear_elasticity", "linear_stress", "peerlings_damage_law",
-    "power_damage_law", "saturation_damage_law", "strain_energy_state_function", "strain_threshold_yield",
-    "thermal_eigenstrain", "vector_strain_state_function", "von_mises_state_function"};
+    "elastic_strain", "exponential_damage_law", "incremental_linear_elasticity", "isotropic_damage",
+    "isotropic_moduli", "isotropic_tangent", "linear_damage_law", "linear_elasticity", "linear_stress",
+    "peerlings_damage_law", "power_damage_law", "saturation_damage_law", "strain_energy_state_function",
+    "strain_threshold_yield", "thermal_eigenstrain", "vector_strain_state_function", "von_mises_state_function"};
 
 /// Header stems under materials/ and solvers/ that declare partials or independent reads, themselves or through a
 /// detail/ base they include.
@@ -217,7 +217,8 @@ std::unique_ptr<nm::material_context<policy>> partials_model(std::string const& 
            R"({"type": "constant_scalar", "name": "K", "value": 150.0})",
            R"({"type": "constant_scalar", "name": "G", "value": 70.0})",
            R"({"type": "thermal_eigenstrain", "name": "thermal_eigenstrain", "alpha_source": "alpha::value", "reference_temperature": 20.0})",
-           R"({"type": "linear_elasticity", "name": "linear_elasticity", "strain_producer_name": "strain", "eigenstrain_source": "thermal_eigenstrain", "K": 150.0, "G": 70.0})",
+           R"({"type": "elastic_strain", "name": "elastic_strain", "strain_source": "strain", "eigenstrain_sources": ["thermal_eigenstrain"]})",
+           R"({"type": "linear_elasticity", "name": "linear_elasticity", "strain_producer_name": "elastic_strain", "K": 150.0, "G": 70.0})",
            R"({"type": "isotropic_tangent", "name": "isotropic_tangent", "K_source": "K", "G_source": "G"})",
            R"({"type": "isotropic_moduli", "name": "isotropic_moduli", "tangent_source": "isotropic_tangent", "tolerance": 0.0})",
            R"({"type": "linear_stress", "name": "linear_stress", "tangent_source": "isotropic_tangent", "strain_source": "strain"})",
