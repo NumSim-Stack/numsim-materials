@@ -1,5 +1,5 @@
 {
-  "title": "hencky_elasticity",
+  "title": "hencky_chain",
   "include": ["../standard_finite_strain.json"],
   "parameters": {"K": 166666.67, "G": 76923.08},
   "derived": {"E": "9 * K * G / (3 * K + G)", "nu": "(3 * K - 2 * G) / (2 * (3 * K + G))"},
@@ -8,9 +8,12 @@
     {"type": "constant_scalar", "name": "K", "value": "$K"},
     {"type": "constant_scalar", "name": "G", "value": "$G"},
     {"type": "isotropic_tangent", "name": "stiffness", "K_source": "K", "G_source": "G"},
-    {"type": "hencky_elasticity", "name": "hencky", "deformation_gradient_source": "F", "tangent_source": "stiffness"}]},
+    {"type": "log_strain", "name": "log_strain", "deformation_gradient_source": "F"},
+    {"type": "elastic_strain", "name": "elastic_strain", "strain_source": "log_strain"},
+    {"type": "linear_stress", "name": "tau", "tangent_source": "stiffness", "strain_source": "elastic_strain"},
+    {"type": "kirchhoff_to_first_piola", "name": "hencky", "stress_source": "tau", "tangent_source": "stiffness", "strain_source": "log_strain", "deformation_gradient_source": "F"}]},
   "point": {"deformation_gradient_source": "F", "stress_source": "hencky"},
-  "record": {"eps": "hencky::log_strain"},
+  "record": {"eps": "log_strain::strain"},
   "checks": [
     {"name": "uniaxial stress: ln F22 = −ν ln F11", "case": "uniaxial_stress", "value": "np.log(F_22)", "expected": "-nu * np.log(F_11)", "tolerance": 1e-9, "relative": true},
     {"name": "uniaxial stress: P11 = E ln(F11) / F11", "case": "uniaxial_stress", "value": "P_11", "expected": "E * np.log(F_11) / F_11", "tolerance": 1e-9, "relative": true, "plot": {"x": "F_11", "xlabel": "λ"}},

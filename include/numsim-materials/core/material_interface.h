@@ -601,6 +601,29 @@ protected:
     return ref;
   }
 
+  /// One input per entry of the list parameter `parameter` (missing: none), each "material" (reading
+  /// `default_property`) or "material::property"; an entry listed twice is an error.
+  template <typename T>
+  std::vector<input_property<T, property_traits> const*> add_inputs(std::string const& parameter, std::string const& default_property,
+                                                                   EdgeKind edge_kind = EdgeKind::Global) {
+    std::vector<input_property<T, property_traits> const*> inputs;
+    if (!m_parameter_handler.contains(parameter))
+      return inputs;
+    for (auto const& entry : get_parameter<std::vector<std::string>>(parameter)) {
+      auto const source{[&] {
+        try {
+          return parse_source(entry, default_property);
+        } catch (std::invalid_argument const& e) {
+          throw std::invalid_argument(m_name + ": " + parameter + ": " + e.what());
+        }
+      }()};
+      if (std::ranges::any_of(inputs, [&](auto const* i) { return i->source_owner() == source.material && i->source_name() == source.property; }))
+        throw std::invalid_argument(m_name + ": " + parameter + " lists '" + source.material + "::" + source.property + "' twice");
+      inputs.push_back(&add_input<T>(source.material, source.property, edge_kind));
+    }
+    return inputs;
+  }
+
   template <typename T>
   input_history<T, property_traits>& add_input_history(
       const connection_source& src, EdgeKind edge_kind = EdgeKind::Global) {

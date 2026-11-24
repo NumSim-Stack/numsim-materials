@@ -1,6 +1,8 @@
 #ifndef LINEAR_ELASTICITY_H
 #define LINEAR_ELASTICITY_H
 
+#include <stdexcept>
+#include <string>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_base.h"
 #include "numsim-materials/core/parameter_helpers.h"
@@ -37,18 +39,18 @@ public:
         m_K(base::template get_parameter<value_type>("K")),
         m_G(base::template get_parameter<value_type>("G")),
         m_eps_name(base::template get_parameter<std::string>("strain_producer_name")),
-        m_eps(base::template add_input<tensor2>(m_eps_name, base::template get_parameter<std::string>("strain_property"), EdgeKind::Global)),
-        m_eigenstrain(eigenstrain_input())
+        m_eps(base::template add_input<tensor2>(m_eps_name, base::template get_parameter<std::string>("strain_property"), EdgeKind::Global))
   {
+    if (base::m_parameter_handler.contains("eigenstrain_source")) // removed: an old deck would lose its eigenstrain
+      throw std::invalid_argument(base::name() + ": eigenstrain_source was removed; read the strain from an "
+                                  "elastic_strain with eigenstrain_sources instead");
     update_tangent(); // readable before the first update
     base::add_callback(&linear_elasticity::update_tangent, m_C).reads();
     base::add_callback(&linear_elasticity::update_stress, m_sig)
-        .reads(m_C, m_eps, m_eigenstrain)
-        .partials(m_sig, m_C, m_eps, m_eigenstrain);
+        .reads(m_C, m_eps)
+        .partials(m_sig, m_C, m_eps);
     m_dsig_deps = base::partial_of(m_sig, m_eps);
     m_dsig_dC = base::partial_of(m_sig, m_C);
-    if (m_eigenstrain)
-      m_dsig_deig = base::partial_of(m_sig, *m_eigenstrain);
   }
 
   /**
@@ -65,31 +67,21 @@ public:
     required<value_type>(para, "G");
     required<std::string>(para, "strain_producer_name");
     optional<std::string>(para, "strain_property", std::string{"strain"});
-    optional<std::string>(para, "eigenstrain_source", std::string{});
+    para.template insert<std::string>("eigenstrain_source"); // removed; kept so that a deck still naming it fails
     return para;
   }
 
-  /// sigma = C : (eps - eps_eig) with the optional eigenstrain (thermal, chemical).
   void update_stress(){
-    if (m_eigenstrain)
-      m_sig = tmech::dcontract(m_C, tensor2{m_eps.get() - m_eigenstrain->get()});
-    else
-      m_sig = tmech::dcontract(m_C, m_eps.get());
+    m_sig = tmech::dcontract(m_C, m_eps.get());
     if (base::want_partials())
       update_partials();
   }
 
-  /// d sigma / d eps = C, d sigma / d eps_eig = -C, d sigma / d C = Isym (x) (eps - eps_eig).
+  /// d sigma / d eps = C, d sigma / d C = Isym (x) eps.
   void update_partials() {
     if (m_dsig_deps.wanted())
       m_dsig_deps.value() = m_C;
-    if (m_eigenstrain && m_dsig_deig.wanted())
-      m_dsig_deig.value() = value_type{-1} * m_C;
-    if (!m_dsig_dC.wanted())
-      return;
-    if (m_eigenstrain)
-      m_dsig_dC.value() = tmech::otimes(sym_identity<value_type, Dim>(), tensor2{m_eps.get() - m_eigenstrain->get()});
-    else
+    if (m_dsig_dC.wanted())
       m_dsig_dC.value() = tmech::otimes(sym_identity<value_type, Dim>(), m_eps.get());
   }
 
@@ -98,11 +90,6 @@ public:
   }
 
 private:
-  const input_property<tensor2, property_traits>* eigenstrain_input() {
-    auto const &source{base::template get_parameter<std::string>("eigenstrain_source")};
-    return source.empty() ? nullptr : &base::template add_input<tensor2>(source, "eigenstrain", EdgeKind::Global);
-  }
-
   /// Produced properties
   tensor2 &m_sig;
   tensor4 &m_C;
@@ -114,9 +101,8 @@ private:
 
   /// Consumed properties
   const input_property<tensor2, property_traits> &m_eps;
-  const input_property<tensor2, property_traits>* m_eigenstrain; ///< null without an eigenstrain_source
 
-  typename base::template partial_handle<tensor2, tensor2> m_dsig_deps, m_dsig_deig; ///< m_dsig_deig: with an eigenstrain
+  typename base::template partial_handle<tensor2, tensor2> m_dsig_deps;
   typename base::template partial_handle<tensor2, tensor4> m_dsig_dC;
 };
 

@@ -122,8 +122,8 @@ class Converter:
 
     def convert_hencky_strains_linear_elastic(self, card, name):
         raise ValueError("hencky_strains_linear_elastic: a finite-strain card needs an external_deformation_gradient_source; "
-                         "write {\"type\": \"hencky_elasticity\", \"deformation_gradient_source\": ..., \"tangent_source\": an isotropic_tangent} by hand "
-                         "(thermo variants: a thermal_eigenstrain as \"eigenstrain_source\")")
+                         "build the chain log_strain -> elastic_strain -> linear_stress -> kirchhoff_to_first_piola by hand "
+                         "(thermo variants: a thermal_eigenstrain in the elastic_strain \"eigenstrain_sources\")")
 
     convert_hencky_strains_linear_thermo_elastic = convert_hencky_strains_linear_elastic
     convert_hencky_strains_linear_thermo_chemo_elastic = convert_hencky_strains_linear_elastic
