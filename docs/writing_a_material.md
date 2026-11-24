@@ -153,8 +153,21 @@ The first output of a callback cannot be on demand. A host `get` of an unread on
 - **After a throw:** the context is partly updated, so it is failed. `update()`, `update_property()` and `commit()` throw until the host calls `revert()`, which restores the history and clears the failure.
 - **From inside a callback:**
   - `update()` throws.
-  - `update_property()` re-evaluates the upstream callbacks, constants included, and leaves the running update untouched (as `numerical_diff_checker` does).
+  - `update_property()` re-evaluates the upstream callbacks, constants included, and leaves the running update untouched.
   - A callback must not suspend or move to another thread while it runs: with the debug checks on, the read check's scope is per thread.
+- **Derivatives:** `ctx.check_derivative(parameters)` compares an analytical derivative with finite differences, evaluated as a host does: per perturbation the histories the callbacks fill are reverted (host-bound ones such as a time keep their value), the input is set, `update()` runs. On success it leaves the state evaluated at the input, so the host commits as usual; on an exception it leaves it reverted, with the input at x.
+
+  ```cpp
+  param_type p;
+  p.insert<std::string>("output", "j2::stress");
+  p.insert<std::string>("input", "stepper::strain");   // host-bound: no callback writes it; the output depends on it
+  p.insert<std::string>("analytical", "j2::tangent");  // output indices first
+  auto const check{ctx.check_derivative(std::move(p))}; // check.rel_error, check.directions
+  ```
+
+  - The input's history codec sets the directions: one for a scalar, three for a vector, six for a symmetric tensor (`codecs::strain`), nine for a full one (`codecs::two_point`). A rank-2 history declared without a codec gets `codecs::strain`, so only its symmetric part is perturbed.
+  - A symmetric input's directions see only A_ij + A_ji of the analytical; its skew part (`check.asymmetry`) counts as error too.
+  - Optional: `step` (1e-7), `step_kind` (`absolute`, or `relative`: step · max(|x_k|, 1)), `scheme` (`central` or `forward`), `components` (index pairs (i, j) of a tensor, indices of a vector), `report_threshold` (1e-2: prints the mismatching components above it).
 - **Inspecting the graph:**
   - `ctx.dump()` prints the execution order and marks the constant outputs;
   - `ctx.is_constant(material, property)` asks for one output.
@@ -170,6 +183,26 @@ The first output of a callback cannot be on demand. A host `get` of an unread on
   The engine then runs the solver after everything the driven callbacks read globally (the time step, the temperature), whatever order the deck creates them in. Reads of the solver's own outputs (a function reading the current unknown) add no edge: the solver fills those itself.
 - **What a driven callback must be:** a repeatable trial evaluation. Every call computes from the same committed history and its current inputs, and writes outputs only. It must not commit, count or record, because the solver calls it once per iteration.
 - **Driving any output of a group:** an output filled by another output's callback reruns that callback through `update_source()`.
+- **A fixed point over a local edge:** a node that reads another over a local edge sees the previous pass. A material that measures how far two passes disagree declares that output with `converges()` on the handle of the callback filling it, naming the parameters that hold the tolerance and the pass limit:
+
+  ```cpp
+  base::add_callback(&my_material::compute, m_residual)
+      .reads(m_in)
+      .converges(m_residual, "tolerance", "max_passes");
+  ```
+
+  At `finalize()` the engine forms an iteration group: the callbacks downstream of the consumer of a local edge and upstream of the residual. `update()` runs:
+  - first, the callbacks the group reads, once;
+  - then the group, until |residual| ≤ tolerance (a NaN never converges);
+  - last, the rest, once. A recorder or a plot therefore writes one row per update.
+
+  After `max_passes` passes, `update()` throws `cutback_error` and names the residual. `update_property()` on a member runs its upstream once, without iterating. These rules throw at `finalize()` and name the node:
+  - `converges()` with no local edge behind the residual;
+  - a `.stateful()` callback inside a group;
+  - a second residual over the callbacks of a group;
+  - a tolerance below zero or `max_passes` below one.
+
+  `mean_field_composite_local_nonlinear` declares its `residual` this way.
 - **`material_ref`:** a material reached through `material_ref` (a `local_newton` solver object) is not an input. The engine:
   - treats what the target reads as reads of every callback of the referencing material;
   - keeps those callbacks varying unless every output of the target is constant (a target with history, state or a bare output never is);

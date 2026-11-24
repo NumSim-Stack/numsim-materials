@@ -11,7 +11,7 @@
 #include "numsim-materials/materials/j2_rk_plasticity.h"
 #include "numsim-materials/solvers/local_newton.h"
 #include "numsim-materials/solvers/butcher_tableau.h"
-#include "numsim-materials/postprocessing/numerical_diff_checker.h"
+#include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/umat/errors.h"
 
 namespace {
@@ -140,6 +140,23 @@ TEST_F(J2PlasticityTest, HardeningIncreasesYieldStress) {
 
 // --- Tangent checker ---
 
+/// The stepper's path, bound by the host: eps_00 grows by 0.05 per increment.
+void step(ctx_type& ctx, numsim::materials::external_strain_source<policy>& strain) {
+  tensor2 e{strain.strain().old_value()};
+  e(0, 0) += T{0.05};
+  strain.bind(strain.strain().old_value(), e);
+  ctx.update();
+}
+
+/// Relative error of the J2 tangent, differentiated along the host path.
+T tangent_error(ctx_type& ctx) {
+  param_type p;
+  p.insert<std::string>("output", "j2::stress");
+  p.insert<std::string>("input", "stepper::strain");
+  p.insert<std::string>("analytical", "j2::tangent");
+  return ctx.check_derivative(std::move(p)).rel_error;
+}
+
 class J2TangentTest : public ::testing::Test {
 protected:
   void SetUp() override {
@@ -147,9 +164,7 @@ protected:
 
     p.clear();
     p.insert<std::string>("name", "stepper");
-    p.insert<T>("increment", T{0.05});
-    p.insert<std::vector<std::size_t>>("indices", {0, 0});
-    ctx.create<numsim::materials::tensor_component_stepper<2, policy>>(p);
+    m_strain = &ctx.create<numsim::materials::external_strain_source<policy>>(p);
 
     p.clear();
     p.insert<std::string>("name", "elastic");
@@ -178,21 +193,11 @@ protected:
     p.insert<T>("sigma_0", T{50.0});
     ctx.create<numsim::materials::j2_plasticity<policy>>(p);
 
-    p.clear();
-    p.insert<std::string>("name", "checker");
-    p.insert<ctx_type*>("context", &ctx);
-    p.insert<std::string>("output_source", "j2::stress");
-    p.insert<std::string>("input_source", "stepper::strain");
-    p.insert<std::string>("analytical_source", "j2::tangent");
-    p.insert<std::vector<std::string>>("history_sources",
-        {"j2::plastic_strain", "j2::equivalent_plastic_strain"});
-    p.insert<T>("epsilon", T{1e-7});
-    ctx.create<numsim::materials::tangent_checker<policy>>(p);
-
     ctx.finalize();
   }
 
   ctx_type ctx;
+  numsim::materials::external_strain_source<policy>* m_strain{nullptr};
 };
 
 TEST_F(J2TangentTest, ConsistentTangentAllSteps) {
@@ -208,8 +213,8 @@ TEST_F(J2TangentTest, ConsistentTangentAllSteps) {
   T alpha_before = 0;
   int plastic_steps = 0;
   for (int i = 0; i < 20; ++i) {
-    ctx.update();
-    const auto rel = ctx.get<T>("checker", "rel_error");
+    step(ctx, *m_strain);
+    const auto rel = tangent_error(ctx);
     const auto alpha = ctx.get<T>("j2", "equivalent_plastic_strain");
     const bool was_plastic = alpha_before > T{1e-10};
     const bool is_plastic = alpha > T{1e-10};
@@ -338,9 +343,7 @@ protected:
 
     p.clear();
     p.insert<std::string>("name", "stepper");
-    p.insert<T>("increment", T{0.05});
-    p.insert<std::vector<std::size_t>>("indices", {0, 0});
-    ctx.create<numsim::materials::tensor_component_stepper<2, policy>>(p);
+    m_strain = &ctx.create<numsim::materials::external_strain_source<policy>>(p);
 
     p.clear();
     p.insert<std::string>("name", "elastic");
@@ -365,21 +368,11 @@ protected:
     p.insert<std::string>("tableau", m_tableau_name);
     ctx.create<numsim::materials::j2_rk_plasticity<policy>>(p);
 
-    p.clear();
-    p.insert<std::string>("name", "checker");
-    p.insert<ctx_type*>("context", &ctx);
-    p.insert<std::string>("output_source", "j2::stress");
-    p.insert<std::string>("input_source", "stepper::strain");
-    p.insert<std::string>("analytical_source", "j2::tangent");
-    p.insert<std::vector<std::string>>("history_sources",
-        {"j2::plastic_strain", "j2::equivalent_plastic_strain"});
-    p.insert<T>("epsilon", T{1e-7});
-    ctx.create<numsim::materials::tangent_checker<policy>>(p);
-
     ctx.finalize();
   }
 
   ctx_type ctx;
+  numsim::materials::external_strain_source<policy>* m_strain{nullptr};
   std::string m_tableau_name;
 };
 
@@ -404,8 +397,8 @@ TEST_F(RKPlasticityTest, ImplicitEulerMatchesMonolithic) {
   T worst_plastic = 0, worst_transition = 0, alpha_before = 0;
   int plastic_steps = 0;
   for (int i = 0; i < 20; ++i) {
-    ctx.update();
-    const auto rel = ctx.get<T>("checker", "rel_error");
+    step(ctx, *m_strain);
+    const auto rel = tangent_error(ctx);
     const auto alpha = ctx.get<T>("j2", "equivalent_plastic_strain");
     const bool was_plastic = alpha_before > T{1e-10};
     const bool is_plastic = alpha > T{1e-10};
@@ -448,8 +441,8 @@ TEST_F(RKPlasticityTest, SDIRK3TangentCheck) {
   T worst_plastic = 0, worst_transition = 0, alpha_before = 0;
   int plastic_steps = 0;
   for (int i = 0; i < 20; ++i) {
-    ctx.update();
-    const auto rel = ctx.get<T>("checker", "rel_error");
+    step(ctx, *m_strain);
+    const auto rel = tangent_error(ctx);
     const auto alpha = ctx.get<T>("j2", "equivalent_plastic_strain");
     const bool was_plastic = alpha_before > T{1e-10};
     const bool is_plastic = alpha > T{1e-10};
@@ -534,7 +527,7 @@ TEST_F(RKPlasticityTest, PlasticStrainAccumulates) {
   setup_with_tableau("implicit_euler");
   T prev_alpha = 0;
   for (int i = 0; i < 20; ++i) {
-    ctx.update();
+    step(ctx, *m_strain);
     auto alpha = ctx.get<T>("j2", "equivalent_plastic_strain");
     EXPECT_GE(alpha, prev_alpha);
     prev_alpha = alpha;

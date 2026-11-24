@@ -54,6 +54,9 @@ material_context (facade)
   - `.stateful()` — keeps state of its own or acts outside its outputs: runs on every update
   - `.on_demand(further outputs...)` — filled only while a node reads them; the callback asks `is_read(output)`
   - `.drives(local inputs...)` — reruns their source callbacks (a solver): runs after what those read
+  - `.converges(residual, "tolerance", "max_passes")` — a fixed point over local edges, `residual` one of the
+    callback's outputs and the other two parameter keys: `update()` reruns the callbacks between the local edge
+    and `residual` until it converges, and throws `cutback_error` after `max_passes`
 - Debug checks (CMake option `NUMSIM_MATERIALS_DEBUG_CHECKS`, on except in release configurations) rerun the
   constants and throw when one changes (`ctx.verify_constants(bool)`), and throw when a callback reads an input
   it did not declare (`ctx.check_reads(bool)`); `ctx.is_constant("mat", "prop")`
@@ -162,8 +165,13 @@ The types registered by `register_default_materials<policy>()`.
 `tensor_component_stepper_rank2`, `constant_scalar`, `props_scalar`,
 `scalar_identity_weight`, `scalar_complement_weight`
 
-**Postprocessing** — `property_console_logger`, plus `numerical_diff_checker`
-and `property_plot` (not factory-registered; Qt6 optional for the latter)
+**Postprocessing** — `property_console_logger` and `property_plot` (not
+factory-registered; Qt6 optional for the latter)
+
+**Derivative check** — `ctx.check_derivative(parameters)`: name the output, the
+input and the analytical derivative; the graph perturbs the input along the
+directions of its history codec and evaluates as a host does (revert the
+callbacks' histories, set the input, `update()`). See `docs/writing_a_material.md` §5.
 
 ## JSON-driven configuration
 
@@ -201,6 +209,7 @@ cmake --build build -j$(nproc)
 | `NUMSIM_MATERIALS_BUILD_TESTS` | ON if top level | GTest suite; every test also runs under ASan+UBSan (`NUMSIM_SANITIZER_TESTS`) |
 | `NUMSIM_MATERIALS_BUILD_EXAMPLES` | ON if top level | Build examples |
 | `NUMSIM_MATERIALS_ENABLE_PLOTTING` | OFF | Qt6 + QCustomPlot live plotting |
+| `NUMSIM_MATERIALS_BUILD_BENCHMARK` | OFF | Google Benchmark suite in `benchmark/` (needs an installed Google Benchmark) |
 | `NUMSIM_MATERIALS_INSTALL` | ON | Install the library and its CMake package |
 | `NUMSIM_MATERIALS_NUMSIM_CORE_TAG`, `NUMSIM_MATERIALS_TMECH_TAG` | pinned | numsim-core / tmech versions to fetch |
 | `NUMSIM_PREFER_SIBLINGS`, `NUMSIM_DEVEL_DIR` | ON, `..` | use sibling checkouts of dependencies when present |
@@ -248,6 +257,19 @@ adaptor used by `solvers/unknown_layout.h`.
 - Eigen — dense linear algebra for `vector_newton`
 - Qt6 + QCustomPlot — for live plotting (optional)
 
+### Run benchmarks
+
+```bash
+cmake -B build-bench -DCMAKE_BUILD_TYPE=Release -DNUMSIM_MATERIALS_BUILD_BENCHMARK=ON -DNUMSIM_MATERIALS_BUILD_TESTS=OFF
+cmake --build build-bench --target numsim_materials_benchmark
+build-bench/benchmark/numsim_materials_benchmark --benchmark_repetitions=5 --benchmark_report_aggregates_only=true
+```
+
+`material_point` updates one context per iteration (shipped J2, J2 as a residual system with and without a
+thermal eigenstrain, the stress as a separate node; elastic and plastic). `step_kernel`, `seed_kernel` and
+`scalar_fold` time the chain-rule kernels of a derivative plan per rank combination. Built with `-O3 -march=native`,
+so the binary runs only on CPUs with the instruction set of the build machine. CI only compiles the suite.
+
 ## Structure
 
 ```
@@ -256,7 +278,7 @@ include/numsim-materials/
 ├── materials/         — constitutive models, steppers, weights
 ├── solvers/           — local_newton, vector_newton, backward_euler, rk_integrator
 ├── umat/              — Abaqus/CalculiX UMAT layer, STATEV mapping, JSON models
-├── postprocessing/    — logging, plotting, numerical_diff_checker
+├── postprocessing/    — logging, plotting
 ├── io/                — json_parameter_converter, json_material_factory
 └── default_materials.h — factory registration + macros
 ```
