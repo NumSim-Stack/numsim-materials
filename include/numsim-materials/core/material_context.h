@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <stdexcept>
 #include <unordered_set>
+#include "numsim-materials/core/derivative_check.h"
 #include "numsim-materials/core/material_base.h"
 #include "numsim-materials/core/material_property_info.h"
 #include "numsim-materials/core/object_store.h"
@@ -138,6 +139,13 @@ public:
     m_engine.revert();
   }
 
+  /// d(output)/d(input) by finite differences along the host path: per perturbation the callbacks' histories
+  /// reverted, the input set, update(). Parameters: derivative_check_parameters(). Returns evaluated at the input.
+  derivative_check<value_type> check_derivative(parameter_handler parameters) {
+    check_finalized("check_derivative");
+    return detail::derivative::run<Traits>(*this, m_engine, std::move(parameters));
+  }
+
   /// The history within a step: restore() returns to it after any number of commits (substeps, cutbacks).
   [[nodiscard]] checkpoint_type checkpoint() const {
     check_finalized("checkpoint");
@@ -234,7 +242,7 @@ public:
   }
 
   /// Mutable access to a property value — bypasses the property graph.
-  /// WARNING: Only for diagnostic/privileged code (e.g., numerical_diff_checker).
+  /// WARNING: Only for diagnostic/privileged code.
   /// Writing to a property without triggering update_property leaves the graph
   /// in an inconsistent state. Caller is responsible for restoring consistency.
   template<typename T>

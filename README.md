@@ -163,8 +163,13 @@ The types registered by `register_default_materials<policy>()`.
 `tensor_component_stepper_rank2`, `constant_scalar`, `props_scalar`,
 `scalar_identity_weight`, `scalar_complement_weight`
 
-**Postprocessing** — `property_console_logger`, plus `numerical_diff_checker`
-and `property_plot` (not factory-registered; Qt6 optional for the latter)
+**Postprocessing** — `property_console_logger` and `property_plot` (not
+factory-registered; Qt6 optional for the latter)
+
+**Derivative check** — `ctx.check_derivative(parameters)`: name the output, the
+input and the analytical derivative; the graph perturbs the input along the
+directions of its history codec and evaluates as a host does (revert the
+callbacks' histories, set the input, `update()`). See `docs/writing_a_material.md` §5.
 
 ## JSON-driven configuration
 
@@ -271,7 +276,7 @@ include/numsim-materials/
 ├── materials/         — constitutive models, steppers, weights
 ├── solvers/           — local_newton, vector_newton, backward_euler, rk_integrator
 ├── umat/              — Abaqus/CalculiX UMAT layer, STATEV mapping, JSON models
-├── postprocessing/    — logging, plotting, numerical_diff_checker
+├── postprocessing/    — logging, plotting
 ├── io/                — json_parameter_converter, json_material_factory
 └── default_materials.h — factory registration + macros
 ```
