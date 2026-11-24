@@ -31,6 +31,7 @@ option(NUMSIM_MATERIALS_BUILD_TESTS     "Build the numsim-materials test suite" 
 option(NUMSIM_MATERIALS_BUILD_EXAMPLES  "Build the numsim-materials examples"   ${NUMSIM_MATERIALS_IS_TOP_LEVEL})
 option(NUMSIM_MATERIALS_ENABLE_PLOTTING "Qt6 + QCustomPlot live plotting"       OFF)
 option(NUMSIM_MATERIALS_BUILD_REPORTS  "Build the material report generator"   OFF)
+option(NUMSIM_MATERIALS_BUILD_BENCHMARK "Build the Google Benchmark suite"      OFF)
 option(NUMSIM_MATERIALS_INSTALL         "Install the library and its CMake package" ON)
 set(NUMSIM_MATERIALS_DEBUG_CHECKS AUTO CACHE STRING
     "Read check and verification of constants: AUTO (off in Release, RelWithDebInfo, MinSizeRel), ON or OFF")
@@ -221,4 +222,8 @@ endif()
 
 if(NUMSIM_MATERIALS_BUILD_REPORTS)
   add_subdirectory(reports)
+endif()
+
+if(NUMSIM_MATERIALS_BUILD_BENCHMARK)
+  add_subdirectory(benchmark)
 endif()

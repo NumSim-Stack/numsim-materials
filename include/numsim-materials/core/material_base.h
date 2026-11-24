@@ -184,10 +184,26 @@ protected:
       return *this;
     }
 
+    /// `fill`, a member function, fills the declared partials instead of the callback: the engine calls it only
+    /// when a requested derivative reads them, at the values the callback left. After partials().
+    callback_handle& fills_partials(void (Derived::*fill)()) {
+      Derived& obj{static_cast<Derived&>(m_owner)};
+      m_owner.declare_fill(m_outputs.front(), [&obj, fill] { (obj.*fill)(); });
+      return *this;
+    }
+
     /// The outputs of the callback do not depend on `reads`: their partials are zero. After reads().
     template <typename... Reads>
     callback_handle& independent_of(Reads const&... reads) {
       (each_read(reads, [&](auto const& read) { m_owner.declare_independent(m_outputs.front(), read); }), ...);
+      return *this;
+    }
+
+    /// update() reruns the callbacks downstream of a local edge and upstream of `residual` (an output of this
+    /// callback) until |residual| <= the parameter `tolerance`; cutback_error after the parameter `max_passes`.
+    callback_handle& converges(value_type const& residual, std::string const& tolerance, std::string const& max_passes) {
+      m_owner.declare_converges(m_outputs, residual, m_owner.template get_parameter<value_type>(tolerance),
+                                m_owner.template get_parameter<int>(max_passes));
       return *this;
     }
 

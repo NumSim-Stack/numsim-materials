@@ -42,6 +42,20 @@ public:
     return {index, (index - 1) * m_dt, m_dt, m_scale * (m_points[seg] + (m_points[seg + 1] - m_points[seg]) * k), seg, k};
   }
 
+  /// Step `s` in `count` equal substeps from the end of the step before; the last one ends where `s` does.
+  [[nodiscard]] std::vector<load_step<T>> substeps(load_step<T> const &s, int count) const {
+    auto const before{s.index > 1 ? at(s.index - 1) : unloaded()};
+    auto const f0{before.segment == s.segment ? before.fraction : T{0}};
+    std::vector<load_step<T>> out;
+    for (int k{1}; k <= count; ++k) {
+      auto const f{k == count ? s.fraction : f0 + (s.fraction - f0) * T(k) / T(count)};
+      auto const load{k == count ? s.load
+                                 : m_scale * (m_points[s.segment] + (m_points[s.segment + 1] - m_points[s.segment]) * f)};
+      out.push_back({s.index, s.time + s.dt * T(k - 1) / T(count), s.dt / T(count), load, s.segment, f});
+    }
+    return out;
+  }
+
   /// Steps 1 ... size() as a view.
   [[nodiscard]] auto steps() const noexcept {
     return std::views::iota(1, static_cast<int>(size()) + 1) | std::views::transform([this](int i) { return at(i); });
