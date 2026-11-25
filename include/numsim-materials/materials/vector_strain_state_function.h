@@ -47,7 +47,7 @@ public:
     m_n = tensor1{};
     if (!m_indices.empty()) m_m(m_indices[0]) = value_type{1};
     if (!n_indices.empty()) m_n(n_indices[0]) = value_type{1};
-    base::add_callback(&vector_strain_state_function::compute, m_eps_eq, m_deps_eq).reads(m_strain);
+    base::add_callback(&vector_strain_state_function::compute, m_eps_eq, m_deps_eq).reads(m_strain).partials(m_eps_eq, m_strain);
   }
 
   static input_parameter_controller parameters() {
@@ -66,6 +66,8 @@ public:
 
     const auto sgn = (raw >= value_type{0}) ? value_type{1} : value_type{-1};
     m_deps_eq = sgn * (tmech::otimes(m_m, m_n) + tmech::otimes(m_n, m_m)) * value_type{0.5};
+    if (base::want_partials())
+      base::partial(m_eps_eq, m_strain) = m_deps_eq;
   }
 
 private:

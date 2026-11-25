@@ -34,7 +34,11 @@ public:
         m_tolerance(base::template get_parameter<value_type>("tolerance")),
         m_C(base::template add_input<tensor4>(base::template get_parameter<std::string>("tangent_source"),
                                               base::template get_parameter<std::string>("tangent_property"), EdgeKind::Global)) {
-    base::add_callback(&isotropic_moduli::compute, m_K, m_G, m_nu).reads_all_inputs();
+    base::add_callback(&isotropic_moduli::compute, m_K, m_G, m_nu)
+        .reads(m_C)
+        .partials(m_K, m_C)
+        .partials(m_G, m_C)
+        .partials(m_nu, m_C);
   }
 
   static input_parameter_controller parameters() {
@@ -51,6 +55,16 @@ public:
     m_K = K;
     m_G = G;
     m_nu = poisson_ratio(K, G);
+    if (base::want_partials())
+      update_partials(K, G);
+  }
+
+  /// The moduli of the isotropic projection (isotropize()) by C; nu through dnu/dK = 9G / (2 (3K + G)^2), dnu/dG = -9K / (...).
+  void update_partials(value_type K, value_type G) {
+    base::partial(m_K, m_C) = vol_projector<value_type, Dim>() / value_type(Dim);
+    base::partial(m_G, m_C) = dev_projector<value_type, Dim>() / (2 * value_type(Dim * (Dim + 1) / 2 - 1));
+    value_type const s{3 * K + G};
+    base::partial(m_nu, m_C) = value_type{9} / (2 * s * s) * (G * base::partial(m_K, m_C) - K * base::partial(m_G, m_C));
   }
 
 private:
