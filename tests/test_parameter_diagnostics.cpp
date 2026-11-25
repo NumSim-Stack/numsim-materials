@@ -240,4 +240,40 @@ TEST(ParameterDiagnostics, AWellFormedEntryStillBuilds) {
   EXPECT_EQ(error_from(entry), "");
 }
 
+// --- Integer parameters take integers only (#151) ---
+
+/// The message of reading @p value as an @p I parameter "n", or "" if it was read.
+template <typename I> std::string integer_error(const json &value) {
+  try {
+    nm::make_default_json_registry<json>().read(typeid(I), value, "n");
+    return "";
+  } catch (const std::exception &e) {
+    return e.what();
+  }
+}
+
+TEST(ParameterDiagnostics, ANonIntegralValueForAnIntegerIsRejected) {
+  for (auto const &msg : {integer_error<int>(7.9), integer_error<std::size_t>(7.9), integer_error<int>(7.0),
+                          integer_error<std::vector<std::size_t>>(json::array({1, 2.5}))}) {
+    ASSERT_FALSE(msg.empty()) << "a non-integral value was truncated";
+    EXPECT_NE(msg.find("'n'"), std::string::npos) << msg;
+    EXPECT_NE(msg.find("integer"), std::string::npos) << msg;
+  }
+}
+
+TEST(ParameterDiagnostics, AnIntegerOutOfRangeIsRejected) {
+  EXPECT_NE(integer_error<std::size_t>(-1), "") << "-1 wrapped to a huge size_t";
+  EXPECT_NE(integer_error<std::vector<std::size_t>>(json::array({0, -1})), "");
+  EXPECT_NE(integer_error<int>(std::int64_t{1} << 40), "") << "2^40 was narrowed to an int";
+  EXPECT_NE(integer_error<int>("7"), "");
+}
+
+TEST(ParameterDiagnostics, IntegerValuesAreStillRead) {
+  auto const registry{nm::make_default_json_registry<json>()};
+  EXPECT_EQ(std::any_cast<int>(registry.read(typeid(int), json(-7), "n")), -7);
+  EXPECT_EQ(std::any_cast<std::size_t>(registry.read(typeid(std::size_t), json(7), "n")), 7u);
+  EXPECT_EQ(std::any_cast<std::vector<std::size_t>>(registry.read(typeid(std::vector<std::size_t>), json::array({0, 2}), "n")),
+            (std::vector<std::size_t>{0, 2}));
+}
+
 } // namespace

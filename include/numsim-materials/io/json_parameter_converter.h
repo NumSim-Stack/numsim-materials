@@ -3,8 +3,11 @@
 
 #include <algorithm>
 #include <any>
+#include <concepts>
+#include <cstdint>
 #include <functional>
 #include <iterator>
+#include <limits>
 #include <print>
 #include <stdexcept>
 #include <string>
@@ -31,6 +34,9 @@ struct json_adapter {
   static bool is_array(const JsonType& j) { return j.is_array(); }
   static bool is_string(const JsonType& j) { return j.is_string(); }
   static bool is_number(const JsonType& j) { return j.is_number(); }
+  static bool is_number_integer(const JsonType& j) { return j.is_number_integer(); }
+  static bool is_number_unsigned(const JsonType& j) { return j.is_number_unsigned(); }
+  static std::string dump(const JsonType& j) { return j.dump(); }
   template<typename T> static T get(const JsonType& j) { return j.template get<T>(); }
 
   template<typename Fn>
@@ -108,6 +114,21 @@ private:
       m_keyed_readers;
 };
 
+/// An integer in the range of I: a plain get<I>() truncates 7.9 to 7 and wraps -1 to a huge size_t.
+template<std::integral I, typename JsonType>
+I read_integer(const JsonType& j) {
+  using adapter = json_adapter<JsonType>;
+  if (adapter::is_number_integer(j)) {
+    if (adapter::is_number_unsigned(j)) {
+      if (auto const v{adapter::template get<std::uint64_t>(j)}; std::in_range<I>(v))
+        return static_cast<I>(v);
+    } else if (auto const v{adapter::template get<std::int64_t>(j)}; std::in_range<I>(v))
+      return static_cast<I>(v);
+  }
+  throw std::invalid_argument("expected an integer from " + std::to_string(std::numeric_limits<I>::min()) + " to " +
+                              std::to_string(std::numeric_limits<I>::max()) + ", got " + adapter::dump(j));
+}
+
 // --- Default registry factory ---
 
 template<typename JsonType>
@@ -118,8 +139,9 @@ json_reader_registry<JsonType> make_default_json_registry() {
   // Scalars
   reg.template add<double>();
   reg.template add<float>();
-  reg.template add<int>();
-  reg.template add<std::size_t>();
+  reg.template add<int>([](const JsonType& j, const std::string&) -> std::any { return read_integer<int>(j); });
+  reg.template add<std::size_t>(
+      [](const JsonType& j, const std::string&) -> std::any { return read_integer<std::size_t>(j); });
   reg.template add<bool>();
   reg.template add<std::string>();
 
@@ -132,7 +154,7 @@ json_reader_registry<JsonType> make_default_json_registry() {
       [](const JsonType& j, const std::string&) -> std::any {
         std::vector<std::size_t> result;
         for (const auto& elem : j)
-          result.push_back(adapter::template get<std::size_t>(elem));
+          result.push_back(read_integer<std::size_t>(elem));
         return result;
       });
 
