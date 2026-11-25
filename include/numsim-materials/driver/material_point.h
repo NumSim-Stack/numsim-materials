@@ -171,33 +171,39 @@ public:
     if (!m_props_readers.empty() && !m_props_bound)
       throw fatal_error("material_point: this model reads its material constants per call — call bind_props() "
                               "before evaluating");
-    m_ctx.update();
-    if (!m_residual)
-      return;
-    // the negated test also keeps a NaN residual unconverged
-    for (int pass{1}; !(std::abs(*m_residual) <= m_tolerance); ++pass) {
-      if (pass >= m_max_passes || std::isnan(*m_residual))
-        throw cutback_error(std::format("material_point: '{}' did not reach {:g} in {} passes (last {:g})",
-                                              m_parameters.template get<std::string>("residual_source"), m_tolerance,
-                                              m_max_passes,
-                                              *m_residual));
-      m_ctx.update();
+    try {
+      update();
+    } catch (...) {
+      m_failed = true;
+      throw;
     }
   }
 
   // --- History ---
 
   /// History back to the start of the step; also clears a failed evaluation.
-  void reset() { m_ctx.revert(); }
+  void reset() {
+    m_ctx.revert();
+    m_failed = false;
+  }
 
   /// Engine-owned: the evaluated step becomes the start of the next one.
-  void accept() { m_ctx.commit(); }
+  void accept() {
+    check_not_failed("accept");
+    m_ctx.commit();
+  }
 
   /// Engine-owned: the history now, to restore() after accepted substeps (cutbacks).
-  [[nodiscard]] typename context_type::checkpoint_type checkpoint() const { return m_ctx.checkpoint(); }
+  [[nodiscard]] typename context_type::checkpoint_type checkpoint() const {
+    check_not_failed("checkpoint");
+    return m_ctx.checkpoint();
+  }
 
   /// Back to checkpoint(), also after a failed evaluation.
-  void restore(typename context_type::checkpoint_type const &cp) { m_ctx.restore(cp); }
+  void restore(typename context_type::checkpoint_type const &cp) {
+    m_ctx.restore(cp);
+    m_failed = false;
+  }
 
   /// Host-owned: doubles the host stores per point.
   [[nodiscard]] std::size_t history_width() const { return host_map().nstatv(); }
@@ -208,7 +214,10 @@ public:
   void load_history(std::span<value_type const> buffer) const { host_map().unpack(checked(buffer).data()); }
 
   /// Host-owned: the evaluated history back to the host.
-  void store_history(std::span<value_type> buffer) const { host_map().pack(checked(buffer).data()); }
+  void store_history(std::span<value_type> buffer) const {
+    check_not_failed("store_history");
+    host_map().pack(checked(buffer).data());
+  }
 
   /// Host-owned: tensor history into the current configuration (after load_history()).
   void rotate_history(tensor2 const &R) const { host_map().rotate_history(R); }
@@ -226,6 +235,25 @@ private:
     static auto const check{material_point::parameters()};
     check.check_parameter(parameters);
     return parameters;
+  }
+
+  void update() {
+    m_ctx.update();
+    if (!m_residual)
+      return;
+    // the negated test also keeps a NaN residual unconverged
+    for (int pass{1}; !(std::abs(*m_residual) <= m_tolerance); ++pass) {
+      if (pass >= m_max_passes || std::isnan(*m_residual))
+        throw cutback_error(std::format("material_point: '{}' did not reach {:g} in {} passes (last {:g})",
+                                        m_parameters.template get<std::string>("residual_source"), m_tolerance,
+                                        m_max_passes, *m_residual));
+      m_ctx.update();
+    }
+  }
+
+  void check_not_failed(char const *what) const {
+    if (m_failed)
+      throw fatal_error(std::format("material_point: {}() after a failed evaluate(); reset() first", what));
   }
 
   /// An input's history output, or "material::property".
@@ -276,6 +304,7 @@ private:
   std::vector<bool> m_live_slots;
   std::size_t m_props_needed{0};
   bool m_props_bound{false};
+  bool m_failed{false}; ///< the last evaluate() threw
   mutable std::unique_ptr<umat::statev_map<Traits>> m_host_map;
 };
 

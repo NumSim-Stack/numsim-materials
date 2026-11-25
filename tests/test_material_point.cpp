@@ -198,6 +198,38 @@ TEST(MaterialPoint, AFailedEvaluationRecoversAfterReset) {
   EXPECT_EQ(point.history<T>("mem", "count").new_value(), 1);
 }
 
+TEST(MaterialPoint, NoStoreAfterAFailedEvaluation) {
+  setup s{1.5};
+  point_type point{s.ctx, strain_input()};
+  std::vector<T> statev(point.history_width());
+  point.reset();
+  point.load_history(statev);
+  point.input<nm::external_strain_source<policy>>("strain").bind(strain_at(0), strain_at(2));
+  EXPECT_THROW(point.evaluate(), std::runtime_error);
+  EXPECT_THROW(point.store_history(statev), nm::umat::fatal_error) << "a failed evaluation hands out no history";
+  EXPECT_THROW(point.accept(), nm::umat::fatal_error);
+  point.reset();
+  point.load_history(statev);
+  point.input<nm::external_strain_source<policy>>("strain").bind(strain_at(0), strain_at(1));
+  point.evaluate();
+  EXPECT_NO_THROW(point.store_history(statev)) << "reset() clears the failure";
+  EXPECT_EQ(statev[0], 1) << "count";
+}
+
+TEST(MaterialPoint, NoAcceptAfterAnUnconvergedResidual) {
+  ctx_type ctx;
+  add<relaxer<policy>>(ctx, "relax");
+  ctx.finalize();
+  auto parameters{residual("relax::residual")};
+  parameters.insert<int>("max_passes", 3);
+  point_type point{ctx, parameters};
+  EXPECT_THROW(point.evaluate(), nm::umat::cutback_error);
+  EXPECT_THROW(point.accept(), nm::umat::fatal_error) << "the graph updated, but the residual did not converge";
+  EXPECT_THROW(static_cast<void>(point.checkpoint()), nm::umat::fatal_error);
+  point.reset();
+  EXPECT_NO_THROW(point.accept());
+}
+
 TEST(MaterialPoint, HostOwnedHistoryMatchesEngineOwned) {
   setup engine, host;
   point_type a{engine.ctx, strain_input()};
