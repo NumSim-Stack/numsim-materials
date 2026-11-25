@@ -3,9 +3,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <concepts>
 #include <format>
 #include <istream>
-#include <memory>
+#include <optional>
 #include <ostream>
 #include <span>
 #include <stdexcept>
@@ -86,19 +87,27 @@ public:
     m_live_slots.assign(m_props_needed, false);
     for (auto const *reader : m_props_readers)
       m_live_slots[reader->index()] = true;
+    // an engine-owned point may hold history no host buffer can: that only fails host-owned use
+    try {
+      m_host_map.emplace(m_ctx, m_exclusions);
+    } catch (fatal_error const &e) {
+      m_host_map_error = e.what();
+    }
   }
 
   // --- Inputs ---
 
   /// The input source `name`, to bind its old and new values.
   template <typename Source>
-  Source &input(std::string const &name) const {
-    if (!std::ranges::contains(m_inputs, name))
-      throw fatal_error("material_point: '" + name + "' is not an input of this material point");
-    auto *source = dynamic_cast<Source *>(m_ctx.find(name));
-    if (!source)
-      throw fatal_error("material_point: input '" + name + "' is another kind of source");
-    return *source;
+    requires std::derived_from<Source, material_interface<Traits>>
+  Source &input(std::string const &name) {
+    return *find_input<Source>(name);
+  }
+
+  template <typename Source>
+    requires std::derived_from<Source, material_interface<Traits>>
+  Source const &input(std::string const &name) const {
+    return *find_input<Source>(name);
   }
 
   /// Copy the host's material constants into the props_scalar readers; a no-op without any.
@@ -215,7 +224,7 @@ public:
   [[nodiscard]] std::vector<std::string> describe_history() const { return host_map().describe(); }
 
   /// Host-owned: the host's history at the start of the step, into both ends of every history output.
-  void load_history(std::span<value_type const> buffer) const { host_map().unpack(checked(buffer).data()); }
+  void load_history(std::span<value_type const> buffer) { host_map().unpack(checked(buffer).data()); }
 
   /// Host-owned: the evaluated history back to the host.
   void store_history(std::span<value_type> buffer) const {
@@ -224,7 +233,7 @@ public:
   }
 
   /// Host-owned: tensor history into the current configuration (after load_history()).
-  void rotate_history(tensor2 const &R) const { host_map().rotate_history(R); }
+  void rotate_history(tensor2 const &R) { host_map().rotate_history(R); }
 
   [[nodiscard]] bool has_rotatable_history() const { return host_map().has_rotatable_history(); }
 
@@ -232,7 +241,8 @@ public:
   void save(std::ostream &out) const { m_ctx.save_state(out); }
   void load(std::istream &in) { m_ctx.load_state(in); }
 
-  [[nodiscard]] context_type &context() const noexcept { return m_ctx; }
+  [[nodiscard]] context_type &context() noexcept { return m_ctx; }
+  [[nodiscard]] context_type const &context() const noexcept { return m_ctx; }
 
 private:
   static parameter_handler checked(parameter_handler parameters) {
@@ -258,6 +268,16 @@ private:
   void check_not_failed(char const *what) const {
     if (m_failed)
       throw fatal_error(std::format("material_point: {}() after a failed evaluate(); reset() first", what));
+  }
+
+  template <typename Source>
+  Source *find_input(std::string const &name) const {
+    if (!std::ranges::contains(m_inputs, name))
+      throw fatal_error("material_point: '" + name + "' is not an input of this material point");
+    auto *source = dynamic_cast<Source *>(m_ctx.find(name));
+    if (!source)
+      throw fatal_error("material_point: input '" + name + "' is another kind of source");
+    return source;
   }
 
   /// An input's history output, or "material::property".
@@ -290,10 +310,9 @@ private:
     return buffer;
   }
 
-  /// Built on first use: an engine-owned point may hold history no host buffer can.
   umat::statev_map<Traits> const &host_map() const {
     if (!m_host_map)
-      m_host_map = std::make_unique<umat::statev_map<Traits>>(m_ctx, m_exclusions);
+      throw fatal_error(m_host_map_error);
     return *m_host_map;
   }
 
@@ -309,7 +328,8 @@ private:
   std::size_t m_props_needed{0};
   bool m_props_bound{false};
   bool m_failed{false}; ///< the last evaluate() threw
-  mutable std::unique_ptr<umat::statev_map<Traits>> m_host_map;
+  std::optional<umat::statev_map<Traits>> m_host_map; ///< empty when some history has no STATEV layout
+  std::string m_host_map_error;
 };
 
 } // namespace numsim::materials

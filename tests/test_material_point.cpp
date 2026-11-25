@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 #include <cmath>
+#include <concepts>
 #include <limits>
+#include <span>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -275,6 +277,37 @@ TEST(MaterialPoint, UnknownHostOwnedIsFatalAtConstruction) {
     parameters.insert<std::vector<std::string>>("host_owned", {name});
     EXPECT_THROW((point_type{s.ctx, parameters}), nm::umat::fatal_error) << name << " is no history property";
   }
+}
+
+template <typename Point>
+concept loads_history = requires(Point &point, std::span<T const> buffer) { point.load_history(buffer); };
+template <typename Point>
+concept rotates_history = requires(Point &point, tensor2 const &R) { point.rotate_history(R); };
+template <typename Point>
+concept hands_out_a_mutable_context = requires(Point &point) {
+  { point.context() } -> std::same_as<ctx_type &>;
+};
+template <typename Point>
+concept hands_out_a_mutable_input = requires(Point &point) {
+  { point.template input<nm::external_strain_source<policy>>("strain") } -> std::same_as<nm::external_strain_source<policy> &>;
+};
+template <typename Point, typename Source>
+concept has_input_of = requires(Point &point) { point.template input<Source>("strain"); };
+
+TEST(MaterialPoint, OnlyNonConstPointsChangeTheContext) {
+  EXPECT_TRUE(loads_history<point_type>);
+  EXPECT_FALSE(loads_history<point_type const>);
+  EXPECT_TRUE(rotates_history<point_type>);
+  EXPECT_FALSE(rotates_history<point_type const>);
+  EXPECT_TRUE(hands_out_a_mutable_context<point_type>);
+  EXPECT_FALSE(hands_out_a_mutable_context<point_type const>);
+  EXPECT_TRUE(hands_out_a_mutable_input<point_type>);
+  EXPECT_FALSE(hands_out_a_mutable_input<point_type const>);
+}
+
+TEST(MaterialPoint, InputsAreMaterials) {
+  EXPECT_TRUE((has_input_of<point_type, nm::external_strain_source<policy>>));
+  EXPECT_FALSE((has_input_of<point_type, tensor2>)) << "input<>() is constrained to materials";
 }
 
 TEST(MaterialPoint, ParametersHaveDefaultsAndAreChecked) {
