@@ -25,6 +25,7 @@ using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
 using driver = nm::material_point_driver<policy>;
 using tensor2 = driver::tensor2;
+using tensor4 = driver::tensor4;
 using control = nm::load_control<T>;
 using numsim::materials::test::add;
 
@@ -69,6 +70,16 @@ void build_j2(ctx_type& ctx, bool exponential = false) {
   add<nm::j2_plasticity<policy>>(ctx, "j2",
       {{"K", K}, {"G", G}, {"sigma_0", sigma_0}, {"hardening_source", "hardening"}, {"strain_source", "strain"},
        {"solver_source", "solver"}});
+  ctx.finalize();
+}
+
+/// "elastic", "stiff" with 5/4 of its moduli and "void" with none, all on "strain".
+void build_three(ctx_type& ctx) {
+  add<nm::external_strain_source<policy>>(ctx, "strain");
+  add<nm::linear_elasticity<policy>>(ctx, "elastic", {{"strain_producer_name", "strain"}, {"K", K}, {"G", G}});
+  add<nm::linear_elasticity<policy>>(ctx, "stiff",
+      {{"strain_producer_name", "strain"}, {"K", 1.25 * K}, {"G", 1.25 * G}});
+  add<nm::linear_elasticity<policy>>(ctx, "void", {{"strain_producer_name", "strain"}, {"K", 0.0}, {"G", 0.0}});
   ctx.finalize();
 }
 
@@ -302,6 +313,36 @@ TEST(LoadControl, ARepeatedComponentIsAnError) {
   EXPECT_THROW(static_cast<void>(control::mixed({"22", "22"})), std::invalid_argument);
   EXPECT_THROW(static_cast<void>(control::mixed({"12", "33", "12"})), std::invalid_argument);
   EXPECT_NO_THROW(static_cast<void>(control::mixed({"11", "22", "33", "12", "13", "23"})));
+}
+
+// A fully damaged point: zero tangent and zero stress, so the error is zero, not 0 / 0.
+TEST(MaterialPointDriver, TangentErrorOfAZeroTangentIsFinite) {
+  ctx_type ctx;
+  build_three(ctx);
+  driver none(ctx, parameters_for("void"));
+  auto const res{none.step(axial(1e-3), tensor2{}, control::strain(), 0, 1)};
+  EXPECT_EQ(none.tangent_error(res), 0);
+  auto p{parameters_for("elastic")};
+  p.insert<std::string>("tangent_source", "void");
+  driver missing(ctx, p);
+  auto const wrong{missing.step(axial(1e-3), tensor2{}, control::strain(), 0, 1)};
+  EXPECT_NEAR(missing.tangent_error(wrong), 1, 1e-6) << "relative to the finite-difference tangent";
+}
+
+// The Newton matrix from "stiff", the stress from "elastic": converges, linearly, to the stress of "elastic".
+TEST(MaterialPointDriver, TheTangentCanComeFromAnotherSource) {
+  ctx_type ctx;
+  build_three(ctx);
+  auto p{parameters_for("elastic")};
+  p.insert<std::string>("tangent_source", "stiff");
+  driver d(ctx, p);
+  auto const res{d.step(axial(1e-3), tensor2{}, control::uniaxial_stress(), 0, 1)};
+  ASSERT_TRUE(res.converged);
+  EXPECT_EQ(res.tangent, (d.point().output<tensor4>("stiff", "tangent")));
+  EXPECT_GT(res.residuals.size(), 3u);
+  EXPECT_NEAR(res.stress(0, 0), E * 1e-3, 1e-10);
+  EXPECT_NEAR(res.strain(1, 1), -nu * 1e-3, 1e-12);
+  EXPECT_NEAR(d.tangent_error(res), 0.2, 1e-6) << "|C - 5/4 C| / |5/4 C|";
 }
 
 } // namespace

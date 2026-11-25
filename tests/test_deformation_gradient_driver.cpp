@@ -220,4 +220,15 @@ TEST(DeformationControl, ARepeatedComponentIsAnError) {
   EXPECT_NO_THROW(static_cast<void>(control::mixed({"12", "21"}))) << "two slots";
 }
 
+// Zero moduli: zero stress and tangent, an error of zero rather than 0 / 0.
+TEST(DeformationGradientDriver, TangentErrorOfAZeroTangentIsFinite) {
+  ctx_type ctx;
+  add<nm::external_deformation_gradient_source<policy>>(ctx, "F");
+  add<nm::saint_venant_kirchhoff<policy>>(ctx, "model", {{"deformation_gradient_source", "F"}, {"K", 0.0}, {"G", 0.0}});
+  ctx.finalize();
+  driver d(ctx, parameters());
+  auto const res{d.step(stretch(1.1), tensor2{}, control::deformation(), 0, 1)};
+  EXPECT_EQ(d.tangent_error(res), 0);
+}
+
 } // namespace

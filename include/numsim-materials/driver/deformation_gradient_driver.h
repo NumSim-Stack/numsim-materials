@@ -2,6 +2,7 @@
 #define NUMSIM_MATERIALS_DRIVER_DEFORMATION_GRADIENT_DRIVER_H
 
 #include <algorithm>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -108,8 +109,8 @@ public:
   /// Back to the accepted state.
   void reject() { m_point.reset(); }
 
-  /// Relative error of dP/dF of the trial `res` against central differences, before accept(). The trial is
-  /// evaluated again afterwards, so accepting it is unaffected.
+  /// Error of dP/dF of the trial `res` against central differences, relative to the larger of the two, before
+  /// accept(). The trial is evaluated again afterwards, so accepting it is unaffected.
   value_type tangent_error(step_result const &res) {
     tensor4 fd;
     for (auto const &E : materials::full_basis<value_type>()) {
@@ -119,7 +120,9 @@ public:
       fd += tmech::otimes(tensor2{(plus - m_stress) / (2 * m_fd_step)}, E);
     }
     evaluate(res.F, res.time, res.dt);
-    return tmech::norm(tensor4{fd - res.tangent}) / tmech::norm(res.tangent);
+    // relative to the larger of the two: finite for a zero tangent
+    auto const scale{std::max({tmech::norm(res.tangent), tmech::norm(fd), std::numeric_limits<value_type>::min()})};
+    return tmech::norm(tensor4{fd - res.tangent}) / scale;
   }
 
   [[nodiscard]] tensor2 const &accepted_F() const noexcept { return m_F.deformation_gradient().old_value(); }
