@@ -44,8 +44,8 @@ include(cmake/numsim_bootstrap.cmake)
 include(NumSimDependency)
 include(NumSimWarnings)
 
-set(NUMSIM_MATERIALS_NUMSIM_CORE_TAG "v1.0.0" CACHE STRING
-    "numsim-core version (tag or commit) to fetch")
+set(NUMSIM_MATERIALS_NUMSIM_CORE_TAG "v1.2.1" CACHE STRING
+    "numsim-core version (tag or commit) to fetch; v1.1.0+ names the missing parameters in accept()'s exception")
 set(NUMSIM_MATERIALS_TMECH_TAG "f8c8000d21d7f01d05c91b7562bc1b2fa29c34d8" CACHE STRING
     "tmech version (tag or commit) to fetch; tmech master after #43 (isotropic tensor functions of a functor object)")
 

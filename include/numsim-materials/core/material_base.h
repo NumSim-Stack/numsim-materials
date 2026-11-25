@@ -11,6 +11,7 @@
 #include <numsim-core/wrapper.h>
 
 #include "numsim-materials/core/material_interface.h"
+#include "numsim-materials/core/parameter_helpers.h"
 
 namespace numsim::materials {
 
@@ -58,7 +59,7 @@ public:
     // object_store::create, AFTER the derived constructor has returned -- see
     // the note there.
     static auto check_para{Derived::parameters()};
-    check_para.check_parameter(base::m_parameter_handler);
+    check_parameters(check_para, base::m_parameter_handler);
   }
 
   material_base(material_base const&) = delete;

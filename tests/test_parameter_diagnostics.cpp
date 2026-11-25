@@ -157,8 +157,29 @@ TEST(ParameterDiagnostics, AMissingRequiredParameterNamesTheEntry) {
   const json entry = {{"type", "linear_elasticity"}, {"name", "el"}, {"strain_producer_name", "s"}, {"K", 1.0}}; // no G
   const auto msg = error_from(entry);
   ASSERT_FALSE(msg.empty()) << "a material without a required parameter was created";
-  EXPECT_NE(msg.find("required"), std::string::npos) << msg; // the names of the parameters go to the log, not what()
+  EXPECT_NE(msg.find("required"), std::string::npos) << msg;
+  EXPECT_NE(msg.find("'G'"), std::string::npos) << "the missing parameter is not named: " << msg;
   EXPECT_NE(msg.find("\"el\""), std::string::npos) << "the material's own check does not name the entry: " << msg;
+}
+
+// #153: every missing parameter is named in what(), on both paths
+TEST(ParameterDiagnostics, EveryMissingRequiredParameterIsNamedFromJson) {
+  const auto msg = error_from({{"type", "linear_elasticity"}, {"name", "el"}});
+  for (auto const *name : {"'K'", "'G'", "'strain_producer_name'"})
+    EXPECT_NE(msg.find(name), std::string::npos) << name << " is not named: " << msg;
+}
+
+TEST(ParameterDiagnostics, EveryMissingRequiredParameterIsNamedFromCpp) {
+  ctx_type ctx;
+  param_type p;
+  p.insert<std::string>("name", "el");
+  try {
+    ctx.create<nm::linear_elasticity<policy>>(p);
+    FAIL() << "a material without its required parameters was created";
+  } catch (const std::invalid_argument &e) {
+    const std::string msg{e.what()};
+    EXPECT_NE(msg.find("missing 3 required parameter(s): 'G' 'K' 'strain_producer_name'"), std::string::npos) << msg;
+  }
 }
 
 TEST(ParameterDiagnostics, ANonStringNameIsReportedAsSuch) {
