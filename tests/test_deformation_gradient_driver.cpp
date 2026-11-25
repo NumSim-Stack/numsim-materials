@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include <type_traits>
 #include <cmath>
+#include <stdexcept>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/materials/constant_scalar.h"
@@ -212,6 +213,11 @@ TEST(DeformationGradientDriver, PassesTheResidualSettingsToThePoint) {
   p.insert<T>("residual_tolerance", 2);
   driver loose{ctx, p};
   EXPECT_TRUE(loose.step(stretch(1.01), tensor2{}, control::deformation(), 0, 1).converged);
+}
+
+TEST(DeformationControl, ARepeatedComponentIsAnError) {
+  EXPECT_THROW(static_cast<void>(control::mixed({"21", "21"})), std::invalid_argument);
+  EXPECT_NO_THROW(static_cast<void>(control::mixed({"12", "21"}))) << "two slots";
 }
 
 } // namespace

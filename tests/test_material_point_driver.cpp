@@ -297,4 +297,11 @@ TEST(MaterialPointDriver, PassesTheResidualSettingsToThePoint) {
   EXPECT_TRUE(loose.step(axial(1e-3), tensor2{}, control::strain(), 0, 1).converged);
 }
 
+// Two entries for one slot would add its projector twice.
+TEST(LoadControl, ARepeatedComponentIsAnError) {
+  EXPECT_THROW(static_cast<void>(control::mixed({"22", "22"})), std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(control::mixed({"12", "33", "12"})), std::invalid_argument);
+  EXPECT_NO_THROW(static_cast<void>(control::mixed({"11", "22", "33", "12", "13", "23"})));
+}
+
 } // namespace
