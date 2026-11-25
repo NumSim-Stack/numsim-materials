@@ -14,12 +14,14 @@
 #include "numsim-materials/core/material_base.h"
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/core/parameter_helpers.h"
+#include "numsim-materials/core/partial_check.h"
 #include "numsim-materials/core/tensor_identities.h"
 #include "numsim-materials/default_materials.h"
 #include "numsim-materials/driver/material_point.h"
 #include "numsim-materials/solvers/system.h"
 #include "numsim-materials/solvers/vector_newton.h"
 #include "numsim-materials/umat/external_state_source.h"
+#include "test_fixture_materials.h"
 
 #if __has_include(<nlohmann/json.hpp>)
 #define NUMSIM_HAVE_JSON 1
@@ -1309,6 +1311,143 @@ TEST(ResidualSystemTangent, ASeedThatIsAMemberOutputOfAPassedSystemThrows) {
   strain_rig rig;
   auto const message{thrown<std::logic_error>([&] { rig.ctx.derivative<T>("solver", "g", "sys", "rg"); })};
   EXPECT_TRUE(message.contains("sys::rg") && message.contains("'solver'")) << message;
+}
+
+// --- unsymmetric tensors (#234) ---
+
+tensor2 const N{0.9, 0.3, -0.2, 0.1, 1.2, 0.4, -0.5, 0.2, 0.8}; // not symmetric
+
+/// r = x - N for x from "x_source" (default solver::B); "unsymmetric" declares r unsymmetric_output().
+class difference_row final : public nm::material_base<difference_row, policy> {
+public:
+  using base = nm::material_base<difference_row, policy>;
+  using input_parameter_controller = typename base::input_parameter_controller;
+
+  template <typename... Args>
+  explicit difference_row(Args &&...args)
+      : base(std::forward<Args>(args)...), m_r(base::template add_output<tensor2>("r")),
+        m_source(nm::connection_source::parse(base::template get_parameter<std::string>("x_source"))),
+        m_x(base::template add_input<tensor2>(m_source.material, m_source.property)) {
+    base::add_callback(&difference_row::compute, m_r).reads(m_x).partials(m_r, m_x);
+    if (base::template get_parameter<bool>("unsymmetric"))
+      base::unsymmetric_output(m_r);
+  }
+
+  static input_parameter_controller parameters() {
+    input_parameter_controller para{base::parameters()};
+    nm::optional<std::string>(para, "x_source", std::string{"solver::B"});
+    nm::optional<bool>(para, "unsymmetric", false);
+    return para;
+  }
+
+  void compute() {
+    m_r = m_x.get() - N;
+    if (base::want_partials())
+      base::partial(m_r, m_x) = nm::sym_identity<T, 3>();
+  }
+
+private:
+  tensor2 &m_r;
+  nm::connection_source const m_source;
+  nm::input_property<tensor2, nm::property_traits> const &m_x;
+};
+
+/// A system solving rows::r = 0 for its output "X", declared unsymmetric_output().
+class unsymmetric_unknown_system final : public nm::material_base<unsymmetric_unknown_system, policy> {
+public:
+  using base = nm::material_base<unsymmetric_unknown_system, policy>;
+  using input_parameter_controller = typename base::input_parameter_controller;
+
+  template <typename... Args>
+  explicit unsymmetric_unknown_system(Args &&...args)
+      : base(std::forward<Args>(args)...), m_X(base::template add_output<tensor2>("X")),
+        m_r(base::template add_input<tensor2>("rows", "r", nm::EdgeKind::Local)) {
+    base::unsymmetric_output(m_X);
+    base::declare_system(nm::system_method::newton, {&m_X}, {T{0}}, {&m_r}, m_tolerance, m_max_iter, m_report);
+  }
+
+  static input_parameter_controller parameters() { return input_parameter_controller{base::parameters()}; }
+
+private:
+  tensor2 &m_X;
+  nm::input_property<tensor2, nm::property_traits> const &m_r;
+  T const m_tolerance{1e-10};
+  int const m_max_iter{20};
+  nm::system_report m_report;
+};
+
+/// R_g = g + tr(B) - 2 - N : F, R_B = B - g P with F from F::F, declared unsymmetric: strain_rows with an F seed.
+class deformation_rows final : public nm::material_base<deformation_rows, policy> {
+public:
+  using base = nm::material_base<deformation_rows, policy>;
+  using input_parameter_controller = typename base::input_parameter_controller;
+
+  template <typename... Args>
+  explicit deformation_rows(Args &&...args)
+      : base(std::forward<Args>(args)...), m_rg(base::template add_output<T>("rg")), m_rB(base::template add_output<tensor2>("rB")),
+        m_g(base::template add_input<T>("solver", "g")), m_B(base::template add_input<tensor2>("solver", "B")),
+        m_F(base::template add_input<tensor2>("F", "F")) {
+    base::add_callback(&deformation_rows::compute, m_rg, m_rB)
+        .reads(m_g, m_B, m_F)
+        .partials(m_rg, m_g, m_B, m_F)
+        .partials(m_rB, m_g, m_B, m_F);
+  }
+
+  static input_parameter_controller parameters() { return input_parameter_controller{base::parameters()}; }
+
+  void compute() {
+    auto const I{tmech::eye<T, 3, 2>()};
+    m_rg = m_g.get() + tmech::trace(m_B.get()) - 2 - tmech::dcontract(N, m_F.get());
+    m_rB = m_B.get() - m_g.get() * strain_rows::P();
+    if (!base::want_partials())
+      return;
+    base::partial(m_rg, m_g) = T{1};
+    base::partial(m_rg, m_B) = tensor2{I};
+    base::partial(m_rg, m_F) = tensor2{-N};
+    base::partial(m_rB, m_g) = tensor2{-strain_rows::P()};
+    base::partial(m_rB, m_B) = nm::sym_identity<T, 3>();
+    base::partial(m_rB, m_F) = tensor4{};
+  }
+
+private:
+  T &m_rg;
+  tensor2 &m_rB;
+  nm::input_property<T, nm::property_traits> const &m_g;
+  nm::input_property<tensor2, nm::property_traits> const &m_B;
+  nm::input_property<tensor2, nm::property_traits> const &m_F;
+};
+
+TEST(ResidualSystemValidation, AnUnsymmetricResidualIsRejectedAtFinalizeWithItsName) {
+  ctx_type ctx;
+  make_system(ctx, {{"B", nm::unknown_kind::sym_tensor}}, {{"rows::r", "B"}});
+  add<difference_row>(ctx, "rows", {{"unsymmetric", true}});
+  auto const message{thrown<std::logic_error>([&] { ctx.finalize(); })};
+  EXPECT_TRUE(message.contains("'rows::r'") && message.contains("unsymmetric_output()")) << message;
+}
+
+TEST(ResidualSystemValidation, AnUnsymmetricUnknownIsRejectedAtFinalizeWithItsName) {
+  ctx_type ctx;
+  add<unsymmetric_unknown_system>(ctx, "solver");
+  add<difference_row>(ctx, "rows", {{"x_source", "solver::X"}});
+  auto const message{thrown<std::logic_error>([&] { ctx.finalize(); })};
+  EXPECT_TRUE(message.contains("'solver::X'") && message.contains("unsymmetric_output()")) << message;
+}
+
+TEST(ResidualSystemTangent, AnUnsymmetricSeedFoldsWithAllItsEntries) {
+  ctx_type ctx;
+  add<nm::test::unsymmetric_source<policy>>(ctx, "F");
+  make_system(ctx, {{"g", nm::unknown_kind::scalar}, {"B", nm::unknown_kind::sym_tensor}}, {{"sys::rg", "g"}, {"sys::rB", "B"}});
+  add<deformation_rows>(ctx, "sys");
+  ctx.finalize();
+  auto const &dg{ctx.derivative<tensor2>("solver", "g", "F", "F")};
+  auto const &dB{ctx.derivative<tensor4>("solver", "B", "F", "F")};
+  dynamic_cast<nm::test::unsymmetric_source<policy> *>(ctx.find("F"))->bind(tensor2{tmech::eye<T, 3, 2>() + 0.1 * N});
+  ctx.update();
+  T const denom{1 + tmech::trace(strain_rows::P())};
+  EXPECT_TRUE(tmech::almost_equal(dg, tensor2{N / denom}, 1e-12)) << "N, not its symmetric part";
+  EXPECT_TRUE(tmech::almost_equal(dB, tensor4{tmech::otimes(strain_rows::P(), N) / denom}, 1e-12));
+  auto const mismatches{nm::check_partials(ctx, "sys")};
+  EXPECT_TRUE(mismatches.empty()) << mismatches.front();
 }
 
 #ifdef NUMSIM_HAVE_JSON

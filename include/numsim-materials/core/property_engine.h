@@ -106,6 +106,7 @@ public:
       m_stateful.insert(mat->stateful_outputs().begin(), mat->stateful_outputs().end());
     mark_unread(interfaces);
     collect_history_properties(properties);
+    collect_unsymmetric(interfaces);
     form_groups(interfaces);
     find_constants(interfaces, writers);
     if constexpr (NUMSIM_MATERIALS_DEBUG_CHECKS)
@@ -336,7 +337,7 @@ public:
     auto const target_rank{derivatives::property_rank<value_type, Traits::Dim>(*target)};
     auto const seed_rank{derivatives::property_rank<value_type, Traits::Dim>(*seed)};
     if (!target_rank || !seed_rank)
-      throw std::logic_error(what() + ": both must be scalars or symmetric tensors of rank 2 or 4");
+      throw std::logic_error(what() + ": both must be scalars or tensors of rank 2 or 4, symmetric or declared unsymmetric_output()");
     if (*target_rank + *seed_rank != derivatives::rank_of<R>())
       throw std::logic_error(std::format("{} has rank {}, the requested type rank {}", what(), *target_rank + *seed_rank,
                                          derivatives::rank_of<R>()));
@@ -1002,6 +1003,15 @@ private:
     m.block(row, col, rows, cols) = Eigen::Map<matrix const>(packed.data(), rows, cols);
   }
 
+  /// pack_block() of d out / d p for an unsymmetric seed p: every entry of p is a column.
+  static void pack_seed_block(matrix& m, Eigen::Index row, std::size_t out_rank, std::size_t in_rank, value_type const* d) {
+    std::array<value_type, derivatives::width<Traits::Dim>(2) * derivatives::full_size<Traits::Dim>(4)> packed;
+    auto const rows{static_cast<Eigen::Index>(derivatives::width<Traits::Dim>(out_rank))};
+    auto const cols{static_cast<Eigen::Index>(derivatives::full_size<Traits::Dim>(in_rank))};
+    derivatives::pack_layout<Traits::Dim>(d, out_rank + in_rank, out_rank, false, true, packed.data());
+    m.block(row, 0, rows, cols) = Eigen::Map<matrix const>(packed.data(), rows, cols);
+  }
+
   /// J by forward differences, one Mandel component of x at a time, with a step relative to the size of x (1 when
   /// x is zero); the unknowns are back at x afterwards, also when a member throws.
   void jacobian_by_differences(system_stage& s, std::vector<property_base*> const& callbacks) {
@@ -1060,6 +1070,15 @@ private:
     return {nullptr, &value(std::type_identity<tensor2>{})};
   }
 
+  /// The outputs declared unsymmetric_output(): a seed of one takes the full identity, a system refuses one.
+  void collect_unsymmetric(const std::vector<material_interface_type*>& interfaces) {
+    m_unsymmetric.clear();
+    for (auto const* mat : interfaces)
+      for (auto const* output : mat->unsymmetric_outputs())
+        m_unsymmetric.insert(find_in_graph(mat->name(), output->traits().id.name));
+  }
+  std::unordered_set<const property_base*> m_unsymmetric;
+
   /// A declaration with its properties: the unknowns and residuals in Mandel rows and columns.
   std::unique_ptr<system_stage> make_system(const material_interface_type& mat, const system_declaration& d) {
     auto s{std::make_unique<system_stage>()};
@@ -1069,6 +1088,9 @@ private:
       auto const r{derivatives::property_rank<value_type, Traits::Dim>(*prop)};
       if (!r || *r > 2)
         throw std::logic_error(describe(*s) + ": '" + prop_key(prop->traits().id) + "' is neither a scalar nor a symmetric tensor");
+      if (m_unsymmetric.contains(prop))
+        throw std::logic_error(describe(*s) + ": '" + prop_key(prop->traits().id) +
+                               "' is declared unsymmetric_output(); a system solves for scalars and symmetric tensors only");
       return *r;
     }};
     for (auto const* unknown : d.unknowns) {
@@ -1343,6 +1365,7 @@ private:
     std::vector<std::unique_ptr<value_holder>> dx; ///< dx/dp per unknown
     derivatives::scale_kernel<value_type> scale{nullptr}; ///< of a scalar system: dx/dp = -(1 / J) B
     matrix J, B, dx_dp;             ///< in Mandel components for the LU, unless the system is scalar
+    bool full_seed{false};          ///< p is unsymmetric: the columns of B and dx_dp are its entries
     Eigen::PartialPivLU<matrix> lu;
     std::vector<derivative_op> ops; ///< D[node][p] += D[node][x] dx/dp
   };
@@ -1353,6 +1376,7 @@ private:
     std::vector<const property_base*> targets;
     std::vector<std::optional<std::size_t>> target_nodes;
     std::vector<std::size_t> seed_ranks;
+    std::vector<char> seed_full;             ///< per seed: declared unsymmetric_output(), its identity is the full one
     std::vector<std::size_t> ranks;          ///< per node
     std::vector<std::vector<value_holder*>> D; ///< null: zero
     std::vector<std::unique_ptr<value_holder>> values;
@@ -1514,7 +1538,8 @@ private:
       if (s->scalar)
         f.scale = derivatives::scale_kernel_for<value_type, Traits::Dim>(seed_rank);
       if (!s->scalar) {
-        auto const p{static_cast<Eigen::Index>(derivatives::width<Traits::Dim>(seed_rank))};
+        f.full_seed = m_unsymmetric.contains(seed);
+        auto const p{static_cast<Eigen::Index>(derivatives::width<Traits::Dim>(seed_rank, f.full_seed))};
         f.J = matrix::Zero(s->height, s->width);
         f.B = matrix::Zero(s->height, p);
         f.dx_dp = matrix::Zero(s->width, p);
@@ -1546,6 +1571,7 @@ private:
     for (auto const& [seed, rank] : seeds) {
       node.emplace(seed, plan.seed_ranks.size());
       plan.seed_ranks.push_back(rank);
+      plan.seed_full.push_back(m_unsymmetric.contains(seed));
     }
     plan.ranks = plan.seed_ranks;
     for (auto const* prop : m_property_execution_order | std::views::filter([&](auto* p) { return up.contains(p) && !node.contains(p); })) {
@@ -1657,7 +1683,7 @@ private:
       }
     auto const identity{[&](std::size_t j) {
       if (!plan.D[j][j])
-        derivatives::identity<value_type, Traits::Dim>(plan.seed_ranks[j], buffer(j, j)->object());
+        derivatives::identity<value_type, Traits::Dim>(plan.seed_ranks[j], buffer(j, j)->object(), plan.seed_full[j] != 0);
       return plan.D[j][j];
     }};
     auto const zeroed{[&](std::size_t k) { // D[k][p] written by a fold, maybe by no op
@@ -1744,7 +1770,10 @@ private:
           if (auto const node{plan.target_nodes[f.first_target + i]}) {
             for (std::size_t u{0}; u < s.unknowns.size(); ++u)
               pack_block(f.J, s.rows[i], s.columns[u], s.residual_ranks[i], s.ranks[u], plan.D[*node][f.first_seed + u]->data());
-            pack_block(f.B, s.rows[i], 0, s.residual_ranks[i], p_rank, plan.D[*node][0]->data());
+            if (f.full_seed)
+              pack_seed_block(f.B, s.rows[i], s.residual_ranks[i], p_rank, plan.D[*node][0]->data());
+            else
+              pack_block(f.B, s.rows[i], 0, s.residual_ranks[i], p_rank, plan.D[*node][0]->data());
           }
         f.lu.compute(f.J);
         f.dx_dp = f.lu.solve(f.B);
@@ -1752,16 +1781,27 @@ private:
           throw singular();
         f.dx_dp = -f.dx_dp;
         for (std::size_t u{0}; u < s.unknowns.size(); ++u) {
-          std::array<value_type, derivatives::width<Traits::Dim>(2) * derivatives::width<Traits::Dim>(4)> packed;
           auto const rows{static_cast<Eigen::Index>(derivatives::width<Traits::Dim>(s.ranks[u]))};
-          auto const cols{f.dx_dp.cols()};
-          Eigen::Map<matrix>(packed.data(), rows, cols) = f.dx_dp.middleRows(s.columns[u], rows);
-          derivatives::unpack_full<Traits::Dim>(s.ranks[u], p_rank, packed.data(), f.dx[u]->data());
+          if (f.full_seed) {
+            unpack_seed_columns(f.dx_dp.middleRows(s.columns[u], rows), s.ranks[u], p_rank, f.dx[u]->data());
+          } else {
+            std::array<value_type, derivatives::width<Traits::Dim>(2) * derivatives::width<Traits::Dim>(4)> packed;
+            Eigen::Map<matrix>(packed.data(), rows, f.dx_dp.cols()) = f.dx_dp.middleRows(s.columns[u], rows);
+            derivatives::unpack_full<Traits::Dim>(s.ranks[u], p_rank, packed.data(), f.dx[u]->data());
+          }
         }
       }
       for (auto const& op : f.ops)
         op.kernel(op.P, op.in, op.out, op.scratch);
     }
+  }
+
+  /// The inverse of pack_seed_block(): dx/dp in full notation from its rows of dx_dp.
+  template <typename Rows>
+  static void unpack_seed_columns(Rows const& block, std::size_t out_rank, std::size_t in_rank, value_type* d) {
+    std::array<value_type, derivatives::width<Traits::Dim>(2) * derivatives::full_size<Traits::Dim>(4)> packed;
+    Eigen::Map<matrix>(packed.data(), block.rows(), block.cols()) = block;
+    derivatives::unpack_layout<Traits::Dim>(packed.data(), out_rank + in_rank, out_rank, false, true, d);
   }
 
   edge_kind kind_of(const property_base* from, const property_base* to) const {

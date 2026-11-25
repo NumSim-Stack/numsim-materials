@@ -23,6 +23,7 @@
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/materials/thermal_eigenstrain.h"
 #include "numsim-materials/umat/external_state_source.h"
+#include "test_fixture_materials.h"
 #include "test_support.h"
 
 // Partial derivatives per callback and their forward accumulation (#217).
@@ -157,7 +158,7 @@ struct map_y { // tensor4 of tensor4: z = A : Y
 };
 
 /// y = Law::value(x) for x read from "x_source"; "partials" is "declared" (the default), "independent", "on_request"
-/// (fill() fills it), "fill_only" (fill() without partials()) or "none".
+/// (fill() fills it), "fill_only" (fill() without partials()) or "none"; "unsymmetric" declares y unsymmetric_output().
 template <typename Law, typename Traits>
 class law_node final : public nm::material_base<law_node<Law, Traits>, Traits> {
 public:
@@ -178,12 +179,16 @@ public:
       handle.independent_of(m_x);
     if (m_mode == "on_request" || m_mode == "fill_only")
       handle.fills_partials(&law_node::fill);
+    if constexpr (!std::is_arithmetic_v<typename Law::out>)
+      if (base::template get_parameter<bool>("unsymmetric"))
+        base::unsymmetric_output(m_y);
   }
 
   static input_parameter_controller parameters() {
     input_parameter_controller para{base::parameters()};
     nm::required<std::string>(para, "x_source");
     nm::optional<std::string>(para, "partials", std::string{"declared"});
+    nm::optional<bool>(para, "unsymmetric", false);
     return para;
   }
 
@@ -1203,3 +1208,183 @@ TEST(PartialDerivatives, ARankOfNoNodeValueHasNoKernel) {
   EXPECT_THROW((void)(nm::derivatives::step_kernel_for<T, 3>(2, 6, 2, false)), std::logic_error);
   EXPECT_THROW((void)(nm::derivatives::seed_kernel_for<T, 3>(2, 3, false)), std::logic_error);
 }
+
+// --- unsymmetric tensors (#234) ---
+
+namespace {
+
+tensor2 const F0{1.1, 0.2, -0.1, 0.05, 0.9, 0.3, -0.2, 0.15, 1.2}; // a deformation gradient
+
+struct inverse_law { // F^-1: unsymmetric of unsymmetric
+  using in = tensor2;
+  using out = tensor2;
+  static tensor2 value(tensor2 const &x) { return tmech::inv(x); }
+  static tensor4 partial(tensor2 const &x) {
+    tensor2 const xi{tmech::inv(x)};
+    return tensor4{-tmech::otimesu(xi, tmech::trans(xi))};
+  }
+};
+struct left_cauchy_green { // x x^T: symmetric of unsymmetric
+  using in = tensor2;
+  using out = tensor2;
+  static tensor2 value(tensor2 const &x) { return tensor2{x * tmech::trans(x)}; }
+  static tensor4 partial(tensor2 const &x) { return tensor4{tmech::otimesu(I, x) + tmech::otimesl(x, I)}; }
+};
+struct symmetrised_left_cauchy_green : left_cauchy_green { // its partial projected onto the symmetric part of dx
+  static tensor4 partial(tensor2 const &x) { return tensor4{tmech::dcontract(left_cauchy_green::partial(x), Is)}; }
+};
+struct push_forward { // N x: unsymmetric of symmetric
+  using in = tensor2;
+  using out = tensor2;
+  static tensor2 value(tensor2 const &x) { return tensor2{N2 * x}; }
+  static tensor4 partial(tensor2 const &) { return tensor4{0.5 * (tmech::otimesu(N2, I) + tmech::otimesl(N2, I))}; }
+};
+struct skew_square { // |skew(x)|^2: blind to a symmetric perturbation
+  using in = tensor2;
+  using out = T;
+  static T value(tensor2 const &x) {
+    tensor2 const w{0.5 * (x - tmech::trans(x))};
+    return tmech::dcontract(w, w);
+  }
+  static tensor2 partial(tensor2 const &x) { return tensor2{x - tmech::trans(x)}; }
+};
+
+/// The chain with an unsymmetric source "F".
+struct f_chain : chain {
+  f_chain() { add<nm::test::unsymmetric_source<policy>>(ctx, "F"); }
+
+  template <typename Law>
+  law_node<Law, policy> &unsymmetric_node(std::string const &name, std::string const &x_source) {
+    return add<law_node<Law, policy>>(ctx, name, {{"x_source", x_source}, {"unsymmetric", true}});
+  }
+
+  void load_F(tensor2 const &F) {
+    dynamic_cast<nm::test::unsymmetric_source<policy> *>(ctx.find("F"))->bind(F);
+    ctx.update();
+  }
+};
+
+/// d material::property / dF at F by central differences of the context, one entry of F at a time.
+template <typename V>
+auto central_differences(f_chain &c, std::string const &material, std::string const &property, tensor2 const &F) {
+  std::conditional_t<std::is_arithmetic_v<V>, tensor2, tensor4> d{};
+  constexpr T h{1e-6};
+  for (std::size_t k{0}; k < 3; ++k)
+    for (std::size_t l{0}; l < 3; ++l) {
+      std::array<V, 2> v{};
+      for (std::size_t const side : {0u, 1u}) {
+        tensor2 Fh{F};
+        Fh(k, l) += side == 0 ? h : -h;
+        c.load_F(Fh);
+        v[side] = c.ctx.get<V>(material, property);
+      }
+      if constexpr (std::is_arithmetic_v<V>)
+        d(k, l) = (v[0] - v[1]) / (2 * h);
+      else
+        for (std::size_t i{0}; i < 3; ++i)
+          for (std::size_t j{0}; j < 3; ++j)
+            d(i, j, k, l) = (v[0](i, j) - v[1](i, j)) / (2 * h);
+    }
+  c.load_F(F);
+  return d;
+}
+
+TEST(UnsymmetricDerivatives, TheSeedIdentityOfAnUnsymmetricValueIsTheFullIdentity) {
+  tensor4 I2;
+  nm::derivatives::identity<T, 3>(2, &I2, true);
+  EXPECT_LT(distance(tensor2{tmech::dcontract(I2, N2)}, N2), 1e-15);
+  EXPECT_LT(distance(tensor2{tmech::dcontract(N2, I2)}, N2), 1e-15);
+  tensor8 I4;
+  nm::derivatives::identity<T, 3>(4, &I4, true);
+  tensor4 X;
+  X.randn();
+  EXPECT_LT(distance(tensor4{tmech::ddcontract(I4, X)}, X), 1e-14);
+  EXPECT_LT(distance(tensor4{tmech::ddcontract(X, I4)}, X), 1e-14);
+}
+
+TEST(UnsymmetricDerivatives, AnUnsymmetricSeedIsItsOwnFullIdentity) {
+  f_chain c;
+  c.ctx.finalize();
+  auto const &d{c.ctx.derivative<tensor4>("F", "F", "F", "F")};
+  c.load_F(F0);
+  EXPECT_LT(distance(d, tensor4{tmech::otimesu(I, I)}), 1e-15) << "dF/dF = d_ik d_jl, not its symmetric part";
+}
+
+TEST(UnsymmetricDerivatives, ASymmetricSeedKeepsTheSymmetricIdentity) {
+  f_chain c;
+  c.ctx.finalize();
+  auto const &d{c.ctx.derivative<tensor4>("strain", "strain", "strain", "strain")};
+  c.load(x0, s0);
+  EXPECT_LT(distance(d, Is), 1e-15) << "DDSDDE stays minor-symmetric";
+}
+
+TEST(UnsymmetricDerivatives, ASeedFThroughANonSymmetricChainMatchesCentralDifferences) {
+  f_chain c;
+  c.unsymmetric_node<inverse_law>("inverse", "F::F"); // unsymmetric of unsymmetric
+  c.node<left_cauchy_green>("b", "inverse::y");      // symmetric of unsymmetric
+  c.unsymmetric_node<push_forward>("pushed", "b::y"); // unsymmetric of symmetric
+  c.node<project_c>("s", "b::y");
+  c.ctx.finalize();
+  auto const &d_inverse{c.ctx.derivative<tensor4>("inverse", "y", "F", "F")};
+  auto const &d_b{c.ctx.derivative<tensor4>("b", "y", "F", "F")};
+  auto const &d_pushed{c.ctx.derivative<tensor4>("pushed", "y", "F", "F")};
+  auto const &d_s{c.ctx.derivative<tensor2>("s", "y", "F", "F")};
+  c.load_F(F0);
+  EXPECT_LT(distance(d_inverse, inverse_law::partial(F0)), 1e-12);
+  EXPECT_LT(distance(d_inverse, central_differences<tensor2>(c, "inverse", "y", F0)), 1e-8);
+  EXPECT_LT(distance(d_b, central_differences<tensor2>(c, "b", "y", F0)), 1e-8);
+  EXPECT_LT(distance(d_pushed, central_differences<tensor2>(c, "pushed", "y", F0)), 1e-8);
+  EXPECT_LT(distance(d_s, central_differences<T>(c, "s", "y", F0)), 1e-8);
+}
+
+TEST(UnsymmetricDerivatives, MixedPartialsPassTheFiniteDifferenceCheck) {
+  f_chain c;
+  c.unsymmetric_node<inverse_law>("inverse", "F::F");
+  c.node<left_cauchy_green>("b", "inverse::y");
+  c.unsymmetric_node<push_forward>("pushed", "b::y");
+  c.node<skew_square>("w", "pushed::y");
+  c.ctx.finalize();
+  c.load_F(F0);
+  for (auto const *name : {"inverse", "b", "pushed", "w"}) {
+    auto const mismatches{nm::check_partials(c.ctx, name)};
+    EXPECT_TRUE(mismatches.empty()) << name << ": " << mismatches.front();
+  }
+}
+
+TEST(UnsymmetricDerivatives, ASymmetrisedPartialWithRespectToFFailsTheFiniteDifferenceCheck) {
+  f_chain c;
+  c.node<symmetrised_left_cauchy_green>("b", "F::F");
+  c.ctx.finalize();
+  c.load_F(F0);
+  auto const mismatches{nm::check_partials(c.ctx, "b")};
+  ASSERT_FALSE(mismatches.empty()) << "a symmetric perturbation of F cannot see the symmetrised partial";
+  EXPECT_TRUE(mismatches.front().contains("full-notation column")) << mismatches.front();
+}
+
+TEST(UnsymmetricDerivatives, AWrongIndependentOfOnTheSkewPartOfFFailsTheFiniteDifferenceCheck) {
+  f_chain c;
+  c.node<skew_square>("w", "F::F", "independent");
+  c.ctx.finalize();
+  c.load_F(F0);
+  auto const mismatches{nm::check_partials(c.ctx, "w")};
+  ASSERT_FALSE(mismatches.empty());
+  EXPECT_TRUE(mismatches.front().contains("independent_of")) << mismatches.front();
+}
+
+TEST(UnsymmetricDerivatives, PackLayoutKeepsTheEntriesOfAFullPairAndInvertsOnTheMandelOnes) {
+  tensor4 X;
+  X.randn();
+  tensor4 const symmetric_out{0.5 * (X + tmech::basis_change<tmech::sequence<2, 1, 3, 4>>(X))};
+  std::array<T, 6 * 9> block{};
+  nm::derivatives::pack_layout<3>(X.raw_data(), 4, 2, false, true, block.data());
+  tensor4 back;
+  nm::derivatives::unpack_layout<3>(block.data(), 4, 2, false, true, back.raw_data());
+  EXPECT_LT(distance(back, symmetric_out), 1e-14) << "the output pair symmetrised, the read pair kept";
+  std::array<T, 36> mandel{}, layout{};
+  nm::derivatives::pack<3, 2>(Is, mandel.data());
+  nm::derivatives::pack_layout<3>(Is.raw_data(), 4, 2, false, false, layout.data());
+  for (std::size_t q{0}; q < mandel.size(); ++q)
+    EXPECT_NEAR(layout[q], mandel[q], 1e-15) << q;
+}
+
+} // namespace
