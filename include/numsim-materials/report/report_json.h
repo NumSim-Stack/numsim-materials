@@ -129,9 +129,15 @@ load_case<T> parse_case(nlohmann::json const &c, bool finite_strain = false) {
       points.push_back(tensor2{scale * parse_symmetric<T>(pt)});
       factors.push_back(T(factors.size()));
     }
+    if (!points.empty() && tmech::norm(points.front()) != T{0})
+      throw std::invalid_argument("case '" + c.value("name", std::string{}) +
+                                  "': the first point is zero, the unloaded state of step 0");
   } else {
     auto const direction{parse_symmetric<T>(c.at("direction"))};
     factors = c.at("path").get<std::vector<T>>();
+    if (!factors.empty() && factors.front() != T{0})
+      throw std::invalid_argument("case '" + c.value("name", std::string{}) +
+                                  "': the path starts at 0, the unloaded state of step 0");
     for (auto const f : factors)
       points.push_back(tensor2{scale * f * direction});
   }

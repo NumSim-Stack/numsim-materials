@@ -27,6 +27,17 @@ using tensor4 = tmech::tensor<T, 3, 4>;
 using control = nm::load_control<T>;
 using json = nlohmann::json;
 
+/// The message of what `f` throws; empty if it does not throw.
+template <typename F>
+std::string error_of(F &&f) {
+  try {
+    static_cast<void>(f());
+  } catch (std::exception const &e) {
+    return e.what();
+  }
+  return {};
+}
+
 TEST(LoadControl, StrainControlPrescribesNoStress) {
   EXPECT_EQ(tmech::norm(control::strain().stress_projector()), 0);
 }
@@ -131,6 +142,19 @@ TEST(LoadPath, RejectsStepsOutsideThePath) {
   EXPECT_THROW((void)path.at(0), std::out_of_range);
   EXPECT_THROW((void)path.at(3), std::out_of_range);
   EXPECT_NO_THROW((void)path.at(2));
+}
+
+TEST(LoadPath, StartsUnloaded) {
+  EXPECT_THROW((r::load_path<T>{{0.5, 1}, 2}), std::invalid_argument);
+  EXPECT_EQ((r::load_path<T>{{0, 1}, 2, 0.5}).unloaded().load, 0);
+}
+
+TEST(ReportJson, APathStartsAtTheUnloadedState) {
+  auto const error = [](std::string const &spec) { return error_of([&] { return r::parse_case<T>(json::parse(spec)); }); };
+  EXPECT_NE(error(R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": [0.5, 1]})").find("case 'u'"), std::string::npos);
+  EXPECT_NE(error(R"({"name": "p", "points": [[1e-3, 0, 0, 0, 0, 0], [2e-3, 0, 0, 0, 0, 0]]})").find("case 'p'"), std::string::npos);
+  EXPECT_EQ(error(R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], "scale": 2})"), "");
+  EXPECT_EQ(error(R"({"name": "p", "points": [[0, 0, 0, 0, 0, 0], [2e-3, 0, 0, 0, 0, 0]]})"), "");
 }
 
 TEST(ReportJson, ParsesThePointAndTheColumns) {

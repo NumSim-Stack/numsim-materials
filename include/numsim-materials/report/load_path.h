@@ -20,7 +20,8 @@ struct load_step {
 };
 
 /// Step schedule along a piecewise linear path: `steps_per_segment` steps between consecutive
-/// points; `factors` (one per point, times `scale`) give the load factor of a step.
+/// points; `factors` (one per point, times `scale`) give the load factor of a step. The first
+/// factor is 0: step 0 is the unloaded state.
 template <typename T>
 class load_path {
 public:
@@ -28,11 +29,13 @@ public:
       : m_points(std::move(factors)), m_steps(steps_per_segment), m_scale(scale), m_dt(dt) {
     if (m_points.size() < 2 || m_steps < 1)
       throw std::invalid_argument("load path: needs two points and at least one step per segment");
+    if (m_points.front() != T{0})
+      throw std::invalid_argument("load path: starts at load factor 0, the unloaded state of step 0");
   }
 
   [[nodiscard]] std::size_t size() const noexcept { return (m_points.size() - 1) * static_cast<std::size_t>(m_steps); }
 
-  [[nodiscard]] load_step<T> unloaded() const noexcept { return {0, 0, 0, m_scale * m_points.front()}; }
+  [[nodiscard]] load_step<T> unloaded() const noexcept { return {0, 0, 0, 0}; }
 
   [[nodiscard]] load_step<T> at(int index) const {
     if (index < 1 || index > static_cast<int>(size()))

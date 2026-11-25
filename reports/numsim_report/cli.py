@@ -14,8 +14,8 @@ report.json
                a rank-2 tensor gives six columns name_11 ... name_23, a component is selected with
                "j2::plastic_strain[1,1]" (1-based); columns are ordered by name
   cases        name; control: strain | uniaxial_stress | mixed with stress_components ["22", "33"];
-               proportional: direction (strain per unit load) and path (load factors); non-proportional:
-               points (strain states in order, the load factor counts segments); stress (target per
+               proportional: direction (strain per unit load) and path (load factors from 0); non-proportional:
+               points (strain states in order from zero, the load factor counts segments); stress (target per
                unit load factor); tensors as components [11, 22, 33, 12, 13, 23]; steps per segment,
                scale (applies to the strains), dt;
                tangent_every: finite-difference tangent check every n-th step (1; 0 = never), fd_step (1e-7);
