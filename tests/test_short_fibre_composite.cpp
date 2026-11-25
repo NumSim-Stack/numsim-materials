@@ -27,13 +27,10 @@ using param_type = policy::ParameterHandler;
 using tensor2 = tmech::tensor<T, 3, 2>;
 using tensor4 = tmech::tensor<T, 3, 4>;
 using numsim::materials::test::add;
+using numsim::materials::test::constant;
 
 constexpr T Km{3.0}, Gm{1.0}, Kf{60.0}, Gf{30.0}, c{0.2}, ar{10.0};
 std::vector<T> const aligned{1, 0, 0, 0, 0, 0}, random3d{1.0 / 3, 1.0 / 3, 1.0 / 3, 0, 0, 0}, mostly{0.8, 0.1, 0.1, 0, 0, 0};
-
-void constant(ctx_type &ctx, std::string const &name, T value) {
-  add<nm::constant_scalar<policy>>(ctx, name, {{"value", value}});
-}
 
 std::unique_ptr<ctx_type> build(std::vector<T> const &orientation, std::string const &averaging = "concentration",
                                 std::size_t precision = 15) {

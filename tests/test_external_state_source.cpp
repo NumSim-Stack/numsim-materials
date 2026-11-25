@@ -24,6 +24,7 @@ using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
 using tensor2 = tmech::tensor<T, 3, 2>;
 using numsim::materials::test::add;
+using numsim::materials::test::uniaxial;
 
 constexpr T K = 166.67;
 constexpr T G = 76.92;
@@ -41,13 +42,6 @@ void add_j2_chain(ctx_type& ctx) {
   add<nm::j2_plasticity<policy>>(ctx, "j2",
       {{"K", K}, {"hardening_source", "hardening"}, {"strain_source", "stepper"}, {"solver_source", "solver"}, {"G", G},
        {"sigma_0", sigma_0}});
-}
-
-tensor2 uniaxial(T value) {
-  tensor2 e;
-  e.fill(0.0);
-  e(0, 0) = value;
-  return e;
 }
 
 // ---------------------------------------------------------------------------

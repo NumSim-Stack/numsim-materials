@@ -31,6 +31,7 @@ using registry = u::umat_registry<policy>;
 using tensor2 = tmech::tensor<T, 3, 2>;
 using tensor4 = tmech::tensor<T, 3, 4>;
 using numsim::materials::test::add;
+using numsim::materials::test::fortran_name;
 
 /// C1111 for an isotropic tangent, the quantity every test here reads back.
 constexpr T c1111(T K, T G) { return K + 4.0 * G / 3.0; }
@@ -306,14 +307,6 @@ struct Registration {
   }
 };
 const Registration registration_{};
-
-struct fortran_name {
-  char buf[80];
-  explicit fortran_name(const std::string& s) {
-    for (auto& c : buf) c = ' ';
-    for (std::size_t i = 0; i < s.size() && i < 80; ++i) buf[i] = s[i];
-  }
-};
 
 T uniaxial_tangent(const std::string& name, const T* props, int nprops) {
   const fortran_name cm(name);

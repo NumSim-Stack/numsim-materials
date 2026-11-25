@@ -1,7 +1,13 @@
 #ifndef NUMSIM_MATERIALS_TESTS_TEST_SUPPORT_H
 #define NUMSIM_MATERIALS_TESTS_TEST_SUPPORT_H
 
+#include "numsim-materials/core/material_context.h"
+#include "numsim-materials/materials/constant_scalar.h"
+
+#include <tmech/tmech.h>
+
 #include <concepts>
+#include <cstddef>
 #include <functional>
 #include <initializer_list>
 #include <string>
@@ -49,6 +55,42 @@ Material &add(Context &ctx, std::string name, std::initializer_list<parameter<st
     entry.insert_into(p);
   return ctx.template create<Material>(p);
 }
+
+/// A constant_scalar "name" with the given value.
+template <typename Traits>
+constant_scalar<Traits> &constant(material_context<Traits> &ctx, std::string name, typename Traits::value_type value) {
+  return add<constant_scalar<Traits>>(ctx, std::move(name), {{"value", value}});
+}
+
+/// |a - b| / |b|.
+template <typename A> auto relative(A const &a, A const &b) { return tmech::norm(A{a - b}) / tmech::norm(b); }
+
+/// The strain with e in its (0, 0) component.
+template <std::floating_point T> tmech::tensor<T, 3, 2> uniaxial(T e) {
+  tmech::tensor<T, 3, 2> eps;
+  eps(0, 0) = e;
+  return eps;
+}
+
+/// The deformation gradient diag(l1, l2, l3).
+template <std::floating_point T> tmech::tensor<T, 3, 2> stretch(T l1, T l2 = T{1}, T l3 = T{1}) {
+  tmech::tensor<T, 3, 2> F;
+  F(0, 0) = l1;
+  F(1, 1) = l2;
+  F(2, 2) = l3;
+  return F;
+}
+
+/// A blank-padded Fortran CHARACTER*80, as the UMAT entry points receive the material name.
+struct fortran_name {
+  char buf[80];
+  explicit fortran_name(std::string const &s) {
+    for (auto &c : buf)
+      c = ' ';
+    for (std::size_t i = 0; i < s.size() && i < 80; ++i)
+      buf[i] = s[i];
+  }
+};
 
 } // namespace numsim::materials::test
 

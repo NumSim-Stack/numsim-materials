@@ -5,6 +5,9 @@
 #include "numsim-materials/materials/constant_scalar.h"
 #include "test_support.h"
 
+#include <tmech/tmech.h>
+
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -49,4 +52,37 @@ TEST(TestSupport, AddCreatesTheMaterialWithItsNameAndParameters) {
   ctx.update();
   EXPECT_EQ(c.name(), "c");
   EXPECT_EQ(ctx.get<T>("c", "value"), T{2.5});
+}
+
+TEST(TestSupport, RelativeIsTheDistanceOverTheNormOfTheSecond) {
+  using tensor2 = tmech::tensor<T, 3, 2>;
+  tensor2 const b{tmech::eye<T, 3, 2>()};
+  tensor2 const a{T{2} * b};
+  EXPECT_DOUBLE_EQ(nm::test::relative(a, b), 1.0);
+  EXPECT_DOUBLE_EQ(nm::test::relative(b, a), 0.5);
+}
+
+TEST(TestSupport, UniaxialAndStretch) {
+  auto const e{nm::test::uniaxial(T{0.25})};
+  EXPECT_EQ(e(0, 0), T{0.25});
+  EXPECT_EQ(tmech::norm(e), T{0.25});
+  auto const F{nm::test::stretch(T{2}, T{3})};
+  EXPECT_EQ(F(0, 0), T{2});
+  EXPECT_EQ(F(1, 1), T{3});
+  EXPECT_EQ(F(2, 2), T{1});
+  EXPECT_EQ(tmech::norm(F), std::sqrt(T{14}));
+}
+
+TEST(TestSupport, ConstantAddsAConstantScalar) {
+  ctx_type ctx;
+  nm::test::constant(ctx, "c", T{4});
+  ctx.finalize();
+  ctx.update();
+  EXPECT_EQ(ctx.get<T>("c", "value"), T{4});
+}
+
+TEST(TestSupport, FortranNameIsBlankPadded) {
+  nm::test::fortran_name const n{"AB"};
+  EXPECT_EQ(std::string(n.buf, 4), "AB  ");
+  EXPECT_EQ(n.buf[79], ' ');
 }

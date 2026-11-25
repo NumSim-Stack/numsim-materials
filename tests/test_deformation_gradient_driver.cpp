@@ -24,6 +24,7 @@ using driver = nm::deformation_gradient_driver<policy>;
 using tensor2 = driver::tensor2;
 using control = nm::deformation_control<T>;
 using numsim::materials::test::add;
+using numsim::materials::test::stretch;
 
 constexpr T K{166.67};
 constexpr T G{76.92};
@@ -59,12 +60,6 @@ param_type parameters() {
   p.insert<std::string>("deformation_gradient_source", "F");
   p.insert<std::string>("stress_source", "model");
   return p;
-}
-
-tensor2 stretch(T lambda) {
-  tensor2 F{tmech::eye<T, 3, 2>()};
-  F(0, 0) = lambda;
-  return F;
 }
 
 TEST(DeformationControl, UniaxialStressFreesEverythingButEleven) {

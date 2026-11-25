@@ -29,12 +29,9 @@ using param_type = policy::ParameterHandler;
 using tensor2 = tmech::tensor<T, 3, 2>;
 using tensor4 = tmech::tensor<T, 3, 4>;
 using numsim::materials::test::add;
+using numsim::materials::test::constant;
 
 constexpr T K1{100}, G1{40}, K2{10}, G2{3}, c1{0.3}, c2{0.7};
-
-void constant(ctx_type &ctx, std::string const &name, T value) {
-  add<nm::constant_scalar<policy>>(ctx, name, {{"value", value}});
-}
 
 /// K, G producers -> isotropic tangents -> phases with produced fractions -> the global composite with a
 /// rule-of-mixture `kernel` -> linear_stress.

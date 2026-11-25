@@ -31,6 +31,7 @@ using param_type = policy::ParameterHandler;
 using t2 = tmech::tensor<T, 3, 2>;
 using t4 = tmech::tensor<T, 3, 4>;
 using numsim::materials::test::add;
+using numsim::materials::test::relative;
 
 constexpr T K{166.67}, G{76.92}, sigma_0{1.0}, H_iso{5.0}, C{30.0};
 
@@ -213,11 +214,6 @@ t2 strain_b() {
   e(2, 2) = 0.006;
   e(0, 1) = e(1, 0) = 0.012;
   return e;
-}
-
-template <typename A>
-T relative(A const &a, A const &b) {
-  return tmech::norm(A{a - b}) / tmech::norm(b);
 }
 
 TEST(SystemPlasticity, MatchesTheShippedStressAndTangent) {

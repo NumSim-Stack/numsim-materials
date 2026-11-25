@@ -33,12 +33,10 @@ using param_type = policy::ParameterHandler;
 using tensor2 = tmech::tensor<T, 3, 2>;
 using tensor4 = tmech::tensor<T, 3, 4>;
 using numsim::materials::test::add;
+using numsim::materials::test::uniaxial;
+using numsim::materials::test::constant;
 
 constexpr T Km{3.0}, Gm{1.0}, Ki{60.0}, Gi{30.0}, c{0.3};
-
-void constant(ctx_type &ctx, std::string const &name, T value) {
-  add<nm::constant_scalar<policy>>(ctx, name, {{"value", value}});
-}
 
 /// The kernel object of `type`; self-consistent carries the shapes of both phases.
 nm::object_spec<param_type> kernel_spec(std::string const &type) {
@@ -117,12 +115,6 @@ public:
 private:
   nm::mean_field::mori_tanaka<Traits> m_kernel;
 };
-
-tensor2 uniaxial(T e) {
-  tensor2 eps;
-  eps(0, 0) = e;
-  return eps;
-}
 
 /// Loads the composite in equal steps to the strain `eps`, committing every step.
 void load(ctx_type &ctx, tensor2 const &eps, int steps) {

@@ -22,8 +22,7 @@ using param_type = policy::ParameterHandler;
 using tensor2 = tmech::tensor<T, 3, 2>;
 using tensor4 = tmech::tensor<T, 3, 4>;
 using numsim::materials::test::add;
-
-T relative(tensor4 const &a, tensor4 const &b) { return tmech::norm(tensor4{a - b}) / tmech::norm(b); }
+using numsim::materials::test::relative;
 
 class IsotropicDamageTest : public ::testing::Test {
 protected:

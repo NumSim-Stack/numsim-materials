@@ -47,6 +47,7 @@ using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
 using registry = u::umat_registry<policy>;
 using numsim::materials::test::add;
+using numsim::materials::test::fortran_name;
 
 // Deliberately asymmetric moduli so K and G cannot alias each other.
 constexpr T K = 166.67;
@@ -250,14 +251,6 @@ struct Registration {
 const Registration registration;
 
 /// CMNAME as Fortran passes it: character*80, blank padded, no NUL.
-struct fortran_name {
-  char buf[80];
-  explicit fortran_name(const std::string& s) {
-    for (std::size_t i = 0; i < 80; ++i) buf[i] = ' ';
-    for (std::size_t i = 0; i < s.size() && i < 80; ++i) buf[i] = s[i];
-  }
-};
-
 /// A fatal fault must terminate the analysis. The handler is replaced so the
 /// test can observe it instead of the runner being killed by XIT/abort.
 /// The default fatal handler calls std::abort(), which is right in a solver --

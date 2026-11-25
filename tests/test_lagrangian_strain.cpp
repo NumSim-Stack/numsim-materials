@@ -19,6 +19,7 @@
 #include "numsim-materials/materials/saint_venant_kirchhoff.h"
 #include "numsim-materials/materials/seth_hill_strain.h"
 #include "numsim-materials/umat/json_model.h"
+#include "test_support.h"
 
 namespace {
 
@@ -33,6 +34,8 @@ using tensor4 = tmech::tensor<T, 3, 4>;
 using tensor6 = tmech::tensor<T, 3, 6>;
 using driver = nm::deformation_gradient_driver<policy>;
 using control = nm::deformation_control<T>;
+using numsim::materials::test::relative;
+using numsim::materials::test::stretch;
 
 constexpr T K{166.67}, G{76.92}, fibre{300.0};
 
@@ -149,14 +152,6 @@ void bind(ctx_type &ctx, tensor2 const &F) {
   ctx.update();
 }
 
-tensor2 stretch(T l1, T l2 = 1, T l3 = 1) {
-  tensor2 F;
-  F(0, 0) = l1;
-  F(1, 1) = l2;
-  F(2, 2) = l3;
-  return F;
-}
-
 tensor2 rotation() {
   tensor1 axis;
   axis(0) = 1, axis(1) = 2, axis(2) = 2;
@@ -172,11 +167,6 @@ tensor2 general_F() {
   return F;
 }
 
-template <typename A>
-T rel(A const &a, A const &b) {
-  return tmech::norm(A{a - b}) / tmech::norm(b);
-}
-
 constexpr T measures[]{0.0, 1.0, 2.0, -2.0, 0.5};
 
 TEST(LagrangianStrain, StrainIsTheSethHillMeasure) {
@@ -186,7 +176,7 @@ TEST(LagrangianStrain, StrainIsTheSethHillMeasure) {
   for (std::size_t i{0}; i < std::size(measures); ++i) {
     auto ctx{chain(measures[i], pull_back::none)};
     bind(*ctx, F);
-    EXPECT_LE(rel(ctx->get<tensor2>("strain", "strain"), expected[i]), 1e-13) << measures[i];
+    EXPECT_LE(relative(ctx->get<tensor2>("strain", "strain"), expected[i]), 1e-13) << measures[i];
   }
 }
 
@@ -245,8 +235,8 @@ TEST(LagrangianStrain, HenckyMatchesTheEulerianChain) {
   for (auto const &F : {general_F(), stretch(1.2, 0.95, 1.05), stretch(1.15, 1.15, 1.0)}) {
     bind(*lag, F);
     bind(*eul, F);
-    EXPECT_LE(rel(lag->get<tensor2>("P", "stress"), eul->get<tensor2>("P", "stress")), 1e-12);
-    EXPECT_LE(rel(lag->get<tensor4>("P", "tangent"), eul->get<tensor4>("P", "tangent")), 1e-10);
+    EXPECT_LE(relative(lag->get<tensor2>("P", "stress"), eul->get<tensor2>("P", "stress")), 1e-12);
+    EXPECT_LE(relative(lag->get<tensor4>("P", "tangent"), eul->get<tensor4>("P", "tangent")), 1e-10);
   }
 }
 
@@ -263,8 +253,8 @@ TEST(LagrangianStrain, GreenLagrangeIsSaintVenantKirchhoff) {
   for (auto const &F : {general_F(), stretch(1.2, 0.95, 1.05)}) {
     bind(*lag, F);
     bind(svk, F);
-    EXPECT_LE(rel(lag->get<tensor2>("P", "stress"), svk.get<tensor2>("P", "stress")), 1e-13);
-    EXPECT_LE(rel(lag->get<tensor4>("P", "tangent"), svk.get<tensor4>("P", "tangent")), 1e-13);
+    EXPECT_LE(relative(lag->get<tensor2>("P", "stress"), svk.get<tensor2>("P", "stress")), 1e-13);
+    EXPECT_LE(relative(lag->get<tensor4>("P", "tangent"), svk.get<tensor4>("P", "tangent")), 1e-13);
   }
 }
 
@@ -293,7 +283,7 @@ TEST(LagrangianStrain, AnisotropicIsObjective) {
     bind(*ctx, U);
     tensor2 const P_U{ctx->get<tensor2>("P", "stress")};
     bind(*ctx, tensor2{rotation() * U});
-    EXPECT_LE(rel(ctx->get<tensor2>("P", "stress"), tensor2{rotation() * P_U}), 1e-12) << m; // P(R U) = R P(U)
+    EXPECT_LE(relative(ctx->get<tensor2>("P", "stress"), tensor2{rotation() * P_U}), 1e-12) << m; // P(R U) = R P(U)
     bind(*ctx, rotation());
     EXPECT_LE(tmech::norm(ctx->get<tensor2>("P", "stress")), 1e-10 * K) << m; // a rotation is stress free
   }
@@ -307,7 +297,7 @@ TEST(LagrangianStrain, AnisotropicEulerianChainIsNotObjective) {
   bind(*ctx, U);
   tensor2 const P_U{ctx->get<tensor2>("P", "stress")};
   bind(*ctx, tensor2{rotation() * U});
-  EXPECT_GT(rel(ctx->get<tensor2>("P", "stress"), tensor2{rotation() * P_U}), 1e-2);
+  EXPECT_GT(relative(ctx->get<tensor2>("P", "stress"), tensor2{rotation() * P_U}), 1e-2);
 }
 
 // every measure is sym(F - I) to first order
@@ -324,7 +314,7 @@ TEST(LagrangianStrain, SmallStrainLimitIsLinearElasticity) {
   for (T const m : measures) {
     auto ctx{chain(m, pull_back::lagrangian, true)};
     bind(*ctx, F);
-    EXPECT_LE(rel(ctx->get<tensor2>("P", "stress"), sigma), 1e-5) << m;
+    EXPECT_LE(relative(ctx->get<tensor2>("P", "stress"), sigma), 1e-5) << m;
   }
 }
 

@@ -9,6 +9,7 @@
 #include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/umat/json_model.h"
 #include "numsim-materials/umat/material_point_evaluator.h"
+#include "test_support.h"
 
 namespace {
 
@@ -21,6 +22,7 @@ using param_type = policy::ParameterHandler;
 using tensor2 = tmech::tensor<T, 3, 2>;
 using driver = nm::deformation_gradient_driver<policy>;
 using control = nm::deformation_control<T>;
+using numsim::materials::test::stretch;
 
 /// The driver on "F" -> "hencky" (the push-forward at the end of the chain).
 policy::ParameterHandler point() {
@@ -62,14 +64,6 @@ std::unique_ptr<ctx_type> build(bool with_eigenstrain = false, bool fixed = fals
   auto owner{std::make_unique<ctx_type>()};
   nm::umat::make_json_builder<policy>(deck(with_eigenstrain, fixed))(*owner, {});
   return owner;
-}
-
-tensor2 stretch(T l1, T l2 = 1, T l3 = 1) {
-  tensor2 F;
-  F(0, 0) = l1;
-  F(1, 1) = l2;
-  F(2, 2) = l3;
-  return F;
 }
 
 TEST(Hencky, DilatationIsExact) {

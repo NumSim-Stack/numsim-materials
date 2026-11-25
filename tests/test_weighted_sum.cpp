@@ -26,6 +26,7 @@ using tensor2 = tmech::tensor<T, 3, 2>;
 using tensor4 = tmech::tensor<T, 3, 4>;
 using terms_type = std::vector<std::pair<std::string, std::string>>;
 using numsim::materials::test::add;
+using numsim::materials::test::uniaxial;
 
 constexpr T KA = 100.0, GA = 40.0;
 constexpr T KB = 300.0, GB = 140.0;
@@ -52,13 +53,6 @@ void add_decomposed(ctx_type& ctx, const std::string& name, T k, T g) {
 
 nm::external_strain_source<policy>& add_strain(ctx_type& ctx) {
   return add<nm::external_strain_source<policy>>(ctx, "strain_in");
-}
-
-tensor2 uniaxial(T v) {
-  tensor2 e;
-  e.fill(0.0);
-  e(0, 0) = v;
-  return e;
 }
 
 // ---------------------------------------------------------------------------

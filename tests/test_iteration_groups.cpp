@@ -26,6 +26,7 @@ using T = policy::value_type;
 using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
 using numsim::materials::test::add;
+using numsim::materials::test::constant;
 
 /// The names of the callbacks in the order they ran.
 std::vector<std::string> g_log;
@@ -278,10 +279,6 @@ private:
   T &m_out;
   T &m_residual;
 };
-
-void constant(ctx_type &ctx, std::string const &name, T value) {
-  add<nm::constant_scalar<policy>>(ctx, name, {{"value", value}});
-}
 
 /// goal -> probe -> [guess -> relax] (the group, closed by guess reading relax::x over a local edge), and with
 /// `recorded` a property_recorder of relax::x after it. `relax` adds parameters of the relaxer.

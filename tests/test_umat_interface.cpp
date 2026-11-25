@@ -30,6 +30,7 @@ using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
 using registry = u::umat_registry<policy>;
 using numsim::materials::test::add;
+using numsim::materials::test::fortran_name;
 
 constexpr T K = 166.67;
 constexpr T G = 76.92;
@@ -148,14 +149,6 @@ struct Registration {
 const Registration registration_{};
 
 /// CMNAME as Fortran passes it: character*80, blank padded, no NUL.
-struct fortran_name {
-  char buf[80];
-  explicit fortran_name(const std::string& s) {
-    for (std::size_t i = 0; i < 80; ++i) buf[i] = ' ';
-    for (std::size_t i = 0; i < s.size() && i < 80; ++i) buf[i] = s[i];
-  }
-};
-
 /// Call umat_ with the full Abaqus argument list.
 void call_umat(const std::string& name, T* stress, T* statev, T* ddsdde,
                const T* stran, const T* dstran, T total_time, T dtime, int ndi,

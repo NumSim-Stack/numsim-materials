@@ -34,6 +34,7 @@ using param_type = policy::ParameterHandler;
 using tensor2 = tmech::tensor<T, 3, 2>;
 using tensor4 = tmech::tensor<T, 3, 4>;
 using numsim::materials::test::add;
+using numsim::materials::test::constant;
 
 constexpr T Km{3.0}, Gm{1.0}, Ki{60.0}, Gi{30.0}; // soft matrix, stiff inclusions
 constexpr T nu_m{(3 * Km - 2 * Gm) / (2 * (3 * Km + Gm))};
@@ -51,13 +52,6 @@ struct phase_spec {
   T aspect_ratio{1};
   std::vector<T> direction{1, 0, 0};
 };
-
-void constant(ctx_type &ctx, std::string const &name, T value) {
-  param_type p;
-  p.insert<std::string>("name", name);
-  p.insert<T>("value", value);
-  ctx.create<nm::constant_scalar<policy>>(p);
-}
 
 nm::object_spec<param_type> kernel_of(std::string const &type, param_type p = {}) { return {type, std::move(p)}; }
 

@@ -29,6 +29,7 @@ using param_type = policy::ParameterHandler;
 using tensor2 = tmech::tensor<T, 3, 2>;
 using tensor4 = tmech::tensor<T, 3, 4>;
 using numsim::materials::test::add;
+using numsim::materials::test::uniaxial;
 
 constexpr T K = 166.67;
 constexpr T G = 76.92;
@@ -43,16 +44,6 @@ nm::external_strain_source<policy>& build_decomposed(ctx_type& ctx, T k, T g) {
 
   ctx.finalize();
   return src;
-}
-
-/// v * (e1 (x) e1) — a uniaxial strain, built as a tensor expression.
-tensor2 uniaxial(T v) {
-  tmech::tensor<T, 3, 1> e1;
-  e1.fill(0.0);
-  e1(0) = 1.0;
-  tensor2 out;
-  out = v * tmech::otimes(e1, e1);
-  return out;
 }
 
 /// The isotropic stiffness the generator should produce, built independently.

@@ -41,12 +41,11 @@ using param_type = policy::ParameterHandler;
 using tensor2 = tmech::tensor<T, 3, 2>;
 using tensor4 = tmech::tensor<T, 3, 4>;
 using numsim::materials::test::add;
+using numsim::materials::test::uniaxial;
+using numsim::materials::test::constant;
+using numsim::materials::test::relative;
 
 constexpr T Km{3.0}, Gm{1.0}, Ki{60.0}, Gi{30.0}, c{0.3}, kappa_0{0.002}, beta{300.0};
-
-void constant(ctx_type &ctx, std::string const &name, T value) {
-  add<nm::constant_scalar<policy>>(ctx, name, {{"value", value}});
-}
 
 /// Stiff elastic spheres in a matrix evaluated at its local strain: linear (B1, every edge global) or a
 /// damage chain (B2, the matrix phase reads the algorithmic tangent over a local edge). Isotropic damage
@@ -123,12 +122,6 @@ std::unique_ptr<ctx_type> build(bool nonlinear, std::string const &kernel = "mor
   return owner;
 }
 
-tensor2 uniaxial(T e) {
-  tensor2 eps;
-  eps(0, 0) = e;
-  return eps;
-}
-
 /// Loads the composite in equal steps to the strain `eps`, committing every step: each update() repeats the
 /// passes until the phase tangents the strains were formed with agree with the materials' (converges()).
 void load(ctx_type &ctx, tensor2 const &eps, int steps) {
@@ -139,9 +132,6 @@ void load(ctx_type &ctx, tensor2 const &eps, int steps) {
     ctx.commit();
   }
 }
-
-
-T relative(tensor4 const &a, tensor4 const &b) { return tmech::norm(tensor4{a - b}) / tmech::norm(b); }
 
 // the phase derivatives accumulated from their partials are the hand-written phase tangents at the local strains
 TEST(MeanFieldDamage, AccumulatedPhaseTangentsAreTheHandWrittenOnes) {

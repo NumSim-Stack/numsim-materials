@@ -17,6 +17,7 @@
 #include "numsim-materials/io/object_readers.h"
 #include "numsim-materials/mean_field/kernel_registry.h"
 #include "numsim-materials/umat/errors.h"
+#include "test_support.h"
 
 namespace {
 
@@ -28,6 +29,7 @@ using PH = policy::ParameterHandler;
 using spec = nm::object_spec<PH>;
 using tensor4 = tmech::tensor<T, 3, 4>;
 using json = nlohmann::json;
+using numsim::materials::test::relative;
 
 constexpr T Km{3.0}, Gm{1.0}, Ki{60.0}, Gi{30.0}, c{0.3};
 
@@ -58,10 +60,8 @@ tensor4 effective(two_phases const &ph, std::vector<tensor4> const &A) {
   return tensor4{(1 - c) * tmech::dcontract(ph.Cm, A[0]) + c * tmech::dcontract(ph.Ci, A[1])};
 }
 
-T rel(tensor4 const &a, tensor4 const &b) { return tmech::norm(tensor4{a - b}) / tmech::norm(b); }
-
 void expect_partition(std::vector<tensor4> const &A) {
-  EXPECT_LT(rel(tensor4{(1 - c) * A[0] + c * A[1]}, Is()), 1e-12);
+  EXPECT_LT(relative(tensor4{(1 - c) * A[0] + c * A[1]}, Is()), 1e-12);
 }
 
 /// Hashin-Shtrikman zeta of a reference medium with moduli K, G.
@@ -72,8 +72,8 @@ TEST(MeanFieldKernels, VoigtIsEqualStrain) {
   auto k{make("voigt")};
   EXPECT_FALSE(k->needs().tangents);
   auto const A{concentrations(*k, ph)};
-  EXPECT_LT(rel(A[0], Is()), 1e-14);
-  EXPECT_LT(rel(A[1], Is()), 1e-14);
+  EXPECT_LT(relative(A[0], Is()), 1e-14);
+  EXPECT_LT(relative(A[1], Is()), 1e-14);
 }
 
 TEST(MeanFieldKernels, ReussIsEqualStress) {
@@ -82,8 +82,8 @@ TEST(MeanFieldKernels, ReussIsEqualStress) {
   auto const A{concentrations(*k, ph)};
   expect_partition(A);
   tensor4 const C_R{tmech::inv(tensor4{(1 - c) * tmech::inv(ph.Cm) + c * tmech::inv(ph.Ci)})};
-  EXPECT_LT(rel(effective(ph, A), C_R), 1e-12);
-  EXPECT_LT(rel(tensor4{tmech::dcontract(ph.Cm, A[0])}, tensor4{tmech::dcontract(ph.Ci, A[1])}), 1e-12);
+  EXPECT_LT(relative(effective(ph, A), C_R), 1e-12);
+  EXPECT_LT(relative(tensor4{tmech::dcontract(ph.Cm, A[0])}, tensor4{tmech::dcontract(ph.Ci, A[1])}), 1e-12);
 }
 
 TEST(MeanFieldKernels, HillIsTheMeanOfVoigtAndReuss) {
@@ -91,7 +91,7 @@ TEST(MeanFieldKernels, HillIsTheMeanOfVoigtAndReuss) {
   auto hill{make("hill")};
   auto reuss{make("reuss")};
   auto const A{concentrations(*hill, ph)}, R{concentrations(*reuss, ph)};
-  EXPECT_LT(rel(A[1], tensor4{(Is() + R[1]) / 2}), 1e-12);
+  EXPECT_LT(relative(A[1], tensor4{(Is() + R[1]) / 2}), 1e-12);
   expect_partition(A);
 }
 
@@ -103,7 +103,7 @@ TEST(MeanFieldKernels, DiluteSpheresAreTheEshelbySolution) {
   expect_partition(A); // the matrix takes the rest of the strain
   T const vol{(3 * Km + 4 * Gm) / (3 * Ki + 4 * Gm)}, dev{(Gm + zeta(Km, Gm)) / (Gi + zeta(Km, Gm))};
   tensor4 const expected{vol * nm::vol_projector<T, 3>() + dev * nm::dev_projector<T, 3>()};
-  EXPECT_LT(rel(A[1], expected), 1e-12);
+  EXPECT_LT(relative(A[1], expected), 1e-12);
 }
 
 TEST(MeanFieldKernels, MoriTanakaSpheresAreTheClosedForm) {
@@ -113,7 +113,7 @@ TEST(MeanFieldKernels, MoriTanakaSpheresAreTheClosedForm) {
   expect_partition(A);
   T const K{Km + c * (Ki - Km) * (3 * Km + 4 * Gm) / (3 * Km + 4 * Gm + 3 * (1 - c) * (Ki - Km))};
   T const G{Gm + c * (Gi - Gm) / (1 + (1 - c) * (Gi - Gm) / (Gm + zeta(Km, Gm)))};
-  EXPECT_LT(rel(effective(ph, A), iso(K, G)), 1e-12);
+  EXPECT_LT(relative(effective(ph, A), iso(K, G)), 1e-12);
 }
 
 PH self_consistent_parameters() {
