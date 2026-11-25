@@ -10,6 +10,7 @@
 #include "numsim-materials/materials/tensor_component_stepper.h"
 #include "numsim-materials/solvers/rk_integrator.h"
 #include "numsim-materials/umat/errors.h"
+#include "test_support.h"
 
 namespace {
 
@@ -21,6 +22,7 @@ using param_type = policy::ParameterHandler;
 using tensor2 = tmech::tensor<T, 3, 2>;
 using RK = nm::rk_integrator<policy>;
 using stepper2 = nm::tensor_component_stepper<2, policy>;
+using numsim::materials::test::add;
 
 /// dy/dt = -lambda y with a scaled (wrong) derivative, so the implicit stage can be made not to converge.
 template <typename Traits>
@@ -73,20 +75,11 @@ private:
 RK& run_one_step(ctx_type& ctx, param_type& p, const std::string& tableau,
                  int max_iter, T derivative_scale = T{1}) {
   p.clear();
-  p.insert<std::string>("name", "integrator");
-  p.insert<std::string>("function", "decay");
-  p.insert<T>("step_size", T{0.5});
-  p.insert<T>("tolerance", T{1e-12});
-  p.insert<int>("max_iter", max_iter);
-  p.insert<std::string>("tableau", tableau);
-  auto& integ = ctx.create<RK>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "decay");
-  p.insert<std::string>("source", "integrator");
-  p.insert<T>("lambda", T{1});
-  p.insert<T>("derivative_scale", derivative_scale);
-  ctx.create<decay_with_scaled_derivative<policy>>(p);
+  auto& integ = add<RK>(ctx, "integrator",
+      {{"function", "decay"}, {"step_size", T{0.5}}, {"tolerance", T{1e-12}}, {"max_iter", static_cast<int>(max_iter)},
+       {"tableau", tableau}});
+  add<decay_with_scaled_derivative<policy>>(ctx, "decay",
+      {{"source", "integrator"}, {"lambda", T{1}}, {"derivative_scale", derivative_scale}});
 
   ctx.finalize();
   auto* hist = dynamic_cast<numsim_core::history_property<T, nm::property_traits>*>(
@@ -174,22 +167,10 @@ void build_j2_rk(ctx_type& ctx, int max_iter, const std::string& tableau) {
   ctx.create<stepper2>(p);
 
   p.clear();
-  p.insert<std::string>("name", "hard");
-  p.insert<std::string>("source", "j2");
-  p.insert<T>("K", T{1000.0});
-  ctx.create<nm::linear_isotropic_hardening<policy>>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "j2");
-  p.insert<std::string>("strain_source", "stepper");
-  p.insert<std::string>("hardening_source", "hard");
-  p.insert<T>("K", T{166666.7});
-  p.insert<T>("G", T{76923.1});
-  p.insert<T>("sigma_0", T{200.0});
-  p.insert<T>("tolerance", T{1e-12});
-  p.insert<int>("max_iter", max_iter);
-  p.insert<std::string>("tableau", tableau);
-  ctx.create<nm::j2_rk_plasticity<policy>>(p);
+  add<nm::linear_isotropic_hardening<policy>>(ctx, "hard", {{"source", "j2"}, {"K", T{1000.0}}});
+  add<nm::j2_rk_plasticity<policy>>(ctx, "j2",
+      {{"strain_source", "stepper"}, {"hardening_source", "hard"}, {"K", T{166666.7}}, {"G", T{76923.1}},
+       {"sigma_0", T{200.0}}, {"tolerance", T{1e-12}}, {"max_iter", static_cast<int>(max_iter)}, {"tableau", tableau}});
   ctx.finalize();
 }
 

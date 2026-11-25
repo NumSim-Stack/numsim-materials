@@ -27,6 +27,7 @@ inline std::size_t eigen_allocations{0};
 #include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/materials/plasticity_utils.h"
 #include "numsim-materials/solvers/system.h"
+#include "test_support.h"
 
 namespace {
 
@@ -37,6 +38,7 @@ using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
 using t2 = tmech::tensor<T, 3, 2>;
 using t4 = tmech::tensor<T, 3, 4>;
+using numsim::materials::test::add;
 
 constexpr T K{166.67}, G{76.92}, sigma_0{50.0}, H{1000.0};
 
@@ -119,21 +121,12 @@ struct j2_system {
   nm::external_strain_source<policy> *src{};
 
   j2_system() {
-    param_type p;
-    p.insert<std::string>("name", "stepper");
-    src = &ctx.create<nm::external_strain_source<policy>>(p);
-    p.clear();
-    p.insert<std::string>("name", "plastic");
-    p.insert<T>("tolerance", T{1e-10});
-    p.insert<std::vector<nm::system_unknown>>("unknowns", {{"dlambda", nm::unknown_kind::scalar}});
-    p.insert<std::vector<nm::system_equation>>("equations", {{"flow::residual", "dlambda"}});
-    ctx.create<nm::residual_system<policy>>(p);
-    p.clear();
-    p.insert<std::string>("name", "flow");
-    ctx.create<j2_flow>(p);
-    p.clear();
-    p.insert<std::string>("name", "j2");
-    ctx.create<j2_stress>(p);
+    src = &add<nm::external_strain_source<policy>>(ctx, "stepper");
+    add<nm::residual_system<policy>>(ctx, "plastic",
+        {{"tolerance", T{1e-10}}, {"unknowns", std::vector<nm::system_unknown>{{"dlambda", nm::unknown_kind::scalar}}},
+         {"equations", std::vector<nm::system_equation>{{"flow::residual", "dlambda"}}}});
+    add<j2_flow>(ctx, "flow");
+    add<j2_stress>(ctx, "j2");
     ctx.finalize();
     (void)ctx.derivative<t4>("j2", "stress", "stepper", "strain");
   }

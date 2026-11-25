@@ -15,6 +15,7 @@
 #include "numsim-materials/materials/poisson_ratio_from_moduli.h"
 #include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/umat/json_model.h"
+#include "test_support.h"
 
 namespace {
 
@@ -26,6 +27,7 @@ using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
 using tensor4 = tmech::tensor<T, 3, 4>;
 using vector = tmech::tensor<T, 3, 1>;
+using numsim::materials::test::add;
 
 constexpr T K{100}, G{40};
 T const nu{nm::poisson_ratio(K, G)};
@@ -94,14 +96,8 @@ TEST(EshelbyMaterials, EllipsoidAlongTheGlobalAxes) {
 // the node is a consumer: when its Poisson's ratio changes, the engine re-evaluates it
 TEST(EshelbyMaterials, FollowsAChangingPoissonsRatio) {
   ctx_type ctx;
-  param_type p;
-  p.insert<std::string>("name", "nu_in");
-  ctx.create<nm::external_scalar_source<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "sphere");
-  p.insert<std::string>("nu_source", "nu_in");
-  p.insert<std::string>("nu_property", "state");
-  ctx.create<nm::eshelby_sphere<policy>>(p);
+  add<nm::external_scalar_source<policy>>(ctx, "nu_in");
+  add<nm::eshelby_sphere<policy>>(ctx, "sphere", {{"nu_source", "nu_in"}, {"nu_property", "state"}});
   ctx.finalize();
   auto &source{*dynamic_cast<nm::external_scalar_source<policy> *>(ctx.find("nu_in"))};
   for (T const value : {0.2, 0.35, 0.1}) {
@@ -115,19 +111,9 @@ TEST(EshelbyMaterials, FollowsAChangingPoissonsRatio) {
 TEST(EshelbyMaterials, PoissonsRatioFromAnIsotropicTangent) {
   ctx_type ctx;
   param_type p;
-  p.insert<std::string>("name", "strain");
-  ctx.create<nm::external_strain_source<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "matrix");
-  p.insert<std::string>("strain_producer_name", "strain");
-  p.insert<T>("K", K);
-  p.insert<T>("G", G);
-  ctx.create<nm::linear_elasticity<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "moduli");
-  p.insert<std::string>("tangent_source", "matrix");
-  ctx.create<nm::isotropic_moduli<policy>>(p);
-  p.clear();
+  add<nm::external_strain_source<policy>>(ctx, "strain");
+  add<nm::linear_elasticity<policy>>(ctx, "matrix", {{"strain_producer_name", "strain"}, {"K", K}, {"G", G}});
+  add<nm::isotropic_moduli<policy>>(ctx, "moduli", {{"tangent_source", "matrix"}});
   p.insert<std::string>("name", "sphere");
   p.insert<std::string>("nu_source", "moduli");
   p.insert<std::string>("nu_property", "poisson_ratio");

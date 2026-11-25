@@ -9,6 +9,7 @@
 #include "numsim-materials/materials/saint_venant_kirchhoff.h"
 #include "numsim-materials/driver/deformation_gradient_driver.h"
 #include "numsim-materials/driver/external_state_source.h"
+#include "test_support.h"
 
 namespace {
 
@@ -22,6 +23,8 @@ using param_type = policy::ParameterHandler;
 using driver = nm::deformation_gradient_driver<policy>;
 using tensor2 = driver::tensor2;
 using control = nm::deformation_control<T>;
+using numsim::materials::test::add;
+using numsim::materials::test::stretch;
 
 constexpr T K{166.67};
 constexpr T G{76.92};
@@ -41,10 +44,7 @@ void build(ctx_type& ctx, bool stuck = false) {
   p.insert<std::string>("name", "F");
   ctx.create<nm::external_deformation_gradient_source<policy>>(p);
   p.clear();
-  p.insert<std::string>("name", "kinematics");
-  p.insert<std::string>("deformation_gradient_source", "F");
-  ctx.create<nm::deformation_gradient_kinematics<policy>>(p);
-  p.clear();
+  add<nm::deformation_gradient_kinematics<policy>>(ctx, "kinematics", {{"deformation_gradient_source", "F"}});
   p.insert<std::string>("name", "model");
   p.insert<std::string>("deformation_gradient_source", "F");
   if constexpr (std::is_same_v<Model, nm::neo_hooke<policy>>)
@@ -60,12 +60,6 @@ param_type parameters() {
   p.insert<std::string>("deformation_gradient_source", "F");
   p.insert<std::string>("stress_source", "model");
   return p;
-}
-
-tensor2 stretch(T lambda) {
-  tensor2 F{tmech::eye<T, 3, 2>()};
-  F(0, 0) = lambda;
-  return F;
 }
 
 TEST(DeformationControl, UniaxialStressFreesEverythingButEleven) {

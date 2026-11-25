@@ -22,6 +22,7 @@
 #include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/umat/json_model.h"
 #include "numsim-materials/umat/material_point_evaluator.h"
+#include "test_support.h"
 
 namespace {
 
@@ -32,6 +33,8 @@ using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
 using tensor2 = tmech::tensor<T, 3, 2>;
 using tensor4 = tmech::tensor<T, 3, 4>;
+using numsim::materials::test::add;
+using numsim::materials::test::constant;
 
 constexpr T Km{3.0}, Gm{1.0}, Ki{60.0}, Gi{30.0}; // soft matrix, stiff inclusions
 constexpr T nu_m{(3 * Km - 2 * Gm) / (2 * (3 * Km + Gm))};
@@ -49,13 +52,6 @@ struct phase_spec {
   T aspect_ratio{1};
   std::vector<T> direction{1, 0, 0};
 };
-
-void constant(ctx_type &ctx, std::string const &name, T value) {
-  param_type p;
-  p.insert<std::string>("name", name);
-  p.insert<T>("value", value);
-  ctx.create<nm::constant_scalar<policy>>(p);
-}
 
 nm::object_spec<param_type> kernel_of(std::string const &type, param_type p = {}) { return {type, std::move(p)}; }
 
@@ -75,21 +71,16 @@ std::unique_ptr<ctx_type> build(std::string const &kernel, std::vector<phase_spe
   auto owner{std::make_unique<ctx_type>()};
   auto &ctx{*owner};
   param_type p;
-  p.insert<std::string>("name", "strain");
-  ctx.create<nm::external_strain_source<policy>>(p);
+  add<nm::external_strain_source<policy>>(ctx, "strain");
   for (auto const &[name, K, G] : {std::tuple{"matrix", Km, Gm}, std::tuple{"stiff", Ki, Gi}, std::tuple{"void", 0.0, 0.0}}) {
     constant(ctx, std::string{name} + "_K", K);
     constant(ctx, std::string{name} + "_G", G);
     p.clear();
-    p.insert<std::string>("name", std::string{name} + "_C");
-    p.insert<std::string>("K_source", std::string{name} + "_K");
-    p.insert<std::string>("G_source", std::string{name} + "_G");
-    ctx.create<nm::isotropic_tangent<policy>>(p);
+    add<nm::isotropic_tangent<policy>>(ctx, std::string{name} + "_C",
+        {{"K_source", std::string{name} + "_K"}, {"G_source", std::string{name} + "_G"}});
   }
   p.clear();
-  p.insert<std::string>("name", "moduli");
-  p.insert<std::string>("tangent_source", matrix + "_C");
-  ctx.create<nm::isotropic_moduli<policy>>(p);
+  add<nm::isotropic_moduli<policy>>(ctx, "moduli", {{"tangent_source", matrix + "_C"}});
   auto shape = [&](std::string const &name, std::string const &shape, T aspect_ratio, std::vector<T> const &direction) {
     p.clear();
     p.insert<std::string>("name", name);
@@ -131,11 +122,8 @@ std::unique_ptr<ctx_type> build(std::string const &kernel, std::vector<phase_spe
     kp.insert<T>("tolerance", 1e-13);
   }
   p.clear();
-  p.insert<std::string>("name", "mf");
-  p.insert<std::vector<std::string>>("phases", names);
-  p.insert<nm::object_spec<param_type>>("kernel", kernel_of(kernel, kp));
-  ctx.create<nm::mean_field_composite_global<policy>>(p);
-  p.clear();
+  add<nm::mean_field_composite_global<policy>>(ctx, "mf",
+      {{"phases", std::vector<std::string>(names)}, {"kernel", nm::object_spec<param_type>(kernel_of(kernel, kp))}});
   p.insert<std::string>("name", "composite");
   p.insert<std::string>("tangent_source", "mf");
   p.insert<std::string>("strain_source", "strain");
@@ -160,11 +148,8 @@ TEST(Phase, APhaseWithoutAShapeIsRejectedByTheMeanField) {
   for (auto const &[name, K, G] : {std::tuple{"matrix", Km, Gm}, std::tuple{"stiff", Ki, Gi}}) {
     constant(ctx, std::string{name} + "_K", K);
     constant(ctx, std::string{name} + "_G", G);
-    param_type p;
-    p.insert<std::string>("name", std::string{name} + "_C");
-    p.insert<std::string>("K_source", std::string{name} + "_K");
-    p.insert<std::string>("G_source", std::string{name} + "_G");
-    ctx.create<nm::isotropic_tangent<policy>>(p);
+    add<nm::isotropic_tangent<policy>>(ctx, std::string{name} + "_C",
+        {{"K_source", std::string{name} + "_K"}, {"G_source", std::string{name} + "_G"}});
   }
   constant(ctx, "c", 0.1);
   constant(ctx, "cm", 0.9);
@@ -174,11 +159,7 @@ TEST(Phase, APhaseWithoutAShapeIsRejectedByTheMeanField) {
   p.insert<std::string>("fraction_source", "c");
   ctx.create<nm::phase<policy>>(p);
   p.clear();
-  p.insert<std::string>("name", "m");
-  p.insert<std::string>("tangent_source", "matrix_C");
-  p.insert<std::string>("fraction_source", "cm");
-  ctx.create<nm::phase<policy>>(p);
-  p.clear();
+  add<nm::phase<policy>>(ctx, "m", {{"tangent_source", "matrix_C"}, {"fraction_source", "cm"}});
   p.insert<std::string>("name", "mf");
   p.insert<std::string>("matrix", "m");
   p.insert<std::vector<std::string>>("phases", {"m", "s"});

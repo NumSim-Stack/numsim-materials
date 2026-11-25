@@ -17,6 +17,7 @@
 #include "numsim-materials/driver/material_point_driver.h"
 #include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/umat/json_model.h"
+#include "test_support.h"
 
 namespace {
 
@@ -29,6 +30,8 @@ using json = nlohmann::json;
 using tensor1 = tmech::tensor<T, 3, 1>;
 using tensor2 = tmech::tensor<T, 3, 2>;
 using tensor4 = tmech::tensor<T, 3, 4>;
+using numsim::materials::test::relative;
+using numsim::materials::test::uniaxial;
 
 struct Registration {
   Registration() { nm::register_default_materials<policy>(); }
@@ -121,19 +124,11 @@ std::unique_ptr<ctx_type> build(json const &doc) {
   return ctx;
 }
 
-tensor2 uniaxial(T e) {
-  tensor2 eps;
-  eps(0, 0) = e;
-  return eps;
-}
-
 void step(ctx_type &ctx, tensor2 const &from, tensor2 const &to) {
   dynamic_cast<nm::external_strain_source<policy> &>(*ctx.find("strain")).bind(from, to);
   ctx.update();
   ctx.commit();
 }
-
-T relative(tensor4 const &a, tensor4 const &b) { return tmech::norm(tensor4{a - b}) / tmech::norm(b); }
 
 std::vector<json> expand(json const &e) { return nm::json_expansion_registry<json>::instance().expand("orientation_phases", e); }
 

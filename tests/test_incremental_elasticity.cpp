@@ -9,6 +9,7 @@
 #include "numsim-materials/umat/json_model.h"
 #include "numsim-materials/umat/material_point_evaluator.h"
 #include "numsim-materials/umat/statev_map.h"
+#include "test_support.h"
 
 namespace {
 
@@ -20,6 +21,7 @@ using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
 using tensor2 = tmech::tensor<T, 3, 2>;
 using tensor4 = tmech::tensor<T, 3, 4>;
+using numsim::materials::test::add;
 
 constexpr T K{100}, G{40};
 
@@ -35,20 +37,10 @@ nm::material_point_driver<policy> driver_for(ctx_type &ctx) {
 std::unique_ptr<ctx_type> build() {
   auto owner{std::make_unique<ctx_type>()};
   auto &ctx{*owner};
-  param_type p;
-  p.insert<std::string>("name", "strain");
-  ctx.create<nm::external_strain_source<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "total");
-  p.insert<std::string>("strain_producer_name", "strain");
-  p.insert<T>("K", K);
-  p.insert<T>("G", G);
-  ctx.create<nm::linear_elasticity<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "inc");
-  p.insert<std::string>("strain_source", "strain");
-  p.insert<std::string>("tangent_source", "total");
-  ctx.create<nm::incremental_linear_elasticity<policy>>(p);
+  add<nm::external_strain_source<policy>>(ctx, "strain");
+  add<nm::linear_elasticity<policy>>(ctx, "total", {{"strain_producer_name", "strain"}, {"K", K}, {"G", G}});
+  add<nm::incremental_linear_elasticity<policy>>(ctx, "inc",
+      {{"strain_source", "strain"}, {"tangent_source", "total"}});
   ctx.finalize();
   return owner;
 }
@@ -150,12 +142,7 @@ TEST(IncrementalElasticity, ReadsTheNamedHistoryProperty) {
   // a plain property is not a history and cannot be read incrementally
   ctx_type bad;
   bad.create<nm::external_strain_source<policy>>(source);
-  param_type q;
-  q.insert<std::string>("name", "total");
-  q.insert<std::string>("strain_producer_name", "strain");
-  q.insert<T>("K", K);
-  q.insert<T>("G", G);
-  bad.create<nm::linear_elasticity<policy>>(q);
+  add<nm::linear_elasticity<policy>>(bad, "total", {{"strain_producer_name", "strain"}, {"K", K}, {"G", G}});
   p.clear();
   p.insert<std::string>("name", "inc");
   p.insert<std::string>("strain_source", "total");

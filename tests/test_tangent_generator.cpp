@@ -15,6 +15,7 @@
 #include "numsim-materials/umat/material_point_evaluator.h"
 #include "numsim-materials/umat/statev_map.h"
 #include "numsim-materials/umat/tensor_conversion.h"
+#include "test_support.h"
 
 namespace {
 
@@ -27,50 +28,22 @@ using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
 using tensor2 = tmech::tensor<T, 3, 2>;
 using tensor4 = tmech::tensor<T, 3, 4>;
+using numsim::materials::test::add;
+using numsim::materials::test::uniaxial;
 
 constexpr T K = 166.67;
 constexpr T G = 76.92;
 
 /// strain source + constant moduli -> isotropic_tangent -> linear_stress
 nm::external_strain_source<policy>& build_decomposed(ctx_type& ctx, T k, T g) {
-  param_type p;
-  p.insert<std::string>("name", "strain_in");
-  auto& src = ctx.create<nm::external_strain_source<policy>>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "K");
-  p.insert<T>("value", k);
-  ctx.create<nm::constant_scalar<policy>>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "G");
-  p.insert<T>("value", g);
-  ctx.create<nm::constant_scalar<policy>>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "stiffness");
-  p.insert<std::string>("K_source", "K");
-  p.insert<std::string>("G_source", "G");
-  ctx.create<nm::isotropic_tangent<policy>>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "elastic");
-  p.insert<std::string>("tangent_source", "stiffness");
-  p.insert<std::string>("strain_source", "strain_in");
-  ctx.create<nm::linear_stress<policy>>(p);
+  auto& src = add<nm::external_strain_source<policy>>(ctx, "strain_in");
+  add<nm::constant_scalar<policy>>(ctx, "K", {{"value", k}});
+  add<nm::constant_scalar<policy>>(ctx, "G", {{"value", g}});
+  add<nm::isotropic_tangent<policy>>(ctx, "stiffness", {{"K_source", "K"}, {"G_source", "G"}});
+  add<nm::linear_stress<policy>>(ctx, "elastic", {{"tangent_source", "stiffness"}, {"strain_source", "strain_in"}});
 
   ctx.finalize();
   return src;
-}
-
-/// v * (e1 (x) e1) — a uniaxial strain, built as a tensor expression.
-tensor2 uniaxial(T v) {
-  tmech::tensor<T, 3, 1> e1;
-  e1.fill(0.0);
-  e1(0) = 1.0;
-  tensor2 out;
-  out = v * tmech::otimes(e1, e1);
-  return out;
 }
 
 /// The isotropic stiffness the generator should produce, built independently.
@@ -134,15 +107,8 @@ TEST(TangentGenerator, MatchesLinearElasticityExactly) {
   ctx_type mono;
   nm::external_strain_source<policy>* mono_src = nullptr;
   {
-    param_type p;
-    p.insert<std::string>("name", "strain_in");
-    mono_src = &mono.create<nm::external_strain_source<policy>>(p);
-    p.clear();
-    p.insert<std::string>("name", "elastic");
-    p.insert<std::string>("strain_producer_name", "strain_in");
-    p.insert<T>("K", K);
-    p.insert<T>("G", G);
-    mono.create<nm::linear_elasticity<policy>>(p);
+    mono_src = &add<nm::external_strain_source<policy>>(mono, "strain_in");
+    add<nm::linear_elasticity<policy>>(mono, "elastic", {{"strain_producer_name", "strain_in"}, {"K", K}, {"G", G}});
     mono.finalize();
   }
 
@@ -248,15 +214,8 @@ TEST(TangentGenerator, StiffnessFollowsAChangedModulus) {
 
 TEST(TangentSource, AbsentFallsBackToTheStressSource) {
   ctx_type ctx;
-  param_type p;
-  p.insert<std::string>("name", "strain_in");
-  ctx.create<nm::external_strain_source<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "elastic");
-  p.insert<std::string>("strain_producer_name", "strain_in");
-  p.insert<T>("K", K);
-  p.insert<T>("G", G);
-  ctx.create<nm::linear_elasticity<policy>>(p);
+  add<nm::external_strain_source<policy>>(ctx, "strain_in");
+  add<nm::linear_elasticity<policy>>(ctx, "elastic", {{"strain_producer_name", "strain_in"}, {"K", K}, {"G", G}});
   ctx.finalize();
 
   u::material_point_evaluator<policy>::config cfg;
@@ -291,15 +250,8 @@ TEST(TangentSource, DecomposedPairDrivesTheEvaluatorLikeLinearElasticity) {
 
   ctx_type mono;
   {
-    param_type p;
-    p.insert<std::string>("name", "strain_in");
-    mono.create<nm::external_strain_source<policy>>(p);
-    p.clear();
-    p.insert<std::string>("name", "elastic");
-    p.insert<std::string>("strain_producer_name", "strain_in");
-    p.insert<T>("K", K);
-    p.insert<T>("G", G);
-    mono.create<nm::linear_elasticity<policy>>(p);
+    add<nm::external_strain_source<policy>>(mono, "strain_in");
+    add<nm::linear_elasticity<policy>>(mono, "elastic", {{"strain_producer_name", "strain_in"}, {"K", K}, {"G", G}});
     mono.finalize();
   }
   u::material_point_evaluator<policy>::config mcfg;

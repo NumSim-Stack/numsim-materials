@@ -12,6 +12,7 @@
 #include "numsim-materials/solvers/local_newton.h"
 #include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/driver/material_point_driver.h"
+#include "test_support.h"
 
 namespace {
 
@@ -25,6 +26,7 @@ using param_type = policy::ParameterHandler;
 using driver = nm::material_point_driver<policy>;
 using tensor2 = driver::tensor2;
 using control = nm::load_control<T>;
+using numsim::materials::test::add;
 
 constexpr T K{166.67};
 constexpr T G{76.92};
@@ -45,22 +47,14 @@ void build_elastic(ctx_type& ctx, bool stuck = false) {
   p.insert<std::string>("name", "strain");
   ctx.create<nm::external_strain_source<policy>>(p);
   p.clear();
-  p.insert<std::string>("name", "elastic");
-  p.insert<std::string>("strain_producer_name", "strain");
-  p.insert<T>("K", K);
-  p.insert<T>("G", G);
-  ctx.create<nm::linear_elasticity<policy>>(p);
+  add<nm::linear_elasticity<policy>>(ctx, "elastic", {{"strain_producer_name", "strain"}, {"K", K}, {"G", G}});
   ctx.finalize();
 }
 
 void build_j2(ctx_type& ctx, bool exponential = false) {
   param_type p;
-  p.insert<std::string>("name", "strain");
-  ctx.create<nm::external_strain_source<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "solver");
-  ctx.create<nm::local_newton<policy>>(p);
-  p.clear();
+  add<nm::external_strain_source<policy>>(ctx, "strain");
+  add<nm::local_newton<policy>>(ctx, "solver");
   p.insert<std::string>("name", "hardening");
   p.insert<std::string>("source", "j2");
   if (exponential) {
@@ -72,14 +66,9 @@ void build_j2(ctx_type& ctx, bool exponential = false) {
     ctx.create<nm::linear_isotropic_hardening<policy>>(p);
   }
   p.clear();
-  p.insert<std::string>("name", "j2");
-  p.insert<T>("K", K);
-  p.insert<T>("G", G);
-  p.insert<T>("sigma_0", sigma_0);
-  p.insert<std::string>("hardening_source", "hardening");
-  p.insert<std::string>("strain_source", "strain");
-  p.insert<std::string>("solver_source", "solver");
-  ctx.create<nm::j2_plasticity<policy>>(p);
+  add<nm::j2_plasticity<policy>>(ctx, "j2",
+      {{"K", K}, {"G", G}, {"sigma_0", sigma_0}, {"hardening_source", "hardening"}, {"strain_source", "strain"},
+       {"solver_source", "solver"}});
   ctx.finalize();
 }
 

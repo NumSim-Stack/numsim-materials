@@ -6,6 +6,7 @@
 #include "numsim-materials/materials/scalar_stepper.h"
 #include "numsim-materials/materials/scalar_identity_weight.h"
 #include "numsim-materials/default_materials.h"
+#include "test_support.h"
 
 namespace {
 
@@ -14,25 +15,17 @@ using T = policy::value_type;
 using ctx_type = numsim::materials::material_context<policy>;
 using param_type = policy::ParameterHandler;
 using tensor2 = tmech::tensor<T, 3, 2>;
+using numsim::materials::test::add;
 
 // --- Context and execution order ---
 
 TEST(PropertyGraph, ExecutionOrder) {
   ctx_type ctx;
-  param_type p;
 
-  p.clear();
-  p.insert<std::string>("name", "stepper");
-  p.insert<T>("increment", T{0.1});
-  p.insert<std::vector<std::size_t>>("indices", {0, 0});
-  ctx.create<numsim::materials::tensor_component_stepper<2, policy>>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "elastic");
-  p.insert<std::string>("strain_producer_name", "stepper");
-  p.insert<T>("K", T{166.67});
-  p.insert<T>("G", T{76.92});
-  ctx.create<numsim::materials::linear_elasticity<policy>>(p);
+  add<numsim::materials::tensor_component_stepper<2, policy>>(ctx, "stepper",
+      {{"increment", T{0.1}}, {"indices", std::vector<std::size_t>{0, 0}}});
+  add<numsim::materials::linear_elasticity<policy>>(ctx, "elastic",
+      {{"strain_producer_name", "stepper"}, {"K", T{166.67}}, {"G", T{76.92}}});
 
   ctx.finalize();
 
@@ -44,20 +37,11 @@ TEST(PropertyGraph, ExecutionOrder) {
 
 TEST(PropertyGraph, UpdateProducesValues) {
   ctx_type ctx;
-  param_type p;
 
-  p.clear();
-  p.insert<std::string>("name", "stepper");
-  p.insert<T>("increment", T{0.1});
-  p.insert<std::vector<std::size_t>>("indices", {0, 0});
-  ctx.create<numsim::materials::tensor_component_stepper<2, policy>>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "elastic");
-  p.insert<std::string>("strain_producer_name", "stepper");
-  p.insert<T>("K", T{166.67});
-  p.insert<T>("G", T{76.92});
-  ctx.create<numsim::materials::linear_elasticity<policy>>(p);
+  add<numsim::materials::tensor_component_stepper<2, policy>>(ctx, "stepper",
+      {{"increment", T{0.1}}, {"indices", std::vector<std::size_t>{0, 0}}});
+  add<numsim::materials::linear_elasticity<policy>>(ctx, "elastic",
+      {{"strain_producer_name", "stepper"}, {"K", T{166.67}}, {"G", T{76.92}}});
 
   ctx.finalize();
   ctx.update();
@@ -71,13 +55,9 @@ TEST(PropertyGraph, UpdateProducesValues) {
 
 TEST(PropertyGraph, CommitAdvancesHistory) {
   ctx_type ctx;
-  param_type p;
 
-  p.clear();
-  p.insert<std::string>("name", "stepper");
-  p.insert<T>("increment", T{0.1});
-  p.insert<std::vector<std::size_t>>("indices", {0, 0});
-  ctx.create<numsim::materials::tensor_component_stepper<2, policy>>(p);
+  add<numsim::materials::tensor_component_stepper<2, policy>>(ctx, "stepper",
+      {{"increment", T{0.1}}, {"indices", std::vector<std::size_t>{0, 0}}});
 
   ctx.finalize();
   ctx.update();
@@ -90,34 +70,20 @@ TEST(PropertyGraph, CommitAdvancesHistory) {
 
 TEST(PropertyGraph, WireInputsThrowsOnMissing) {
   ctx_type ctx;
-  param_type p;
 
-  p.clear();
-  p.insert<std::string>("name", "elastic");
-  p.insert<std::string>("strain_producer_name", "nonexistent");
-  p.insert<T>("K", T{166.67});
-  p.insert<T>("G", T{76.92});
-  ctx.create<numsim::materials::linear_elasticity<policy>>(p);
+  add<numsim::materials::linear_elasticity<policy>>(ctx, "elastic",
+      {{"strain_producer_name", "nonexistent"}, {"K", T{166.67}}, {"G", T{76.92}}});
 
   EXPECT_THROW(ctx.finalize(), std::runtime_error);
 }
 
 TEST(PropertyGraph, SelectivePropertyUpdate) {
   ctx_type ctx;
-  param_type p;
 
-  p.clear();
-  p.insert<std::string>("name", "stepper");
-  p.insert<T>("increment", T{0.1});
-  p.insert<std::vector<std::size_t>>("indices", {0, 0});
-  ctx.create<numsim::materials::tensor_component_stepper<2, policy>>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "elastic");
-  p.insert<std::string>("strain_producer_name", "stepper");
-  p.insert<T>("K", T{166.67});
-  p.insert<T>("G", T{76.92});
-  ctx.create<numsim::materials::linear_elasticity<policy>>(p);
+  add<numsim::materials::tensor_component_stepper<2, policy>>(ctx, "stepper",
+      {{"increment", T{0.1}}, {"indices", std::vector<std::size_t>{0, 0}}});
+  add<numsim::materials::linear_elasticity<policy>>(ctx, "elastic",
+      {{"strain_producer_name", "stepper"}, {"K", T{166.67}}, {"G", T{76.92}}});
 
   ctx.finalize();
   ctx.update();
@@ -168,21 +134,11 @@ TEST(PropertyGraph, CircularDependencyDetected) {
   // Two materials that each depend on the other via Global edges
   // This should throw during finalize()
   ctx_type ctx;
-  param_type p;
 
-  p.clear();
-  p.insert<std::string>("name", "a");
-  p.insert<std::string>("strain_producer_name", "b");
-  p.insert<T>("K", T{100});
-  p.insert<T>("G", T{50});
-  ctx.create<numsim::materials::linear_elasticity<policy>>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "b");
-  p.insert<std::string>("strain_producer_name", "a");
-  p.insert<T>("K", T{100});
-  p.insert<T>("G", T{50});
-  ctx.create<numsim::materials::linear_elasticity<policy>>(p);
+  add<numsim::materials::linear_elasticity<policy>>(ctx, "a",
+      {{"strain_producer_name", "b"}, {"K", T{100}}, {"G", T{50}}});
+  add<numsim::materials::linear_elasticity<policy>>(ctx, "b",
+      {{"strain_producer_name", "a"}, {"K", T{100}}, {"G", T{50}}});
 
   EXPECT_THROW(ctx.finalize(), std::runtime_error);
 }

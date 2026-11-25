@@ -19,6 +19,7 @@
 #include "numsim-materials/umat/calculix_interface.h"
 #include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/umat/umat_interface.h"
+#include "test_support.h"
 
 // umat_ is the reference path; the clx_* symbols are the adapter under test.
 NUMSIM_MATERIALS_DEFINE_UMAT(numsim::materials::material_policy_default)
@@ -45,6 +46,8 @@ using T = policy::value_type;
 using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
 using registry = u::umat_registry<policy>;
+using numsim::materials::test::add;
+using numsim::materials::test::fortran_name;
 
 // Deliberately asymmetric moduli so K and G cannot alias each other.
 constexpr T K = 166.67;
@@ -55,46 +58,21 @@ constexpr T H_mod = 1000.0;
 /// props[0] = K, props[1] = G. One builder, constants entirely from the deck.
 void build_deck_elastic(ctx_type& ctx, std::span<const double> props) {
   u::require_props(props, 2, "linelas");
-  param_type p;
-  p.insert<std::string>("name", "stepper");
-  ctx.create<nm::external_strain_source<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "elastic");
-  p.insert<std::string>("strain_producer_name", "stepper");
-  p.insert<T>("K", props[0]);
-  p.insert<T>("G", props[1]);
-  ctx.create<nm::linear_elasticity<policy>>(p);
+  add<nm::external_strain_source<policy>>(ctx, "stepper");
+  add<nm::linear_elasticity<policy>>(ctx, "elastic",
+      {{"strain_producer_name", "stepper"}, {"K", props[0]}, {"G", props[1]}});
   ctx.finalize();
 }
 
 /// A stateful model, so the xstateini -> xstate plumbing has real state.
 void build_j2(ctx_type& ctx, std::span<const double> /*props*/) {
-  param_type p;
-  p.insert<std::string>("name", "stepper");
-  ctx.create<nm::external_strain_source<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "elastic");
-  p.insert<std::string>("strain_producer_name", "stepper");
-  p.insert<T>("K", K);
-  p.insert<T>("G", G);
-  ctx.create<nm::linear_elasticity<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "solver");
-  ctx.create<nm::local_newton<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "hardening");
-  p.insert<std::string>("source", "j2");
-  p.insert<T>("K", H_mod);
-  ctx.create<nm::linear_isotropic_hardening<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "j2");
-  p.insert<T>("K", K);
-  p.insert<std::string>("hardening_source", "hardening");
-  p.insert<std::string>("strain_source", "stepper");
-  p.insert<std::string>("solver_source", "solver");
-  p.insert<T>("G", G);
-  p.insert<T>("sigma_0", sigma_0);
-  ctx.create<nm::j2_plasticity<policy>>(p);
+  add<nm::external_strain_source<policy>>(ctx, "stepper");
+  add<nm::linear_elasticity<policy>>(ctx, "elastic", {{"strain_producer_name", "stepper"}, {"K", K}, {"G", G}});
+  add<nm::local_newton<policy>>(ctx, "solver");
+  add<nm::linear_isotropic_hardening<policy>>(ctx, "hardening", {{"source", "j2"}, {"K", H_mod}});
+  add<nm::j2_plasticity<policy>>(ctx, "j2",
+      {{"K", K}, {"hardening_source", "hardening"}, {"strain_source", "stepper"}, {"solver_source", "solver"}, {"G", G},
+       {"sigma_0", sigma_0}});
   ctx.finalize();
 }
 
@@ -221,35 +199,21 @@ class throwing_material final
 };
 
 void build_throws(ctx_type& ctx, std::span<const double> /*props*/) {
-  param_type p;
-  p.insert<std::string>("name", "stepper");
-  ctx.create<nm::external_strain_source<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "probe");
-  ctx.create<throwing_material<policy>>(p);
+  add<nm::external_strain_source<policy>>(ctx, "stepper");
+  add<throwing_material<policy>>(ctx, "probe");
   ctx.finalize();
 }
 
 void build_time_probe(ctx_type& ctx, std::span<const double> /*props*/) {
-  param_type p;
-  p.insert<std::string>("name", "stepper");
-  ctx.create<nm::external_strain_source<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "clock");
-  ctx.create<nm::external_scalar_source<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "probe");
-  ctx.create<time_probe_material<policy>>(p);
+  add<nm::external_strain_source<policy>>(ctx, "stepper");
+  add<nm::external_scalar_source<policy>>(ctx, "clock");
+  add<time_probe_material<policy>>(ctx, "probe");
   ctx.finalize();
 }
 
 void build_asym(ctx_type& ctx, std::span<const double> /*props*/) {
-  param_type p;
-  p.insert<std::string>("name", "stepper");
-  ctx.create<nm::external_strain_source<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "probe");
-  ctx.create<asym_tangent_material<policy>>(p);
+  add<nm::external_strain_source<policy>>(ctx, "stepper");
+  add<asym_tangent_material<policy>>(ctx, "probe");
   ctx.finalize();
 }
 
@@ -287,14 +251,6 @@ struct Registration {
 const Registration registration;
 
 /// CMNAME as Fortran passes it: character*80, blank padded, no NUL.
-struct fortran_name {
-  char buf[80];
-  explicit fortran_name(const std::string& s) {
-    for (std::size_t i = 0; i < 80; ++i) buf[i] = ' ';
-    for (std::size_t i = 0; i < s.size() && i < 80; ++i) buf[i] = s[i];
-  }
-};
-
 /// A fatal fault must terminate the analysis. The handler is replaced so the
 /// test can observe it instead of the runner being killed by XIT/abort.
 /// The default fatal handler calls std::abort(), which is right in a solver --

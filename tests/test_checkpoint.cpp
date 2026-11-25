@@ -6,6 +6,7 @@
 #include <vector>
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/materials/scalar_stepper.h"
+#include "test_support.h"
 
 // A checkpoint names each history property: it restores into a context built in another order, and refuses one
 // whose properties differ.
@@ -17,12 +18,10 @@ using policy = nm::material_policy_default;
 using T = policy::value_type;
 using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
+using numsim::materials::test::add;
 
 void stepper(ctx_type &ctx, std::string const &name, T increment) {
-  param_type p;
-  p.insert<std::string>("name", name);
-  p.insert<T>("increment", increment);
-  ctx.create<nm::scalar_stepper<policy>>(p);
+  add<nm::scalar_stepper<policy>>(ctx, name, {{"increment", increment}});
 }
 
 /// Steppers "a" (+1) and "b" (+10), created in the given order.

@@ -9,6 +9,7 @@
 #include "numsim-materials/materials/poisson_ratio_from_moduli.h"
 #include "numsim-materials/materials/tensor_component_stepper.h"
 #include "numsim-materials/driver/external_state_source.h"
+#include "test_support.h"
 
 // The shipped materials declare what each callback reads (#168): constness follows from the reads, and a
 // constant from the parameters alone is recomputed after set_parameter().
@@ -21,12 +22,10 @@ using T = policy::value_type;
 using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
 using tensor2 = tmech::tensor<T, 3, 2>;
+using numsim::materials::test::add;
 
 nm::constant_scalar<policy> &constant(ctx_type &ctx, std::string const &name, T value) {
-  param_type p;
-  p.insert<std::string>("name", name);
-  p.insert<T>("value", value);
-  return ctx.create<nm::constant_scalar<policy>>(p);
+  return add<nm::constant_scalar<policy>>(ctx, name, {{"value", value}});
 }
 
 TEST(DeclaredReadsMigration, ConstantScalarFollowsSetParameter) {
@@ -42,11 +41,7 @@ TEST(DeclaredReadsMigration, ConstantScalarFollowsSetParameter) {
 
 TEST(DeclaredReadsMigration, PoissonRatioFollowsSetParameter) {
   ctx_type ctx;
-  param_type p;
-  p.insert<std::string>("name", "nu");
-  p.insert<T>("K", 1.0);
-  p.insert<T>("G", 1.0);
-  auto &nu{ctx.create<nm::poisson_ratio_from_moduli<policy>>(p)};
+  auto &nu{add<nm::poisson_ratio_from_moduli<policy>>(ctx, "nu", {{"K", 1.0}, {"G", 1.0}})};
   ctx.finalize();
   ctx.update();
   EXPECT_TRUE(ctx.is_constant("nu", "value"));
@@ -57,11 +52,8 @@ TEST(DeclaredReadsMigration, PoissonRatioFollowsSetParameter) {
 
 TEST(DeclaredReadsMigration, AStatefulStepperIsNeverConstant) {
   ctx_type ctx;
-  param_type p;
-  p.insert<std::string>("name", "step");
-  p.insert<T>("increment", 0.5);
-  p.insert<std::vector<std::size_t>>("indices", {0, 1});
-  ctx.create<nm::tensor_component_stepper<2, policy>>(p);
+  add<nm::tensor_component_stepper<2, policy>>(ctx, "step",
+      {{"increment", 0.5}, {"indices", std::vector<std::size_t>{0, 1}}});
   ctx.finalize();
   for (int i{0}; i < 3; ++i)
     ctx.update();
@@ -71,20 +63,10 @@ TEST(DeclaredReadsMigration, AStatefulStepperIsNeverConstant) {
 
 TEST(DeclaredReadsMigration, IncrementalElasticityCopiesAConstantTangentOnce) {
   ctx_type ctx;
-  param_type p;
-  p.insert<std::string>("name", "strain");
-  auto &strain{ctx.create<nm::external_strain_source<policy>>(p)};
-  p.clear();
-  p.insert<std::string>("name", "total");
-  p.insert<std::string>("strain_producer_name", "strain");
-  p.insert<T>("K", 100.0);
-  p.insert<T>("G", 40.0);
-  ctx.create<nm::linear_elasticity<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "inc");
-  p.insert<std::string>("strain_source", "strain");
-  p.insert<std::string>("tangent_source", "total");
-  ctx.create<nm::incremental_linear_elasticity<policy>>(p);
+  auto &strain{add<nm::external_strain_source<policy>>(ctx, "strain")};
+  add<nm::linear_elasticity<policy>>(ctx, "total", {{"strain_producer_name", "strain"}, {"K", 100.0}, {"G", 40.0}});
+  add<nm::incremental_linear_elasticity<policy>>(ctx, "inc",
+      {{"strain_source", "strain"}, {"tangent_source", "total"}});
   ctx.finalize();
   tensor2 eps;
   eps(0, 0) = 1e-3;

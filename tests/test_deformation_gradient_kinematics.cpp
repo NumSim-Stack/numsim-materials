@@ -8,6 +8,7 @@
 #include "numsim-materials/materials/deformation_gradient_kinematics.h"
 #include "numsim-materials/materials/neo_hooke.h"
 #include "numsim-materials/umat/statev_map.h"
+#include "test_support.h"
 
 /// deformation_gradient_kinematics: F^-1 and det F of a deformation gradient, produced in the graph.
 
@@ -19,19 +20,15 @@ using T = policy::value_type;
 using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
 using tensor2 = tmech::tensor<T, 3, 2>;
+using numsim::materials::test::add;
 
 struct kinematics {
   ctx_type ctx;
   nm::external_deformation_gradient_source<policy> *F{nullptr};
 
   kinematics() {
-    param_type p;
-    p.insert<std::string>("name", "F");
-    F = &ctx.create<nm::external_deformation_gradient_source<policy>>(p);
-    p.clear();
-    p.insert<std::string>("name", "kinematics");
-    p.insert<std::string>("deformation_gradient_source", "F");
-    ctx.create<nm::deformation_gradient_kinematics<policy>>(p);
+    F = &add<nm::external_deformation_gradient_source<policy>>(ctx, "F");
+    add<nm::deformation_gradient_kinematics<policy>>(ctx, "kinematics", {{"deformation_gradient_source", "F"}});
     ctx.finalize();
   }
 
@@ -95,20 +92,10 @@ struct hyperelastic {
   nm::external_deformation_gradient_source<policy> *F{nullptr};
 
   hyperelastic() {
-    param_type p;
-    p.insert<std::string>("name", "F");
-    F = &ctx.create<nm::external_deformation_gradient_source<policy>>(p);
-    p.clear();
-    p.insert<std::string>("name", "kinematics");
-    p.insert<std::string>("deformation_gradient_source", "F");
-    ctx.create<nm::deformation_gradient_kinematics<policy>>(p);
-    p.clear();
-    p.insert<std::string>("name", "nh");
-    p.insert<std::string>("deformation_gradient_source", "F");
-    p.insert<std::string>("kinematics_source", "kinematics");
-    p.insert<T>("K", T{0.833});
-    p.insert<T>("G", T{0.386});
-    ctx.create<nm::neo_hooke<policy>>(p);
+    F = &add<nm::external_deformation_gradient_source<policy>>(ctx, "F");
+    add<nm::deformation_gradient_kinematics<policy>>(ctx, "kinematics", {{"deformation_gradient_source", "F"}});
+    add<nm::neo_hooke<policy>>(ctx, "nh",
+        {{"deformation_gradient_source", "F"}, {"kinematics_source", "kinematics"}, {"K", T{0.833}}, {"G", T{0.386}}});
     ctx.finalize();
   }
 

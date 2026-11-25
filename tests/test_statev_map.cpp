@@ -10,6 +10,7 @@
 #include "numsim-materials/solvers/local_newton.h"
 #include "numsim-materials/materials/j2_plasticity.h"
 #include "test_fixture_materials.h"
+#include "test_support.h"
 
 namespace {
 
@@ -22,6 +23,7 @@ using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
 using tensor2 = tmech::tensor<T, 3, 2>;
 using map_type = u::statev_map<policy>;
+using numsim::materials::test::add;
 
 constexpr T K = 166.67;
 constexpr T G = 76.92;
@@ -37,38 +39,14 @@ struct J2Fixture {
   nm::external_strain_source<policy>* src{nullptr};
 
   J2Fixture() {
-    param_type p;
 
-    p.clear();
-    p.insert<std::string>("name", "stepper");
-    src = &ctx.create<nm::external_strain_source<policy>>(p);
-
-    p.clear();
-    p.insert<std::string>("name", "elastic");
-    p.insert<std::string>("strain_producer_name", "stepper");
-    p.insert<T>("K", K);
-    p.insert<T>("G", G);
-    ctx.create<nm::linear_elasticity<policy>>(p);
-
-    p.clear();
-    p.insert<std::string>("name", "solver");
-    ctx.create<nm::local_newton<policy>>(p);
-
-    p.clear();
-    p.insert<std::string>("name", "hardening");
-    p.insert<std::string>("source", "j2");
-    p.insert<T>("K", T{1000});
-    ctx.create<nm::linear_isotropic_hardening<policy>>(p);
-
-    p.clear();
-    p.insert<std::string>("name", "j2");
-    p.insert<T>("K", K);
-    p.insert<std::string>("hardening_source", "hardening");
-    p.insert<std::string>("strain_source", "stepper");
-    p.insert<std::string>("solver_source", "solver");
-    p.insert<T>("G", G);
-    p.insert<T>("sigma_0", T{50});
-    ctx.create<nm::j2_plasticity<policy>>(p);
+    src = &add<nm::external_strain_source<policy>>(ctx, "stepper");
+    add<nm::linear_elasticity<policy>>(ctx, "elastic", {{"strain_producer_name", "stepper"}, {"K", K}, {"G", G}});
+    add<nm::local_newton<policy>>(ctx, "solver");
+    add<nm::linear_isotropic_hardening<policy>>(ctx, "hardening", {{"source", "j2"}, {"K", T{1000}}});
+    add<nm::j2_plasticity<policy>>(ctx, "j2",
+        {{"K", K}, {"hardening_source", "hardening"}, {"strain_source", "stepper"}, {"solver_source", "solver"},
+         {"G", G}, {"sigma_0", T{50}}});
 
     ctx.finalize();
   }
@@ -343,12 +321,8 @@ TEST(StatevMap, SortsByOwnerBeforeProperty) {
   // disagree: by (owner, name) this entry comes last; by (name, owner) it would
   // come first. A fixture whose properties share a name cannot tell them apart.
   ctx_type ctx;
-  param_type q;
-  q.insert<std::string>("name", "zzz");
-  ctx.create<early_name_history_material<policy>>(q);
-  q.clear();
-  q.insert<std::string>("name", "aaa");
-  ctx.create<tensor4_history_material<policy>>(q);  // property "stored_tangent"
+  add<early_name_history_material<policy>>(ctx, "zzz");
+  add<tensor4_history_material<policy>>(ctx, "aaa");  // property "stored_tangent"
   ctx.finalize();
 
   const map_type map(ctx, {});
@@ -366,9 +340,7 @@ TEST(StatevMap, SortsByOwnerBeforeProperty) {
 
 TEST(StatevMap, RoundTripsRankFourHistory) {
   ctx_type ctx;
-  param_type p;
-  p.insert<std::string>("name", "store");
-  auto& mat = ctx.create<tensor4_history_material<policy>>(p);
+  auto& mat = add<tensor4_history_material<policy>>(ctx, "store");
   ctx.finalize();
 
   const map_type map(ctx, {});
@@ -396,9 +368,7 @@ TEST(StatevMap, RoundTripsRankFourHistory) {
 
 TEST(StatevMap, RotatesRankFourHistory) {
   ctx_type ctx;
-  param_type p;
-  p.insert<std::string>("name", "store");
-  auto& mat = ctx.create<tensor4_history_material<policy>>(p);
+  auto& mat = add<tensor4_history_material<policy>>(ctx, "store");
   ctx.finalize();
   const map_type map(ctx, {});
 
@@ -433,9 +403,7 @@ TEST(StatevMap, RotatesRankFourHistory) {
 /// would reset to its default at the start of every increment.
 TEST(StatevMap, RejectsUnsupportedHistoryType) {
   ctx_type ctx;
-  param_type p;
-  p.insert<std::string>("name", "weird");
-  ctx.create<nm::test::int_counter<policy>>(p);
+  add<nm::test::int_counter<policy>>(ctx, "weird");
   ctx.finalize();
   EXPECT_THROW(map_type(ctx, {}), u::fatal_error);
 }

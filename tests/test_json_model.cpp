@@ -4,6 +4,7 @@
 #include <vector>
 #include <tmech/tmech.h>
 #include "numsim-materials/umat/json_model.h"
+#include "test_support.h"
 
 // The Fortran-callable symbol, so the JSON path is exercised through the real
 // ABI rather than only through the C++ evaluator.
@@ -17,6 +18,7 @@ namespace u = numsim::materials::umat;
 using policy = nm::material_policy_default;
 using T = policy::value_type;
 using registry = u::umat_registry<policy>;
+using numsim::materials::test::fortran_name;
 
 /// Moduli bound to the deck's constants; nothing here is compiled.
 const char* kElastic = R"({
@@ -39,14 +41,6 @@ registry::config elastic_config() {
   cfg.tangent_source = "stiffness";
   return cfg;
 }
-
-struct fortran_name {
-  char buf[80];
-  explicit fortran_name(const std::string& s) {
-    for (auto& c : buf) c = ' ';
-    for (std::size_t i = 0; i < s.size() && i < 80; ++i) buf[i] = s[i];
-  }
-};
 
 /// DDSDDE(1,1) for a uniaxial increment, through the real umat_ entry point.
 T uniaxial_tangent(const std::string& name, const T* props, int nprops) {

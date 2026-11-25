@@ -7,6 +7,7 @@
 #include "numsim-materials/solvers/rk_integrator.h"
 #include "numsim-materials/materials/scalar_stepper.h"
 #include "numsim-materials/materials/curing_rate.h"
+#include "test_support.h"
 
 namespace {
 
@@ -14,6 +15,7 @@ using policy = numsim::materials::material_policy_default;
 using T = policy::value_type;
 using ctx_type = numsim::materials::material_context<policy>;
 using param_type = policy::ParameterHandler;
+using numsim::materials::test::add;
 
 /// Simple exponential decay rate function: dy/dt = -lambda * y
 /// Also provides df/dy = -lambda (for implicit methods).
@@ -63,20 +65,9 @@ private:
 template<typename Integrator>
 T run_decay(int N, const std::string& tableau, T lambda = 1.0) {
   ctx_type ctx;
-  param_type p;
 
-  p.clear();
-  p.insert<std::string>("name", "integrator");
-  p.insert<std::string>("function", "decay");
-  p.insert<T>("step_size", T{1.0} / T(N));
-  p.insert<std::string>("tableau", tableau);
-  ctx.create<Integrator>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "decay");
-  p.insert<std::string>("source", "integrator");
-  p.insert<T>("lambda", lambda);
-  ctx.create<exponential_decay<policy>>(p);
+  add<Integrator>(ctx, "integrator", {{"function", "decay"}, {"step_size", T{1.0} / T(N)}, {"tableau", tableau}});
+  add<exponential_decay<policy>>(ctx, "decay", {{"source", "integrator"}, {"lambda", lambda}});
 
   ctx.finalize();
 
@@ -304,24 +295,10 @@ TEST(CuringRate, MatchesTheArrheniusAutocatalyticLaw) {
   constexpr T dz{0.05};
 
   ctx_type ctx;
-  param_type p;
-  p.insert<std::string>("name", "temperature");
-  p.insert<T>("increment", T{0});
-  ctx.create<numsim::materials::scalar_stepper<policy>>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "state_source");
-  p.insert<T>("increment", dz);
-  ctx.create<numsim::materials::scalar_stepper<policy>>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "curing_rate");
-  p.insert<std::string>("integrator_source", "state_source");
-  p.insert<T>("A", A);
-  p.insert<T>("E", E);
-  p.insert<T>("n", n);
-  p.insert<T>("m", m);
-  ctx.create<numsim::materials::curing_rate<policy>>(p);
+  add<numsim::materials::scalar_stepper<policy>>(ctx, "temperature", {{"increment", T{0}}});
+  add<numsim::materials::scalar_stepper<policy>>(ctx, "state_source", {{"increment", dz}});
+  add<numsim::materials::curing_rate<policy>>(ctx, "curing_rate",
+      {{"integrator_source", "state_source"}, {"A", A}, {"E", E}, {"n", n}, {"m", m}});
   ctx.finalize();
 
   auto* temp = dynamic_cast<numsim_core::history_property<T,

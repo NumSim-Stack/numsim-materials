@@ -12,6 +12,7 @@
 #include "numsim-materials/materials/linear_stress.h"
 #include "numsim-materials/materials/props_scalar.h"
 #include "numsim-materials/umat/json_model.h"
+#include "test_support.h"
 
 // The Fortran-callable symbol, so live constants are exercised through the real
 // ABI and not only through the C++ evaluator.
@@ -29,6 +30,8 @@ using param_type = policy::ParameterHandler;
 using registry = u::umat_registry<policy>;
 using tensor2 = tmech::tensor<T, 3, 2>;
 using tensor4 = tmech::tensor<T, 3, 4>;
+using numsim::materials::test::add;
+using numsim::materials::test::fortran_name;
 
 /// C1111 for an isotropic tangent, the quantity every test here reads back.
 constexpr T c1111(T K, T G) { return K + 4.0 * G / 3.0; }
@@ -39,10 +42,7 @@ constexpr T c1111(T K, T G) { return K + 4.0 * G / 3.0; }
 
 TEST(PropsScalar, PublishesTheConstantAtItsIndex) {
   ctx_type ctx;
-  param_type p;
-  p.insert<std::string>("name", "K");
-  p.insert<std::size_t>("index", 1);
-  auto& k = ctx.create<nm::props_scalar<policy>>(p);
+  auto& k = add<nm::props_scalar<policy>>(ctx, "K", {{"index", std::size_t{1}}});
   ctx.finalize();
 
   const T props[3] = {11.0, 22.0, 33.0};
@@ -53,20 +53,14 @@ TEST(PropsScalar, PublishesTheConstantAtItsIndex) {
 /// A definite value before the first bind, not whatever the storage held.
 TEST(PropsScalar, IsZeroBeforeTheFirstBind) {
   ctx_type ctx;
-  param_type p;
-  p.insert<std::string>("name", "K");
-  p.insert<std::size_t>("index", 0);
-  ctx.create<nm::props_scalar<policy>>(p);
+  add<nm::props_scalar<policy>>(ctx, "K", {{"index", std::size_t{0}}});
   ctx.finalize();
   EXPECT_DOUBLE_EQ(ctx.get<T>("K", "value"), 0.0);
 }
 
 TEST(PropsScalar, RejectsAnIndexPastTheSuppliedConstants) {
   ctx_type ctx;
-  param_type p;
-  p.insert<std::string>("name", "K");
-  p.insert<std::size_t>("index", 5);
-  auto& k = ctx.create<nm::props_scalar<policy>>(p);
+  auto& k = add<nm::props_scalar<policy>>(ctx, "K", {{"index", std::size_t{5}}});
   ctx.finalize();
 
   const T props[2] = {1.0, 2.0};
@@ -77,27 +71,11 @@ TEST(PropsScalar, RejectsAnIndexPastTheSuppliedConstants) {
 /// per constant.
 TEST(PropsScalar, CostsNoStatevSlot) {
   ctx_type ctx;
-  param_type p;
-  p.insert<std::string>("name", "strain_in");
-  ctx.create<nm::external_strain_source<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "K");
-  p.insert<std::size_t>("index", 0);
-  ctx.create<nm::props_scalar<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "G");
-  p.insert<std::size_t>("index", 1);
-  ctx.create<nm::props_scalar<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "stiffness");
-  p.insert<std::string>("K_source", "K");
-  p.insert<std::string>("G_source", "G");
-  ctx.create<nm::isotropic_tangent<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "elastic");
-  p.insert<std::string>("tangent_source", "stiffness");
-  p.insert<std::string>("strain_source", "strain_in");
-  ctx.create<nm::linear_stress<policy>>(p);
+  add<nm::external_strain_source<policy>>(ctx, "strain_in");
+  add<nm::props_scalar<policy>>(ctx, "K", {{"index", std::size_t{0}}});
+  add<nm::props_scalar<policy>>(ctx, "G", {{"index", std::size_t{1}}});
+  add<nm::isotropic_tangent<policy>>(ctx, "stiffness", {{"K_source", "K"}, {"G_source", "G"}});
+  add<nm::linear_stress<policy>>(ctx, "elastic", {{"tangent_source", "stiffness"}, {"strain_source", "strain_in"}});
   ctx.finalize();
 
   u::material_point_evaluator<policy>::config cfg;
@@ -116,27 +94,11 @@ TEST(PropsScalar, CostsNoStatevSlot) {
 
 /// A model whose two moduli are live deck constants.
 void build_live(ctx_type& ctx) {
-  param_type p;
-  p.insert<std::string>("name", "strain_in");
-  ctx.create<nm::external_strain_source<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "K");
-  p.insert<std::size_t>("index", 0);
-  ctx.create<nm::props_scalar<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "G");
-  p.insert<std::size_t>("index", 1);
-  ctx.create<nm::props_scalar<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "stiffness");
-  p.insert<std::string>("K_source", "K");
-  p.insert<std::string>("G_source", "G");
-  ctx.create<nm::isotropic_tangent<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "elastic");
-  p.insert<std::string>("tangent_source", "stiffness");
-  p.insert<std::string>("strain_source", "strain_in");
-  ctx.create<nm::linear_stress<policy>>(p);
+  add<nm::external_strain_source<policy>>(ctx, "strain_in");
+  add<nm::props_scalar<policy>>(ctx, "K", {{"index", std::size_t{0}}});
+  add<nm::props_scalar<policy>>(ctx, "G", {{"index", std::size_t{1}}});
+  add<nm::isotropic_tangent<policy>>(ctx, "stiffness", {{"K_source", "K"}, {"G_source", "G"}});
+  add<nm::linear_stress<policy>>(ctx, "elastic", {{"tangent_source", "stiffness"}, {"strain_source", "strain_in"}});
   ctx.finalize();
 }
 
@@ -280,27 +242,11 @@ TEST(PropsScalar, TooFewConstantsIsFatalAtTheEvaluator) {
 /// A baked-constant model reports itself as such and pays for nothing.
 TEST(PropsScalar, BakedConstantModelsHaveNoLiveProps) {
   ctx_type ctx;
-  param_type p;
-  p.insert<std::string>("name", "strain_in");
-  ctx.create<nm::external_strain_source<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "K");
-  p.insert<T>("value", 100.0);
-  ctx.create<nm::constant_scalar<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "G");
-  p.insert<T>("value", 40.0);
-  ctx.create<nm::constant_scalar<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "stiffness");
-  p.insert<std::string>("K_source", "K");
-  p.insert<std::string>("G_source", "G");
-  ctx.create<nm::isotropic_tangent<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "elastic");
-  p.insert<std::string>("tangent_source", "stiffness");
-  p.insert<std::string>("strain_source", "strain_in");
-  ctx.create<nm::linear_stress<policy>>(p);
+  add<nm::external_strain_source<policy>>(ctx, "strain_in");
+  add<nm::constant_scalar<policy>>(ctx, "K", {{"value", 100.0}});
+  add<nm::constant_scalar<policy>>(ctx, "G", {{"value", 40.0}});
+  add<nm::isotropic_tangent<policy>>(ctx, "stiffness", {{"K_source", "K"}, {"G_source", "G"}});
+  add<nm::linear_stress<policy>>(ctx, "elastic", {{"tangent_source", "stiffness"}, {"strain_source", "strain_in"}});
   ctx.finalize();
 
   u::material_point_evaluator<policy> eval(ctx, live_config());
@@ -361,14 +307,6 @@ struct Registration {
   }
 };
 const Registration registration_{};
-
-struct fortran_name {
-  char buf[80];
-  explicit fortran_name(const std::string& s) {
-    for (auto& c : buf) c = ' ';
-    for (std::size_t i = 0; i < s.size() && i < 80; ++i) buf[i] = s[i];
-  }
-};
 
 T uniaxial_tangent(const std::string& name, const T* props, int nprops) {
   const fortran_name cm(name);

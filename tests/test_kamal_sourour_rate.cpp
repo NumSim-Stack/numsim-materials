@@ -8,6 +8,7 @@
 #include "numsim-materials/materials/scalar_stepper.h"
 #include "numsim-materials/solvers/rk_integrator.h"
 #include "numsim-materials/umat/json_model.h"
+#include "test_support.h"
 
 namespace {
 
@@ -16,6 +17,7 @@ using policy = nm::material_policy_default;
 using T = policy::value_type;
 using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
+using numsim::materials::test::add;
 
 constexpr T R{8.31446261815324};
 constexpr T A1{2e5}, E1{60000}, A2{1e6}, E2{50000}, m{0.7}, n{1.3};
@@ -25,14 +27,8 @@ std::unique_ptr<ctx_type> build(std::string const &type, T A2_ = A2, T dz = 0, T
   auto owner{std::make_unique<ctx_type>()};
   auto &ctx{*owner};
   param_type p;
-  p.insert<std::string>("name", "temperature");
-  p.insert<T>("increment", T{0});
-  ctx.create<nm::scalar_stepper<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "state_source");
-  p.insert<T>("increment", dz);
-  ctx.create<nm::scalar_stepper<policy>>(p);
-  p.clear();
+  add<nm::scalar_stepper<policy>>(ctx, "temperature", {{"increment", T{0}}});
+  add<nm::scalar_stepper<policy>>(ctx, "state_source", {{"increment", dz}});
   p.insert<std::string>("name", "rate");
   p.insert<std::string>("integrator_source", "state_source");
   if (type == "kamal") {
@@ -101,10 +97,7 @@ TEST(KamalSourour, RejectsNegativeParameters) {
   for (auto const *key : {"A1", "E1", "A2", "E2", "m", "n"}) {
     ctx_type ctx;
     param_type p;
-    p.insert<std::string>("name", "temperature");
-    p.insert<T>("increment", T{0});
-    ctx.create<nm::scalar_stepper<policy>>(p);
-    p.clear();
+    add<nm::scalar_stepper<policy>>(ctx, "temperature", {{"increment", T{0}}});
     p.insert<std::string>("name", "rate");
     p.insert<std::string>("integrator_source", "temperature");
     for (auto const &[k, v] : {std::pair{"A1", A1}, std::pair{"E1", E1}, std::pair{"A2", A2}, std::pair{"E2", E2}, std::pair{"m", m}, std::pair{"n", n}})
@@ -121,26 +114,10 @@ TEST(KamalSourour, RateVanishesAtFullCure) {
 
 TEST(KamalSourour, IntegratesToFullCureWithRungeKutta) {
   ctx_type ctx;
-  param_type p;
-  p.insert<std::string>("name", "temperature");
-  p.insert<T>("increment", T{0});
-  ctx.create<nm::scalar_stepper<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "integrator");
-  p.insert<std::string>("function", "rate");
-  p.insert<T>("step_size", T{1});
-  p.insert<std::string>("tableau", "rk4");
-  ctx.create<nm::rk_integrator<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "rate");
-  p.insert<std::string>("integrator_source", "integrator");
-  p.insert<T>("A1", A1);
-  p.insert<T>("E1", E1);
-  p.insert<T>("A2", A2);
-  p.insert<T>("E2", E2);
-  p.insert<T>("m", m);
-  p.insert<T>("n", n);
-  ctx.create<nm::kamal_sourour_rate<policy>>(p);
+  add<nm::scalar_stepper<policy>>(ctx, "temperature", {{"increment", T{0}}});
+  add<nm::rk_integrator<policy>>(ctx, "integrator", {{"function", "rate"}, {"step_size", T{1}}, {"tableau", "rk4"}});
+  add<nm::kamal_sourour_rate<policy>>(ctx, "rate",
+      {{"integrator_source", "integrator"}, {"A1", A1}, {"E1", E1}, {"A2", A2}, {"E2", E2}, {"m", m}, {"n", n}});
   ctx.finalize();
   ctx.get_mutable<T>("temperature", "state") = 120;
   T previous{0};

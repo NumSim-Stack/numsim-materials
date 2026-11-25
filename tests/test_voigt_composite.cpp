@@ -13,6 +13,7 @@
 #include "numsim-materials/materials/weighted_sum.h"
 #include "numsim-materials/solvers/local_newton.h"
 #include "numsim-materials/driver/external_state_source.h"
+#include "test_support.h"
 
 /// The nonlinear Voigt rule of mixtures (equal strain in every phase) is a wiring, not a material:
 /// every phase reads the composite strain and weighted_sum adds c_i sigma_i and c_i C_i.
@@ -26,66 +27,33 @@ using param_type = policy::ParameterHandler;
 using tensor2 = tmech::tensor<T, 3, 2>;
 using tensor4 = tmech::tensor<T, 3, 4>;
 using terms_type = nm::weighted_sum<policy>::terms_type;
+using numsim::materials::test::add;
 
 constexpr T K{166.67}, G{76.92}, sigma_0{0.5}, H{1000.0}, c_plastic{0.4};
 
 std::unique_ptr<ctx_type> build() {
   auto owner{std::make_unique<ctx_type>()};
   auto &ctx{*owner};
-  param_type p;
-  p.insert<std::string>("name", "strain");
-  ctx.create<nm::external_strain_source<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "elastic");
-  p.insert<std::string>("strain_producer_name", "strain");
-  p.insert<T>("K", K);
-  p.insert<T>("G", G);
-  ctx.create<nm::linear_elasticity<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "solver");
-  ctx.create<nm::local_newton<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "hardening");
-  p.insert<std::string>("source", "j2");
-  p.insert<T>("K", H);
-  ctx.create<nm::linear_isotropic_hardening<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "j2");
-  p.insert<T>("K", K);
-  p.insert<T>("G", G);
-  p.insert<T>("sigma_0", sigma_0);
-  p.insert<std::string>("hardening_source", "hardening");
-  p.insert<std::string>("strain_source", "strain");
-  p.insert<std::string>("solver_source", "solver");
-  ctx.create<nm::j2_plasticity<policy>>(p);
+  add<nm::external_strain_source<policy>>(ctx, "strain");
+  add<nm::linear_elasticity<policy>>(ctx, "elastic", {{"strain_producer_name", "strain"}, {"K", K}, {"G", G}});
+  add<nm::local_newton<policy>>(ctx, "solver");
+  add<nm::linear_isotropic_hardening<policy>>(ctx, "hardening", {{"source", "j2"}, {"K", H}});
+  add<nm::j2_plasticity<policy>>(ctx, "j2",
+      {{"K", K}, {"G", G}, {"sigma_0", sigma_0}, {"hardening_source", "hardening"}, {"strain_source", "strain"},
+       {"solver_source", "solver"}});
   for (auto const &[name, value] : {std::pair{"c_plastic", c_plastic}, std::pair{"c_elastic", 1 - c_plastic}}) {
-    p.clear();
-    p.insert<std::string>("name", name);
-    p.insert<T>("value", value);
-    ctx.create<nm::constant_scalar<policy>>(p);
+    add<nm::constant_scalar<policy>>(ctx, name, {{"value", value}});
   }
-  p.clear();
-  p.insert<std::string>("name", "voigt");
-  p.insert<terms_type>("terms", {{"c_plastic", "j2"}, {"c_elastic", "elastic"}});
-  ctx.create<nm::weighted_sum<policy>>(p);
+  add<nm::weighted_sum<policy>>(ctx, "voigt", {{"terms", terms_type{{"c_plastic", "j2"}, {"c_elastic", "elastic"}}}});
   // the linear rule of mixtures over the same tangents: phases of produced properties, a tangent, a linear_stress
   for (auto const &[phase, material, fraction] : {std::tuple{"plastic_phase", "j2", "c_plastic"}, std::tuple{"elastic_phase", "elastic", "c_elastic"}}) {
-    p.clear();
-    p.insert<std::string>("name", phase);
-    p.insert<std::string>("tangent_source", material);
-    p.insert<std::string>("fraction_source", fraction);
-    ctx.create<nm::phase<policy>>(p);
+    add<nm::phase<policy>>(ctx, phase, {{"tangent_source", material}, {"fraction_source", fraction}});
   }
-  p.clear();
-  p.insert<std::string>("name", "linear_voigt");
-  p.insert<std::vector<std::string>>("phases", {"plastic_phase", "elastic_phase"});
-  p.insert<nm::object_spec<param_type>>("kernel", {"voigt", {}});
-  ctx.create<nm::mean_field_composite_global<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "linear_voigt_stress");
-  p.insert<std::string>("tangent_source", "linear_voigt");
-  p.insert<std::string>("strain_source", "strain");
-  ctx.create<nm::linear_stress<policy>>(p);
+  add<nm::mean_field_composite_global<policy>>(ctx, "linear_voigt",
+      {{"phases", std::vector<std::string>{"plastic_phase", "elastic_phase"}},
+       {"kernel", nm::object_spec<param_type>{"voigt", {}}}});
+  add<nm::linear_stress<policy>>(ctx, "linear_voigt_stress",
+      {{"tangent_source", "linear_voigt"}, {"strain_source", "strain"}});
   ctx.finalize();
   return owner;
 }

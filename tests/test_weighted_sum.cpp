@@ -12,6 +12,7 @@
 #include "numsim-materials/materials/scalar_stepper.h"
 #include "numsim-materials/materials/weighted_sum.h"
 #include "numsim-materials/driver/external_state_source.h"
+#include "test_support.h"
 
 namespace {
 
@@ -24,6 +25,8 @@ using param_type = policy::ParameterHandler;
 using tensor2 = tmech::tensor<T, 3, 2>;
 using tensor4 = tmech::tensor<T, 3, 4>;
 using terms_type = std::vector<std::pair<std::string, std::string>>;
+using numsim::materials::test::add;
+using numsim::materials::test::uniaxial;
 
 constexpr T KA = 100.0, GA = 40.0;
 constexpr T KB = 300.0, GB = 140.0;
@@ -31,59 +34,25 @@ constexpr T KB = 300.0, GB = 140.0;
 /// A weight in [0,1] published as "value", via scalar_identity_weight over a
 /// scalar_stepper's history.
 void add_weight(ctx_type& ctx, const std::string& name, T increment) {
-  param_type p;
-  p.insert<std::string>("name", name + "_drv");
-  p.insert<T>("increment", increment);
-  ctx.create<nm::scalar_stepper<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", name);
-  p.insert<std::string>("source", name + "_drv::state");
-  ctx.create<nm::scalar_identity_weight<policy>>(p);
+  add<nm::scalar_stepper<policy>>(ctx, name + "_drv", {{"increment", increment}});
+  add<nm::scalar_identity_weight<policy>>(ctx, name, {{"source", name + "_drv::state"}});
 }
 
 void add_monolithic(ctx_type& ctx, const std::string& name, T k, T g) {
-  param_type p;
-  p.insert<std::string>("name", name);
-  p.insert<std::string>("strain_producer_name", "strain_in");
-  p.insert<T>("K", k);
-  p.insert<T>("G", g);
-  ctx.create<nm::linear_elasticity<policy>>(p);
+  add<nm::linear_elasticity<policy>>(ctx, name, {{"strain_producer_name", "strain_in"}, {"K", k}, {"G", g}});
 }
 
 /// A constituent whose stiffness lives in its OWN material, so its stress and
 /// tangent come from two different names.
 void add_decomposed(ctx_type& ctx, const std::string& name, T k, T g) {
-  param_type p;
-  p.insert<std::string>("name", name + "_K");
-  p.insert<T>("value", k);
-  ctx.create<nm::constant_scalar<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", name + "_G");
-  p.insert<T>("value", g);
-  ctx.create<nm::constant_scalar<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", name + "_stiff");
-  p.insert<std::string>("K_source", name + "_K");
-  p.insert<std::string>("G_source", name + "_G");
-  ctx.create<nm::isotropic_tangent<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", name);
-  p.insert<std::string>("tangent_source", name + "_stiff");
-  p.insert<std::string>("strain_source", "strain_in");
-  ctx.create<nm::linear_stress<policy>>(p);
+  add<nm::constant_scalar<policy>>(ctx, name + "_K", {{"value", k}});
+  add<nm::constant_scalar<policy>>(ctx, name + "_G", {{"value", g}});
+  add<nm::isotropic_tangent<policy>>(ctx, name + "_stiff", {{"K_source", name + "_K"}, {"G_source", name + "_G"}});
+  add<nm::linear_stress<policy>>(ctx, name, {{"tangent_source", name + "_stiff"}, {"strain_source", "strain_in"}});
 }
 
 nm::external_strain_source<policy>& add_strain(ctx_type& ctx) {
-  param_type p;
-  p.insert<std::string>("name", "strain_in");
-  return ctx.create<nm::external_strain_source<policy>>(p);
-}
-
-tensor2 uniaxial(T v) {
-  tensor2 e;
-  e.fill(0.0);
-  e(0, 0) = v;
-  return e;
+  return add<nm::external_strain_source<policy>>(ctx, "strain_in");
 }
 
 // ---------------------------------------------------------------------------
@@ -100,10 +69,7 @@ TEST(WeightedSum, SumsStressAndTangentByWeight) {
   add_monolithic(ctx, "matA", KA, GA);
   add_monolithic(ctx, "matB", KB, GB);
 
-  param_type p;
-  p.insert<std::string>("name", "mix");
-  p.insert<terms_type>("terms", {{"wA", "matA"}, {"wB", "matB"}});
-  ctx.create<nm::weighted_sum<policy>>(p);
+  add<nm::weighted_sum<policy>>(ctx, "mix", {{"terms", terms_type{{"wA", "matA"}, {"wB", "matB"}}}});
   ctx.finalize();
 
   src.bind(uniaxial(0.001), uniaxial(0.001));
@@ -128,10 +94,7 @@ TEST(WeightedSum, AbsentTangentSourcesUsesEachTermsOwnMaterial) {
   add_weight(ctx, "wA", 1.0);
   add_monolithic(ctx, "matA", KA, GA);
 
-  param_type p;
-  p.insert<std::string>("name", "mix");
-  p.insert<terms_type>("terms", {{"wA", "matA"}});
-  ctx.create<nm::weighted_sum<policy>>(p);
+  add<nm::weighted_sum<policy>>(ctx, "mix", {{"terms", terms_type{{"wA", "matA"}}}});
   ctx.finalize();
 
   src.bind(uniaxial(0.001), uniaxial(0.001));
@@ -148,11 +111,8 @@ TEST(WeightedSum, OverridesOneTermsTangentOwner) {
   add_weight(ctx, "wA", 1.0);
   add_decomposed(ctx, "matA", KA, GA);
 
-  param_type p;
-  p.insert<std::string>("name", "mix");
-  p.insert<terms_type>("terms", {{"wA", "matA"}});
-  p.insert<std::vector<std::string>>("tangent_sources", {"matA_stiff"});
-  ctx.create<nm::weighted_sum<policy>>(p);
+  add<nm::weighted_sum<policy>>(ctx, "mix",
+      {{"terms", terms_type{{"wA", "matA"}}}, {"tangent_sources", std::vector<std::string>{"matA_stiff"}}});
   ctx.finalize();
 
   src.bind(uniaxial(0.001), uniaxial(0.001));
@@ -198,11 +158,9 @@ TEST(WeightedSum, RejectsATangentSourcesListThatDoesNotMatchTheTermCount) {
     add_weight(ctx, "wB", 0.5);
     add_monolithic(ctx, "matA", KA, GA);
     add_decomposed(ctx, "matB", KB, GB);
-    param_type p;
-    p.insert<std::string>("name", "mix");
-    p.insert<terms_type>("terms", {{"wA", "matA"}, {"wB", "matB"}});
-    p.insert<std::vector<std::string>>("tangent_sources", std::move(sources));
-    ctx.create<nm::weighted_sum<policy>>(p);
+    add<nm::weighted_sum<policy>>(ctx, "mix",
+        {{"terms", terms_type{{"wA", "matA"}, {"wB", "matB"}}},
+         {"tangent_sources", std::vector<std::string>(std::move(sources))}});
   };
 
   EXPECT_THROW(build({"matB_stiff"}), std::runtime_error);          // too short

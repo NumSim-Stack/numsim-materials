@@ -8,6 +8,7 @@
 #include "numsim-materials/materials/thermal_eigenstrain.h"
 #include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/umat/json_model.h"
+#include "test_support.h"
 
 namespace {
 
@@ -17,39 +18,21 @@ using T = policy::value_type;
 using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
 using tensor2 = tmech::tensor<T, 3, 2>;
+using numsim::materials::test::add;
 
 constexpr T K{100}, G{40}, alpha{1e-5}, T0{20};
 
 std::unique_ptr<ctx_type> build() {
   auto owner{std::make_unique<ctx_type>()};
   auto &ctx{*owner};
-  param_type p;
-  p.insert<std::string>("name", "strain");
-  ctx.create<nm::external_strain_source<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "temperature");
-  ctx.create<nm::external_scalar_source<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "alpha");
-  p.insert<T>("value", alpha);
-  ctx.create<nm::constant_scalar<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "thermal");
-  p.insert<std::string>("temperature_source", "temperature");
-  p.insert<std::string>("alpha_source", "alpha::value");
-  p.insert<T>("reference_temperature", T0);
-  ctx.create<nm::thermal_eigenstrain<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "elastic_strain");
-  p.insert<std::string>("strain_source", "strain");
-  p.insert<std::vector<std::string>>("eigenstrain_sources", {"thermal"});
-  ctx.create<nm::elastic_strain<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "elastic");
-  p.insert<std::string>("strain_producer_name", "elastic_strain");
-  p.insert<T>("K", K);
-  p.insert<T>("G", G);
-  ctx.create<nm::linear_elasticity<policy>>(p);
+  add<nm::external_strain_source<policy>>(ctx, "strain");
+  add<nm::external_scalar_source<policy>>(ctx, "temperature");
+  add<nm::constant_scalar<policy>>(ctx, "alpha", {{"value", alpha}});
+  add<nm::thermal_eigenstrain<policy>>(ctx, "thermal",
+      {{"temperature_source", "temperature"}, {"alpha_source", "alpha::value"}, {"reference_temperature", T0}});
+  add<nm::elastic_strain<policy>>(ctx, "elastic_strain",
+      {{"strain_source", "strain"}, {"eigenstrain_sources", std::vector<std::string>{"thermal"}}});
+  add<nm::linear_elasticity<policy>>(ctx, "elastic", {{"strain_producer_name", "elastic_strain"}, {"K", K}, {"G", G}});
   ctx.finalize();
   return owner;
 }

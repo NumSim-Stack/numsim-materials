@@ -5,6 +5,7 @@
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/core/parameter_helpers.h"
 #include "numsim-materials/driver/external_state_source.h"
+#include "test_support.h"
 
 // A callback with declared reads throws when it reads an input it did not declare (#170).
 
@@ -15,6 +16,7 @@ using policy = nm::material_policy_default;
 using T = policy::value_type;
 using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
+using numsim::materials::test::add;
 
 /// "out" = a + b; declares the read of "a", and of "b" too unless "forget_b".
 template <typename Traits>
@@ -140,18 +142,11 @@ struct setup {
   ctx_type ctx;
   explicit setup(bool forget_b, bool with_rerunner = false) {
     for (auto const *name : {"a", "b"}) {
-      param_type p;
-      p.insert<std::string>("name", name);
-      ctx.create<nm::external_scalar_source<policy>>(p).bind(0.0, 1.0);
+      add<nm::external_scalar_source<policy>>(ctx, name).bind(0.0, 1.0);
     }
-    param_type p;
-    p.insert<std::string>("name", "reader");
-    p.insert<bool>("forget_b", forget_b);
-    ctx.create<reader<policy>>(p);
+    add<reader<policy>>(ctx, "reader", {{"forget_b", forget_b}});
     if (with_rerunner) {
-      p.clear();
-      p.insert<std::string>("name", "rerunner");
-      ctx.create<rerunner<policy>>(p);
+      add<rerunner<policy>>(ctx, "rerunner");
     }
     ctx.finalize();
   }
@@ -214,14 +209,8 @@ TEST(ReadCheck, ARerunCallbackMayReadWhatItsCallerDidNotDeclare) {
 
 void history_case(bool forget, bool new_value) {
   ctx_type ctx;
-  param_type p;
-  p.insert<std::string>("name", "b");
-  ctx.create<nm::external_scalar_source<policy>>(p).bind(0.0, 1.0);
-  p.clear();
-  p.insert<std::string>("name", "h");
-  p.insert<bool>("forget", forget);
-  p.insert<bool>("new_value", new_value);
-  ctx.create<history_reader<policy>>(p);
+  add<nm::external_scalar_source<policy>>(ctx, "b").bind(0.0, 1.0);
+  add<history_reader<policy>>(ctx, "h", {{"forget", forget}, {"new_value", new_value}});
   ctx.finalize();
   ctx.update();
 }
@@ -235,17 +224,12 @@ TEST(ReadCheck, HistoryReadsAreChecked) {
 }
 
 void create_misdeclared(std::string const &mistake, ctx_type &ctx) {
-  param_type p;
-  p.insert<std::string>("name", "m");
-  p.insert<std::string>("mistake", mistake);
-  ctx.create<misdeclared<policy>>(p);
+  add<misdeclared<policy>>(ctx, "m", {{"mistake", mistake}});
 }
 
 TEST(Declarations, ConstantReadsTheInputsOfFinalize) {
   ctx_type ctx;
-  param_type p;
-  p.insert<std::string>("name", "a");
-  auto &a{ctx.create<nm::external_scalar_source<policy>>(p)};
+  auto &a{add<nm::external_scalar_source<policy>>(ctx, "a")};
   create_misdeclared("late_input", ctx);
   ctx.finalize();
   a.bind(0.0, 3.0);

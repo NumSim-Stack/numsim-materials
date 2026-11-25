@@ -14,6 +14,7 @@
 #include "numsim-materials/solvers/butcher_tableau.h"
 #include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/umat/errors.h"
+#include "test_support.h"
 
 namespace {
 
@@ -24,6 +25,7 @@ using param_type = policy::ParameterHandler;
 using tensor2 = tmech::tensor<T, 3, 2>;
 using dp_yield = numsim::materials::drucker_prager_yield_function<T, 3>;
 using dp_plasticity = numsim::materials::drucker_prager_plasticity<policy>;
+using numsim::materials::test::add;
 
 /// Multiaxial strain path: adds increment * direction each update, where
 /// direction is {e11, e22, e33, e12}.
@@ -79,11 +81,8 @@ private:
 
 /// The hydrostatic path, which is what reaches the apex.
 void add_hydrostatic_stepper(ctx_type& ctx, T increment) {
-  param_type p;
-  p.insert<std::string>("name", "stepper");
-  p.insert<T>("increment", increment);
-  p.insert<std::vector<double>>("direction", {1.0, 1.0, 1.0, 0.0});
-  ctx.create<multiaxial_stepper<policy>>(p);
+  add<multiaxial_stepper<policy>>(ctx, "stepper",
+      {{"increment", increment}, {"direction", std::vector<double>{1.0, 1.0, 1.0, 0.0}}});
 }
 
 /// A DP graph driven by a multiaxial stepper, with the parameters used
@@ -98,34 +97,13 @@ struct dp_graph {
   static constexpr T beta{0.05};
 
   dp_graph(std::vector<double> direction, T increment, T H_mod, T tolerance = T{1e-10}) {
-    param_type p;
-    p.insert<std::string>("name", "stepper");
-    p.insert<T>("increment", increment);
-    p.insert<std::vector<double>>("direction", std::move(direction));
-    ctx.create<multiaxial_stepper<policy>>(p);
-
-    p.clear();
-    p.insert<std::string>("name", "solver");
-    p.insert<T>("tolerance", tolerance);
-    ctx.create<numsim::materials::local_newton<policy>>(p);
-
-    p.clear();
-    p.insert<std::string>("name", "hardening");
-    p.insert<std::string>("source", "dp");
-    p.insert<T>("K", H_mod);
-    ctx.create<numsim::materials::linear_isotropic_hardening<policy>>(p);
-
-    p.clear();
-    p.insert<std::string>("name", "dp");
-    p.insert<std::string>("hardening_source", "hardening");
-    p.insert<std::string>("strain_source", "stepper");
-    p.insert<std::string>("solver_source", "solver");
-    p.insert<T>("G", G);
-    p.insert<T>("sigma_0", cohesion);
-    p.insert<T>("eta", eta);
-    p.insert<T>("beta", beta);
-    p.insert<T>("K_bulk", K);
-    ctx.create<dp_plasticity>(p);
+    add<multiaxial_stepper<policy>>(ctx, "stepper",
+        {{"increment", increment}, {"direction", std::vector<double>(std::move(direction))}});
+    add<numsim::materials::local_newton<policy>>(ctx, "solver", {{"tolerance", tolerance}});
+    add<numsim::materials::linear_isotropic_hardening<policy>>(ctx, "hardening", {{"source", "dp"}, {"K", H_mod}});
+    add<dp_plasticity>(ctx, "dp",
+        {{"hardening_source", "hardening"}, {"strain_source", "stepper"}, {"solver_source", "solver"}, {"G", G},
+         {"sigma_0", cohesion}, {"eta", eta}, {"beta", beta}, {"K_bulk", K}});
     ctx.finalize();
   }
 
@@ -142,27 +120,12 @@ protected:
     param_type p;
 
     p.clear();
-    p.insert<std::string>("name", "stepper");
-    p.insert<T>("increment", T{0.05});
-    p.insert<std::vector<std::size_t>>("indices", {0, 0});
-    ctx.create<numsim::materials::tensor_component_stepper<2, policy>>(p);
-
-    p.clear();
-    p.insert<std::string>("name", "elastic");
-    p.insert<std::string>("strain_producer_name", "stepper");
-    p.insert<T>("K", K);
-    p.insert<T>("G", G);
-    ctx.create<numsim::materials::linear_elasticity<policy>>(p);
-
-    p.clear();
-    p.insert<std::string>("name", "solver");
-    ctx.create<numsim::materials::local_newton<policy>>(p);
-
-    p.clear();
-    p.insert<std::string>("name", "hardening");
-    p.insert<std::string>("source", "dp");
-    p.insert<T>("K", H_mod);
-    ctx.create<numsim::materials::linear_isotropic_hardening<policy>>(p);
+    add<numsim::materials::tensor_component_stepper<2, policy>>(ctx, "stepper",
+        {{"increment", T{0.05}}, {"indices", std::vector<std::size_t>{0, 0}}});
+    add<numsim::materials::linear_elasticity<policy>>(ctx, "elastic",
+        {{"strain_producer_name", "stepper"}, {"K", K}, {"G", G}});
+    add<numsim::materials::local_newton<policy>>(ctx, "solver");
+    add<numsim::materials::linear_isotropic_hardening<policy>>(ctx, "hardening", {{"source", "dp"}, {"K", H_mod}});
 
     // Drucker-Prager yield function with friction and dilatancy
 
@@ -313,41 +276,15 @@ tensor2 multiaxial_increment(std::vector<double> const& dir, T increment) {
 class DPTangentTest : public ::testing::Test {
 protected:
   void SetUp() override {
-    param_type p;
 
-    p.clear();
-    p.insert<std::string>("name", "stepper");
-    strain = &ctx.create<numsim::materials::external_strain_source<policy>>(p);
-
-    p.clear();
-    p.insert<std::string>("name", "elastic");
-    p.insert<std::string>("strain_producer_name", "stepper");
-    p.insert<T>("K", T{166.67});
-    p.insert<T>("G", T{76.92});
-    ctx.create<numsim::materials::linear_elasticity<policy>>(p);
-
-    p.clear();
-    p.insert<std::string>("name", "solver");
-    ctx.create<numsim::materials::local_newton<policy>>(p);
-
-    p.clear();
-    p.insert<std::string>("name", "hardening");
-    p.insert<std::string>("source", "dp");
-    p.insert<T>("K", T{500.0});
-    ctx.create<numsim::materials::linear_isotropic_hardening<policy>>(p);
-
-
-    p.clear();
-    p.insert<std::string>("name", "dp");
-    p.insert<std::string>("hardening_source", "hardening");
-    p.insert<std::string>("strain_source", "stepper");
-    p.insert<std::string>("solver_source", "solver");
-    p.insert<T>("G", T{76.92});
-    p.insert<T>("sigma_0", T{20.0});
-    p.insert<T>("eta", T{0.1});
-    p.insert<T>("beta", T{0.05});
-    p.insert<T>("K_bulk", T{166.67});
-    ctx.create<dp_plasticity>(p);
+    strain = &add<numsim::materials::external_strain_source<policy>>(ctx, "stepper");
+    add<numsim::materials::linear_elasticity<policy>>(ctx, "elastic",
+        {{"strain_producer_name", "stepper"}, {"K", T{166.67}}, {"G", T{76.92}}});
+    add<numsim::materials::local_newton<policy>>(ctx, "solver");
+    add<numsim::materials::linear_isotropic_hardening<policy>>(ctx, "hardening", {{"source", "dp"}, {"K", T{500.0}}});
+    add<dp_plasticity>(ctx, "dp",
+        {{"hardening_source", "hardening"}, {"strain_source", "stepper"}, {"solver_source", "solver"}, {"G", T{76.92}},
+         {"sigma_0", T{20.0}}, {"eta", T{0.1}}, {"beta", T{0.05}}, {"K_bulk", T{166.67}}});
 
 
     ctx.finalize();
@@ -375,41 +312,15 @@ TEST_F(DPTangentTest, ConsistentTangent) {
 
 T run_dp_max_tangent_error(T increment, int steps) {
   ctx_type ctx;
-  param_type p;
 
-  p.clear();
-  p.insert<std::string>("name", "stepper");
-  auto& strain{ctx.create<numsim::materials::external_strain_source<policy>>(p)};
-
-  p.clear();
-  p.insert<std::string>("name", "elastic");
-  p.insert<std::string>("strain_producer_name", "stepper");
-  p.insert<T>("K", T{166.67});
-  p.insert<T>("G", T{76.92});
-  ctx.create<numsim::materials::linear_elasticity<policy>>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "solver");
-  ctx.create<numsim::materials::local_newton<policy>>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "hardening");
-  p.insert<std::string>("source", "dp");
-  p.insert<T>("K", T{500.0});
-  ctx.create<numsim::materials::linear_isotropic_hardening<policy>>(p);
-
-
-  p.clear();
-  p.insert<std::string>("name", "dp");
-  p.insert<std::string>("hardening_source", "hardening");
-  p.insert<std::string>("strain_source", "stepper");
-  p.insert<std::string>("solver_source", "solver");
-  p.insert<T>("G", T{76.92});
-  p.insert<T>("sigma_0", T{20.0});
-  p.insert<T>("eta", T{0.1});
-  p.insert<T>("beta", T{0.05});
-  p.insert<T>("K_bulk", T{166.67});
-  ctx.create<dp_plasticity>(p);
+  auto& strain{add<numsim::materials::external_strain_source<policy>>(ctx, "stepper")};
+  add<numsim::materials::linear_elasticity<policy>>(ctx, "elastic",
+      {{"strain_producer_name", "stepper"}, {"K", T{166.67}}, {"G", T{76.92}}});
+  add<numsim::materials::local_newton<policy>>(ctx, "solver");
+  add<numsim::materials::linear_isotropic_hardening<policy>>(ctx, "hardening", {{"source", "dp"}, {"K", T{500.0}}});
+  add<dp_plasticity>(ctx, "dp",
+      {{"hardening_source", "hardening"}, {"strain_source", "stepper"}, {"solver_source", "solver"}, {"G", T{76.92}},
+       {"sigma_0", T{20.0}}, {"eta", T{0.1}}, {"beta", T{0.05}}, {"K_bulk", T{166.67}}});
 
 
   ctx.finalize();
@@ -453,38 +364,14 @@ TEST(DPConvergence, TangentErrorIsBounded) {
 /// check_derivative(). Returns -1 if the path never yielded.
 T max_tangent_error(std::vector<double> const& direction, T increment, int steps) {
   ctx_type ctx;
-  param_type p;
-  p.insert<std::string>("name", "stepper");
-  auto& strain{ctx.create<numsim::materials::external_strain_source<policy>>(p)};
-
-  p.clear();
-  p.insert<std::string>("name", "elastic");
-  p.insert<std::string>("strain_producer_name", "stepper");
-  p.insert<T>("K", T{166.67});
-  p.insert<T>("G", T{76.92});
-  ctx.create<numsim::materials::linear_elasticity<policy>>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "solver");
-  ctx.create<numsim::materials::local_newton<policy>>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "hardening");
-  p.insert<std::string>("source", "dp");
-  p.insert<T>("K", T{500.0});
-  ctx.create<numsim::materials::linear_isotropic_hardening<policy>>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "dp");
-  p.insert<std::string>("hardening_source", "hardening");
-  p.insert<std::string>("strain_source", "stepper");
-  p.insert<std::string>("solver_source", "solver");
-  p.insert<T>("G", T{76.92});
-  p.insert<T>("sigma_0", T{20.0});
-  p.insert<T>("eta", T{0.1});
-  p.insert<T>("beta", T{0.05});
-  p.insert<T>("K_bulk", T{166.67});
-  ctx.create<dp_plasticity>(p);
+  auto& strain{add<numsim::materials::external_strain_source<policy>>(ctx, "stepper")};
+  add<numsim::materials::linear_elasticity<policy>>(ctx, "elastic",
+      {{"strain_producer_name", "stepper"}, {"K", T{166.67}}, {"G", T{76.92}}});
+  add<numsim::materials::local_newton<policy>>(ctx, "solver");
+  add<numsim::materials::linear_isotropic_hardening<policy>>(ctx, "hardening", {{"source", "dp"}, {"K", T{500.0}}});
+  add<dp_plasticity>(ctx, "dp",
+      {{"hardening_source", "hardening"}, {"strain_source", "stepper"}, {"solver_source", "solver"}, {"G", T{76.92}},
+       {"sigma_0", T{20.0}}, {"eta", T{0.1}}, {"beta", T{0.05}}, {"K_bulk", T{166.67}}});
 
   ctx.finalize();
 
@@ -538,40 +425,18 @@ TEST(DPTangentPaths, ConsistentOnTheApexBranch) {
 
 TEST(DruckerPragerApex, HydrostaticTensionReachesTheApex) {
   ctx_type ctx;
-  param_type p;
   const T K{166.67}, G{76.92}, cohesion{20.0}, H_mod{500.0};
   const T dp_eta{0.1}, dp_beta{0.05};
 
   add_hydrostatic_stepper(ctx, T{0.05});
 
-  p.clear();
-  p.insert<std::string>("name", "elastic");
-  p.insert<std::string>("strain_producer_name", "stepper");
-  p.insert<T>("K", K);
-  p.insert<T>("G", G);
-  ctx.create<numsim::materials::linear_elasticity<policy>>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "solver");
-  ctx.create<numsim::materials::local_newton<policy>>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "hardening");
-  p.insert<std::string>("source", "dp");
-  p.insert<T>("K", H_mod);
-  ctx.create<numsim::materials::linear_isotropic_hardening<policy>>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "dp");
-  p.insert<std::string>("hardening_source", "hardening");
-  p.insert<std::string>("strain_source", "stepper");
-  p.insert<std::string>("solver_source", "solver");
-  p.insert<T>("G", G);
-  p.insert<T>("sigma_0", cohesion);
-  p.insert<T>("eta", dp_eta);
-  p.insert<T>("beta", dp_beta);
-  p.insert<T>("K_bulk", K);
-  ctx.create<dp_plasticity>(p);
+  add<numsim::materials::linear_elasticity<policy>>(ctx, "elastic",
+      {{"strain_producer_name", "stepper"}, {"K", K}, {"G", G}});
+  add<numsim::materials::local_newton<policy>>(ctx, "solver");
+  add<numsim::materials::linear_isotropic_hardening<policy>>(ctx, "hardening", {{"source", "dp"}, {"K", H_mod}});
+  add<dp_plasticity>(ctx, "dp",
+      {{"hardening_source", "hardening"}, {"strain_source", "stepper"}, {"solver_source", "solver"}, {"G", G},
+       {"sigma_0", cohesion}, {"eta", dp_eta}, {"beta", dp_beta}, {"K_bulk", K}});
   ctx.finalize();
 
   bool yielded = false;
@@ -607,19 +472,10 @@ TEST(DruckerPragerApex, ApexStateIsAdmissible) {
 
   add_hydrostatic_stepper(ctx, T{0.05});
   p.clear();
-  p.insert<std::string>("name", "elastic");
-  p.insert<std::string>("strain_producer_name", "stepper");
-  p.insert<T>("K", K); p.insert<T>("G", G);
-  ctx.create<numsim::materials::linear_elasticity<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "solver");
-  ctx.create<numsim::materials::local_newton<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "hardening");
-  p.insert<std::string>("source", "dp");
-  p.insert<T>("K", H_mod);
-  ctx.create<numsim::materials::linear_isotropic_hardening<policy>>(p);
-  p.clear();
+  add<numsim::materials::linear_elasticity<policy>>(ctx, "elastic",
+      {{"strain_producer_name", "stepper"}, {"K", K}, {"G", G}});
+  add<numsim::materials::local_newton<policy>>(ctx, "solver");
+  add<numsim::materials::linear_isotropic_hardening<policy>>(ctx, "hardening", {{"source", "dp"}, {"K", H_mod}});
   p.insert<std::string>("name", "dp");
   p.insert<std::string>("hardening_source", "hardening");
   p.insert<std::string>("strain_source", "stepper");

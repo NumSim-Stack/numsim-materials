@@ -18,6 +18,7 @@
 #include "numsim-materials/materials/thermal_eigenstrain.h"
 #include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/umat/json_model.h"
+#include "test_support.h"
 
 namespace {
 
@@ -28,6 +29,7 @@ using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
 using tensor2 = tmech::tensor<T, 3, 2>;
 using tensor4 = tmech::tensor<T, 3, 4>;
+using numsim::materials::test::add;
 
 constexpr T Km{3.0}, Gm{1.0}, Ki{60.0}, Gi{30.0}, beta{-0.02};
 T mori_tanaka_K(T c) { return Km + c * (Ki - Km) / (1 + (1 - c) * (Ki - Km) / (Km + 4 * Gm / 3)); }
@@ -37,39 +39,22 @@ std::unique_ptr<ctx_type> build() {
   auto owner{std::make_unique<ctx_type>()};
   auto &ctx{*owner};
   param_type p;
-  p.insert<std::string>("name", "strain");
-  ctx.create<nm::external_strain_source<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "cure");
-  p.insert<T>("increment", T{0});
-  ctx.create<nm::scalar_stepper<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "fraction");
-  p.insert<T>("increment", T{0});
-  ctx.create<nm::scalar_stepper<policy>>(p);
+  add<nm::external_strain_source<policy>>(ctx, "strain");
+  add<nm::scalar_stepper<policy>>(ctx, "cure", {{"increment", T{0}}});
+  add<nm::scalar_stepper<policy>>(ctx, "fraction", {{"increment", T{0}}});
   for (auto const &[name, K, G] : {std::tuple{"matrix", Km, Gm}, std::tuple{"filler", Ki, Gi}}) {
     for (auto const &[modulus, value] : {std::pair{"K", K}, std::pair{"G", G}}) {
       p.clear();
-      p.insert<std::string>("name", std::string{name} + "_" + modulus);
-      p.insert<T>("value", value);
-      ctx.create<nm::constant_scalar<policy>>(p);
+      add<nm::constant_scalar<policy>>(ctx, std::string{name} + "_" + modulus, {{"value", value}});
     }
     p.clear();
-    p.insert<std::string>("name", name);
-    p.insert<std::string>("K_source", std::string{name} + "_K");
-    p.insert<std::string>("G_source", std::string{name} + "_G");
-    ctx.create<nm::isotropic_tangent<policy>>(p);
+    add<nm::isotropic_tangent<policy>>(ctx, name,
+        {{"K_source", std::string{name} + "_K"}, {"G_source", std::string{name} + "_G"}});
   }
   p.clear();
-  p.insert<std::string>("name", "moduli");
-  p.insert<std::string>("tangent_source", "matrix");
-  ctx.create<nm::isotropic_moduli<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "sphere");
-  p.insert<std::string>("nu_source", "moduli");
-  p.insert<std::string>("nu_property", "poisson_ratio");
-  ctx.create<nm::eshelby_sphere<policy>>(p);
-  p.clear(); // the produced filler fraction and its complement for the matrix phase
+  add<nm::isotropic_moduli<policy>>(ctx, "moduli", {{"tangent_source", "matrix"}});
+  add<nm::eshelby_sphere<policy>>(ctx, "sphere", {{"nu_source", "moduli"}, {"nu_property", "poisson_ratio"}});
+  // the produced filler fraction and its complement for the matrix phase
   p.insert<std::string>("name", "spheres");
   p.insert<std::string>("tangent_source", "filler");
   p.insert<std::string>("eshelby_source", "sphere");
@@ -77,39 +62,18 @@ std::unique_ptr<ctx_type> build() {
   p.insert<std::string>("fraction_property", "state");
   ctx.create<nm::phase<policy>>(p);
   p.clear();
-  p.insert<std::string>("name", "cm");
-  p.insert<std::string>("source", "fraction::state");
-  ctx.create<nm::scalar_complement_weight<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "matrix_phase");
-  p.insert<std::string>("tangent_source", "matrix");
-  p.insert<std::string>("fraction_source", "cm");
-  ctx.create<nm::phase<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "mf");
-  p.insert<std::vector<std::string>>("phases", {"matrix_phase", "spheres"});
-  p.insert<nm::object_spec<param_type>>("kernel", {"mori_tanaka", {}});
-  ctx.create<nm::mean_field_composite_global<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "beta");
-  p.insert<T>("value", beta);
-  ctx.create<nm::constant_scalar<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "shrinkage");
-  p.insert<std::string>("temperature_source", "cure");
-  p.insert<std::string>("alpha_source", "beta::value");
-  ctx.create<nm::thermal_eigenstrain<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "elastic_strain");
-  p.insert<std::string>("strain_source", "strain");
-  p.insert<std::vector<std::string>>("eigenstrain_sources", {"shrinkage"});
-  ctx.create<nm::elastic_strain<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "elastic");
-  p.insert<std::string>("strain_producer_name", "elastic_strain");
-  p.insert<T>("K", Km);
-  p.insert<T>("G", Gm);
-  ctx.create<nm::linear_elasticity<policy>>(p);
+  add<nm::scalar_complement_weight<policy>>(ctx, "cm", {{"source", "fraction::state"}});
+  add<nm::phase<policy>>(ctx, "matrix_phase", {{"tangent_source", "matrix"}, {"fraction_source", "cm"}});
+  add<nm::mean_field_composite_global<policy>>(ctx, "mf",
+      {{"phases", std::vector<std::string>{"matrix_phase", "spheres"}},
+       {"kernel", nm::object_spec<param_type>{"mori_tanaka", {}}}});
+  add<nm::constant_scalar<policy>>(ctx, "beta", {{"value", beta}});
+  add<nm::thermal_eigenstrain<policy>>(ctx, "shrinkage",
+      {{"temperature_source", "cure"}, {"alpha_source", "beta::value"}});
+  add<nm::elastic_strain<policy>>(ctx, "elastic_strain",
+      {{"strain_source", "strain"}, {"eigenstrain_sources", std::vector<std::string>{"shrinkage"}}});
+  add<nm::linear_elasticity<policy>>(ctx, "elastic",
+      {{"strain_producer_name", "elastic_strain"}, {"K", Km}, {"G", Gm}});
   ctx.finalize();
   return owner;
 }

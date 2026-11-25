@@ -12,6 +12,7 @@
 #include "numsim-materials/materials/scalar_stepper.h"
 #include "numsim-materials/materials/tensor_component_stepper.h"
 #include "numsim-materials/default_materials.h"
+#include "test_support.h"
 
 namespace {
 
@@ -19,6 +20,7 @@ using policy = numsim::materials::material_policy_default;
 using T = policy::value_type;
 using ctx_type = numsim::materials::material_context<policy>;
 using param_type = policy::ParameterHandler;
+using numsim::materials::test::add;
 
 /// Aliased because the comma in the template argument list would otherwise be
 /// read as a macro argument separator by EXPECT_THROW.
@@ -27,10 +29,7 @@ using stepper2 = numsim::materials::tensor_component_stepper<2, policy>;
 /// A stepper named @p name producing "strain" at component [0,0].
 void add_stepper(ctx_type& ctx, param_type& p, const std::string& name) {
   p.clear();
-  p.insert<std::string>("name", name);
-  p.insert<T>("increment", T{0.1});
-  p.insert<std::vector<std::size_t>>("indices", {0, 0});
-  ctx.create<stepper2>(p);
+  add<stepper2>(ctx, name, {{"increment", T{0.1}}, {"indices", std::vector<std::size_t>{0, 0}}});
 }
 
 // --- Duplicate material names (#56) ---
@@ -41,13 +40,8 @@ TEST(ModelValidation, ASecondMaterialWithALiveNameIsRejected) {
   add_stepper(ctx, p, "stepper");
 
   p.clear();
-  p.insert<std::string>("name", "stepper");
-  p.insert<T>("increment", T{0.5});
-  p.insert<std::vector<std::size_t>>("indices", {1, 1});
-
-  EXPECT_THROW(
-      ctx.create<stepper2>(p),
-      std::invalid_argument);
+  EXPECT_THROW((add<stepper2>(ctx, "stepper",
+      {{"increment", T{0.5}}, {"indices", std::vector<std::size_t>{1, 1}}})), std::invalid_argument);
 }
 
 /// The dangerous case: the two materials publish properties of DIFFERENT
@@ -60,11 +54,8 @@ TEST(ModelValidation, ADuplicateNameIsRejectedEvenWhenTheTypesDiffer) {
   add_stepper(ctx, p, "collide");
 
   p.clear();
-  p.insert<std::string>("name", "collide");
-  p.insert<T>("increment", T{0.1});
-
-  EXPECT_THROW(ctx.create<numsim::materials::scalar_stepper<policy>>(p),
-               std::invalid_argument);
+  EXPECT_THROW((add<numsim::materials::scalar_stepper<policy>>(ctx, "collide",
+      {{"increment", T{0.1}}})), std::invalid_argument);
 }
 
 TEST(ModelValidation, TheDuplicateNameErrorNamesTheMaterial) {
@@ -104,11 +95,8 @@ TEST(ModelValidation, TheFirstMaterialSurvivesARejectedDuplicate) {
       std::invalid_argument);
 
   p.clear();
-  p.insert<std::string>("name", "elastic");
-  p.insert<std::string>("strain_producer_name", "stepper");
-  p.insert<T>("K", T{166.67});
-  p.insert<T>("G", T{76.92});
-  ctx.create<numsim::materials::linear_elasticity<policy>>(p);
+  add<numsim::materials::linear_elasticity<policy>>(ctx, "elastic",
+      {{"strain_producer_name", "stepper"}, {"K", T{166.67}}, {"G", T{76.92}}});
 
   ctx.finalize();
   ctx.update();
@@ -122,15 +110,8 @@ TEST(ModelValidation, TheFirstMaterialSurvivesARejectedDuplicate) {
 
 TEST(ModelValidation, AnOutOfRangeIndexIsRejected) {
   ctx_type ctx;
-  param_type p;
-  p.clear();
-  p.insert<std::string>("name", "stepper");
-  p.insert<T>("increment", T{0.1});
-  p.insert<std::vector<std::size_t>>("indices", {9, 9});
-
-  EXPECT_THROW(
-      ctx.create<stepper2>(p),
-      std::invalid_argument);
+  EXPECT_THROW((add<stepper2>(ctx, "stepper",
+      {{"increment", T{0.1}}, {"indices", std::vector<std::size_t>{9, 9}}})), std::invalid_argument);
 }
 
 /// Dim is the last valid index plus one -- the off-by-one a range check is
@@ -171,12 +152,8 @@ TEST(ModelValidation, AnIndexListOfTheWrongLengthIsRejected) {
 
   ctx_type ctx2;
   p.clear();
-  p.insert<std::string>("name", "long");
-  p.insert<T>("increment", T{0.1});
-  p.insert<std::vector<std::size_t>>("indices", {0, 0, 0});
-  EXPECT_THROW(
-      ctx2.create<stepper2>(p),
-      std::invalid_argument);
+  EXPECT_THROW((add<stepper2>(ctx2, "long",
+      {{"increment", T{0.1}}, {"indices", std::vector<std::size_t>{0, 0, 0}}})), std::invalid_argument);
 }
 
 TEST(ModelValidation, TheIndexErrorReportsTheOffendingValueAndTheRange) {

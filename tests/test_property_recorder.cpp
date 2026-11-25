@@ -13,6 +13,7 @@
 #include "numsim-materials/materials/tensor_component_stepper.h"
 #include "numsim-materials/postprocessing/property_recorder.h"
 #include "numsim-materials/default_materials.h"
+#include "test_support.h"
 
 namespace {
 
@@ -24,6 +25,7 @@ using tensor2 = tmech::tensor<T, 3, 2>;
 using numsim::materials::csv_writer;
 using numsim::materials::property_recorder;
 using numsim::materials::vtk_timeseries_writer;
+using numsim::materials::test::add;
 
 // Build: scalar_stepper (sca::state) + tensor_component_stepper (ten::strain)
 // feeding a property_recorder, run `steps` updates, and capture the per-step
@@ -36,17 +38,9 @@ struct Fixture {
 
   explicit Fixture(int steps) {
     param_type p;
-    p.insert<std::string>("name", "sca");
-    p.insert<T>("increment", T{0.5});
-    ctx.create<numsim::materials::scalar_stepper<policy>>(p);
-
-    p.clear();
-    p.insert<std::string>("name", "ten");
-    p.insert<T>("increment", T{0.1});
-    p.insert<std::vector<std::size_t>>("indices", {0, 0});
-    ctx.create<numsim::materials::tensor_component_stepper<2, policy>>(p);
-
-    p.clear();
+    add<numsim::materials::scalar_stepper<policy>>(ctx, "sca", {{"increment", T{0.5}}});
+    add<numsim::materials::tensor_component_stepper<2, policy>>(ctx, "ten",
+        {{"increment", T{0.1}}, {"indices", std::vector<std::size_t>{0, 0}}});
     p.insert<std::string>("name", "rec");
     p.insert<std::vector<std::string>>("scalar_sources", {"sca::state"});
     p.insert<std::vector<std::string>>("tensor_sources", {"ten::strain"});
@@ -90,9 +84,7 @@ TEST(PropertyRecorder, RecordsEveryUpdateOfConstantSources) {
   p.insert<T>("value", T{2});
   ctx.create<numsim::materials::constant_scalar<policy>>(p);
   p.clear();
-  p.insert<std::string>("name", "rec");
-  p.insert<std::vector<std::string>>("scalar_sources", {"c::value"});
-  auto& rec{ctx.create<property_recorder<policy>>(p)};
+  auto& rec{add<property_recorder<policy>>(ctx, "rec", {{"scalar_sources", std::vector<std::string>{"c::value"}}})};
   ctx.finalize();
   for (int i{0}; i < 3; ++i)
     ctx.update();

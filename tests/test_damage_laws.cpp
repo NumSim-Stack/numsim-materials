@@ -13,6 +13,7 @@
 #include "numsim-materials/materials/von_mises_state_function.h"
 #include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/umat/json_model.h"
+#include "test_support.h"
 
 namespace {
 
@@ -22,6 +23,7 @@ using T = policy::value_type;
 using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
 using tensor2 = tmech::tensor<T, 3, 2>;
+using numsim::materials::test::add;
 
 constexpr T kappa_0{0.002};
 
@@ -31,13 +33,8 @@ std::unique_ptr<ctx_type> build(param_type law_parameters) {
   auto owner{std::make_unique<ctx_type>()};
   auto &ctx{*owner};
   param_type p;
-  p.insert<std::string>("name", "strain");
-  ctx.create<nm::external_strain_source<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "state");
-  p.insert<std::string>("strain_source", "strain");
-  ctx.create<nm::von_mises_state_function<policy>>(p);
-  p.clear();
+  add<nm::external_strain_source<policy>>(ctx, "strain");
+  add<nm::von_mises_state_function<policy>>(ctx, "state", {{"strain_source", "strain"}});
   p.insert<std::string>("name", "yield");
   p.insert<std::string>("state_source", "state");
   p.insert<T>("kappa_critical", kappa_0);

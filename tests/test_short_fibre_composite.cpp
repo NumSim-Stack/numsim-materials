@@ -15,6 +15,7 @@
 #include "numsim-materials/materials/short_fibre_composite.h"
 #include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/umat/json_model.h"
+#include "test_support.h"
 
 namespace {
 
@@ -25,32 +26,24 @@ using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
 using tensor2 = tmech::tensor<T, 3, 2>;
 using tensor4 = tmech::tensor<T, 3, 4>;
+using numsim::materials::test::add;
+using numsim::materials::test::constant;
 
 constexpr T Km{3.0}, Gm{1.0}, Kf{60.0}, Gf{30.0}, c{0.2}, ar{10.0};
 std::vector<T> const aligned{1, 0, 0, 0, 0, 0}, random3d{1.0 / 3, 1.0 / 3, 1.0 / 3, 0, 0, 0}, mostly{0.8, 0.1, 0.1, 0, 0, 0};
-
-void constant(ctx_type &ctx, std::string const &name, T value) {
-  param_type p;
-  p.insert<std::string>("name", name);
-  p.insert<T>("value", value);
-  ctx.create<nm::constant_scalar<policy>>(p);
-}
 
 std::unique_ptr<ctx_type> build(std::vector<T> const &orientation, std::string const &averaging = "concentration",
                                 std::size_t precision = 15) {
   auto owner{std::make_unique<ctx_type>()};
   auto &ctx{*owner};
   param_type p;
-  p.insert<std::string>("name", "strain");
-  ctx.create<nm::external_strain_source<policy>>(p);
+  add<nm::external_strain_source<policy>>(ctx, "strain");
   for (auto const &[name, K, G] : {std::tuple{"matrix", Km, Gm}, std::tuple{"fibre", Kf, Gf}}) {
     constant(ctx, std::string{name} + "_K", K);
     constant(ctx, std::string{name} + "_G", G);
     p.clear();
-    p.insert<std::string>("name", std::string{name} + "_C");
-    p.insert<std::string>("K_source", std::string{name} + "_K");
-    p.insert<std::string>("G_source", std::string{name} + "_G");
-    ctx.create<nm::isotropic_tangent<policy>>(p);
+    add<nm::isotropic_tangent<policy>>(ctx, std::string{name} + "_C",
+        {{"K_source", std::string{name} + "_K"}, {"G_source", std::string{name} + "_G"}});
   }
   // the fibre shape along x1, shared by the unidirectional reference (a global Mori-Tanaka composite) and the composite
   p.clear();
@@ -58,43 +51,22 @@ std::unique_ptr<ctx_type> build(std::vector<T> const &orientation, std::string c
   p.insert<std::string>("tangent_source", "matrix_C");
   ctx.create<nm::isotropic_moduli<policy>>(p);
   p.clear();
-  p.insert<std::string>("name", "shape");
-  p.insert<std::string>("nu_source", "moduli");
-  p.insert<std::string>("nu_property", "poisson_ratio");
-  p.insert<T>("aspect_ratio", ar);
-  p.insert<std::vector<T>>("direction", {1, 0, 0});
-  ctx.create<nm::eshelby_spheroid<policy>>(p);
+  add<nm::eshelby_spheroid<policy>>(ctx, "shape",
+      {{"nu_source", "moduli"}, {"nu_property", "poisson_ratio"}, {"aspect_ratio", ar},
+       {"direction", std::vector<T>{1, 0, 0}}});
   constant(ctx, "c", c);
   constant(ctx, "cm", 1 - c);
   p.clear();
-  p.insert<std::string>("name", "spheroid");
-  p.insert<std::string>("tangent_source", "fibre_C");
-  p.insert<std::string>("eshelby_source", "shape");
-  p.insert<std::string>("fraction_source", "c");
-  ctx.create<nm::phase<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "m");
-  p.insert<std::string>("tangent_source", "matrix_C");
-  p.insert<std::string>("fraction_source", "cm");
-  ctx.create<nm::phase<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "ud");
-  p.insert<std::vector<std::string>>("phases", {"m", "spheroid"});
-  p.insert<nm::object_spec<param_type>>("kernel", {"mori_tanaka", {}});
-  ctx.create<nm::mean_field_composite_global<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "sf");
-  p.insert<std::string>("matrix", "m");
-  p.insert<std::string>("fibre", "spheroid");
-  p.insert<std::vector<T>>("orientation", orientation);
-  p.insert<std::string>("averaging", averaging);
-  p.insert<int>("precision", static_cast<int>(precision));
-  ctx.create<nm::short_fibre_composite<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "composite");
-  p.insert<std::string>("tangent_source", "sf");
-  p.insert<std::string>("strain_source", "strain");
-  ctx.create<nm::linear_stress<policy>>(p);
+  add<nm::phase<policy>>(ctx, "spheroid",
+      {{"tangent_source", "fibre_C"}, {"eshelby_source", "shape"}, {"fraction_source", "c"}});
+  add<nm::phase<policy>>(ctx, "m", {{"tangent_source", "matrix_C"}, {"fraction_source", "cm"}});
+  add<nm::mean_field_composite_global<policy>>(ctx, "ud",
+      {{"phases", std::vector<std::string>{"m", "spheroid"}},
+       {"kernel", nm::object_spec<param_type>{"mori_tanaka", {}}}});
+  add<nm::short_fibre_composite<policy>>(ctx, "sf",
+      {{"matrix", "m"}, {"fibre", "spheroid"}, {"orientation", std::vector<T>(orientation)}, {"averaging", averaging},
+       {"precision", static_cast<int>(static_cast<int>(precision))}});
+  add<nm::linear_stress<policy>>(ctx, "composite", {{"tangent_source", "sf"}, {"strain_source", "strain"}});
   ctx.finalize();
   ctx.update();
   return owner;
