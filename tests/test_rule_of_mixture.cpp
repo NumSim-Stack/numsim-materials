@@ -17,6 +17,7 @@
 #include "numsim-materials/materials/mean_field_composite_global.h"
 #include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/umat/json_model.h"
+#include "test_support.h"
 
 namespace {
 
@@ -27,14 +28,12 @@ using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
 using tensor2 = tmech::tensor<T, 3, 2>;
 using tensor4 = tmech::tensor<T, 3, 4>;
+using numsim::materials::test::add;
 
 constexpr T K1{100}, G1{40}, K2{10}, G2{3}, c1{0.3}, c2{0.7};
 
 void constant(ctx_type &ctx, std::string const &name, T value) {
-  param_type p;
-  p.insert<std::string>("name", name);
-  p.insert<T>("value", value);
-  ctx.create<nm::constant_scalar<policy>>(p);
+  add<nm::constant_scalar<policy>>(ctx, name, {{"value", value}});
 }
 
 /// K, G producers -> isotropic tangents -> phases with produced fractions -> the global composite with a
@@ -43,36 +42,21 @@ std::unique_ptr<ctx_type> build(std::string const &kernel, std::vector<T> fracti
                                 std::vector<std::string> phases = {"stiff", "soft"}) {
   auto owner{std::make_unique<ctx_type>()};
   auto &ctx{*owner};
-  param_type p;
-  p.insert<std::string>("name", "strain");
-  ctx.create<nm::external_strain_source<policy>>(p);
+  add<nm::external_strain_source<policy>>(ctx, "strain");
   for (auto const &[name, K, G] : {std::tuple{"stiff", K1, G1}, std::tuple{"soft", K2, G2}}) {
     constant(ctx, std::string{name} + "_K", K);
     constant(ctx, std::string{name} + "_G", G);
-    p.clear();
-    p.insert<std::string>("name", std::string{name} + "_C");
-    p.insert<std::string>("K_source", std::string{name} + "_K");
-    p.insert<std::string>("G_source", std::string{name} + "_G");
-    ctx.create<nm::isotropic_tangent<policy>>(p);
+    add<nm::isotropic_tangent<policy>>(ctx, std::string{name} + "_C",
+        {{"K_source", std::string{name} + "_K"}, {"G_source", std::string{name} + "_G"}});
   }
   for (std::size_t i{0}; i < phases.size(); ++i) {
     constant(ctx, "c_" + phases[i], fractions[i]);
-    p.clear();
-    p.insert<std::string>("name", phases[i]);
-    p.insert<std::string>("tangent_source", phases[i] + "_C");
-    p.insert<std::string>("fraction_source", "c_" + phases[i]);
-    ctx.create<nm::phase<policy>>(p);
+    add<nm::phase<policy>>(ctx, phases[i],
+        {{"tangent_source", phases[i] + "_C"}, {"fraction_source", "c_" + phases[i]}});
   }
-  p.clear();
-  p.insert<std::string>("name", "rom");
-  p.insert<std::vector<std::string>>("phases", phases);
-  p.insert<nm::object_spec<param_type>>("kernel", {kernel, {}});
-  ctx.create<nm::mean_field_composite_global<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "composite");
-  p.insert<std::string>("tangent_source", "rom");
-  p.insert<std::string>("strain_source", "strain");
-  ctx.create<nm::linear_stress<policy>>(p);
+  add<nm::mean_field_composite_global<policy>>(ctx, "rom",
+      {{"phases", std::vector<std::string>(phases)}, {"kernel", nm::object_spec<param_type>{kernel, {}}}});
+  add<nm::linear_stress<policy>>(ctx, "composite", {{"tangent_source", "rom"}, {"strain_source", "strain"}});
   ctx.finalize();
   ctx.update(); // the composite tangent is computed per update, not at construction
   return owner;
@@ -161,35 +145,13 @@ TEST(Phase, CarriesTheShapeTensorsAsProperties) {
   constant(ctx, "K", K1);
   constant(ctx, "G", G1);
   constant(ctx, "c", 0.2);
-  param_type p;
-  p.insert<std::string>("name", "C");
-  p.insert<std::string>("K_source", "K");
-  p.insert<std::string>("G_source", "G");
-  ctx.create<nm::isotropic_tangent<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "nu");
-  p.insert<T>("K", K1);
-  p.insert<T>("G", G1);
-  ctx.create<nm::poisson_ratio_from_moduli<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "S");
-  p.insert<std::string>("nu_source", "nu");
-  ctx.create<nm::eshelby_sphere<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "N");
-  ctx.create<nm::depolarisation_sphere<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "spheres");
-  p.insert<std::string>("tangent_source", "C");
-  p.insert<std::string>("fraction_source", "c");
-  p.insert<std::string>("eshelby_source", "S");
-  p.insert<std::string>("depolarisation_source", "N");
-  ctx.create<nm::phase<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "bare");
-  p.insert<std::string>("tangent_source", "C");
-  p.insert<std::string>("fraction_source", "c");
-  ctx.create<nm::phase<policy>>(p);
+  add<nm::isotropic_tangent<policy>>(ctx, "C", {{"K_source", "K"}, {"G_source", "G"}});
+  add<nm::poisson_ratio_from_moduli<policy>>(ctx, "nu", {{"K", K1}, {"G", G1}});
+  add<nm::eshelby_sphere<policy>>(ctx, "S", {{"nu_source", "nu"}});
+  add<nm::depolarisation_sphere<policy>>(ctx, "N");
+  add<nm::phase<policy>>(ctx, "spheres",
+      {{"tangent_source", "C"}, {"fraction_source", "c"}, {"eshelby_source", "S"}, {"depolarisation_source", "N"}});
+  add<nm::phase<policy>>(ctx, "bare", {{"tangent_source", "C"}, {"fraction_source", "c"}});
   ctx.finalize();
   ctx.update();
   EXPECT_NEAR(ctx.get<T>("spheres", "volume_fraction"), 0.2, 1e-15);

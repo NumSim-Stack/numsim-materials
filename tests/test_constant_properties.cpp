@@ -11,6 +11,7 @@
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/core/parameter_helpers.h"
 #include "numsim-materials/driver/external_state_source.h"
+#include "test_support.h"
 
 // The fixtures below also test the deprecated declarations (constant_output, written_by, runs_after, a callback
 // passed to add_output) for as long as they exist.
@@ -31,6 +32,7 @@ using policy = nm::material_policy_default;
 using T = policy::value_type;
 using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
+using numsim::materials::test::add;
 
 /// "value" = factor * source (factor alone without a source), counting its callback. With "constant" it
 /// declares "value" constant; with "extra" it also writes an undeclared output from the same callback;
@@ -388,9 +390,7 @@ TEST(ConstantProperties, UpdatePropertyComputesAConstantNotYetEvaluated) {
 TEST(ConstantProperties, AllInputsAreReadByDefault) {
   ctx_type ctx;
   ctx.verify_constants(false);
-  param_type p;
-  p.insert<std::string>("name", "x");
-  auto &x{ctx.create<nm::external_scalar_source<policy>>(p)};
+  auto &x{add<nm::external_scalar_source<policy>>(ctx, "x")};
   make(ctx, "a");
   auto p_b{reading("a")};
   p_b.insert<std::string>("other", "x"); // not used by "value", but an input
@@ -787,16 +787,9 @@ struct bar_setup {
 
   explicit bar_setup(param_type p = {}, bool verify = false) {
     ctx.verify_constants(verify);
-    param_type s;
-    s.insert<std::string>("name", "temperature");
-    s.insert<T>("factor", 70.0);
-    ctx.create<counter<policy>>(s);
-    s.clear();
-    s.insert<std::string>("name", "heat");
-    heat = &ctx.create<nm::external_scalar_source<policy>>(s);
-    s.clear();
-    s.insert<std::string>("name", "strain");
-    strain = &ctx.create<nm::external_scalar_source<policy>>(s);
+    add<counter<policy>>(ctx, "temperature", {{"factor", 70.0}});
+    heat = &add<nm::external_scalar_source<policy>>(ctx, "heat");
+    strain = &add<nm::external_scalar_source<policy>>(ctx, "strain");
     p.insert<std::string>("name", "bar");
     b = &ctx.create<bar<policy>>(p);
     ctx.finalize();
@@ -912,11 +905,7 @@ private:
 };
 
 pair<policy> &make_pair(ctx_type &ctx, std::string const &x, std::string const &y) {
-  param_type p;
-  p.insert<std::string>("name", "pair");
-  p.insert<std::string>("x", x);
-  p.insert<std::string>("y", y);
-  return ctx.create<pair<policy>>(p);
+  return add<pair<policy>>(ctx, "pair", {{"x", x}, {"y", y}});
 }
 
 } // namespace
@@ -978,9 +967,7 @@ private:
 TEST(HiddenDependencies, AMaterialReachedByReferenceKeepsItsReaderVarying) {
   ctx_type ctx;
   param_type p;
-  p.insert<std::string>("name", "r");
-  p.insert<std::string>("target", "b");
-  ctx.create<referrer<policy>>(p); // created first: only an edge runs it after b's source
+  add<referrer<policy>>(ctx, "r", {{"target", "b"}}); // created first: only an edge runs it after b's source
   p.clear();
   p.insert<std::string>("name", "x");
   auto &x{ctx.create<nm::external_scalar_source<policy>>(p)};
@@ -1076,17 +1063,12 @@ struct solved {
   ctx_type ctx;
   explicit solved(bool reads_unknown, bool grouped = false, std::string const &mode = "ok") {
     param_type p;
-    p.insert<std::string>("name", "s");
-    p.insert<std::string>("mode", mode);
-    ctx.create<two_unknowns<policy>>(p); // created first: only edges order it
+    add<two_unknowns<policy>>(ctx, "s", {{"mode", mode}}); // created first: only edges order it
     p.clear();
     p.insert<std::string>("name", "x");
     ctx.create<nm::external_scalar_source<policy>>(p).bind(0.0, 2.0);
     p.clear();
-    p.insert<std::string>("name", "f");
-    p.insert<std::string>("unknown", reads_unknown ? "s" : "");
-    p.insert<bool>("grouped", grouped);
-    ctx.create<function<policy>>(p);
+    add<function<policy>>(ctx, "f", {{"unknown", reads_unknown ? "s" : ""}, {"grouped", grouped}});
   }
 };
 } // namespace
@@ -1138,10 +1120,7 @@ TEST(HiddenDependencies, AReferenceToVaryingStateKeepsItsReaderVarying) {
 TEST(HiddenDependencies, AReferenceToConstantsStaysConstant) {
   ctx_type ctx;
   make(ctx, "b");
-  param_type p;
-  p.insert<std::string>("name", "r");
-  p.insert<std::string>("target", "b");
-  ctx.create<referrer<policy>>(p);
+  add<referrer<policy>>(ctx, "r", {{"target", "b"}});
   ctx.finalize();
   ctx.update();
   EXPECT_TRUE(ctx.is_constant("b", "value"));
@@ -1210,9 +1189,7 @@ void make_bare(ctx_type &ctx, bool reads_bare) {
   p.insert<std::string>("name", "t");
   ctx.create<bare_target<policy>>(p);
   p.clear();
-  p.insert<std::string>("name", "filler");
-  p.insert<bool>("reads_bare", reads_bare);
-  ctx.create<bare_filler<policy>>(p);
+  add<bare_filler<policy>>(ctx, "filler", {{"reads_bare", reads_bare}});
 }
 } // namespace
 

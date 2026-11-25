@@ -17,6 +17,7 @@
 #include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/umat/errors.h"
 #include "numsim-materials/umat/statev_map.h"
+#include "test_support.h"
 
 namespace {
 
@@ -27,6 +28,7 @@ using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
 using t2 = tmech::tensor<T, 3, 2>;
 using t4 = tmech::tensor<T, 3, 4>;
+using numsim::materials::test::add;
 
 T sigma_eq(const t2& x) { return std::sqrt(T{1.5} * tmech::dcontract(x, x)); }
 
@@ -69,10 +71,7 @@ struct rig {
   explicit rig(T gamma, int max_iter = 50, bool graph_driven = false, T hardening = H_iso)
       : H_mod(hardening) {
     param_type p;
-    p.insert<std::string>("name", "stepper");
-    src = &ctx.create<nm::external_strain_source<policy>>(p);
-
-    p.clear();
+    src = &add<nm::external_strain_source<policy>>(ctx, "stepper");
     p.insert<std::string>("name", "solver");
     p.insert<std::string>("function", "kin");
     p.insert<T>("tolerance", T{1e-12});
@@ -85,22 +84,10 @@ struct rig {
     solver = &ctx.create<nm::vector_newton<policy>>(p);
 
     p.clear();
-    p.insert<std::string>("name", "hardening");
-    p.insert<std::string>("source", "kin");
-    p.insert<T>("K", H_mod);
-    ctx.create<nm::linear_isotropic_hardening<policy>>(p);
-
-    p.clear();
-    p.insert<std::string>("name", "kin");
-    p.insert<std::string>("hardening_source", "hardening");
-    p.insert<std::string>("strain_source", "stepper");
-    p.insert<std::string>("solver_source", "solver");
-    p.insert<T>("K", K);
-    p.insert<T>("G", G);
-    p.insert<T>("sigma_0", sigma_0);
-    p.insert<T>("C", C);
-    p.insert<T>("gamma", gamma);
-    ctx.create<nm::j2_kinematic_plasticity<policy>>(p);
+    add<nm::linear_isotropic_hardening<policy>>(ctx, "hardening", {{"source", "kin"}, {"K", H_mod}});
+    add<nm::j2_kinematic_plasticity<policy>>(ctx, "kin",
+        {{"hardening_source", "hardening"}, {"strain_source", "stepper"}, {"solver_source", "solver"}, {"K", K},
+         {"G", G}, {"sigma_0", sigma_0}, {"C", C}, {"gamma", gamma}});
     ctx.finalize();
   }
 

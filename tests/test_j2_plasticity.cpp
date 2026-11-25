@@ -13,6 +13,7 @@
 #include "numsim-materials/solvers/butcher_tableau.h"
 #include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/umat/errors.h"
+#include "test_support.h"
 
 namespace {
 
@@ -22,6 +23,7 @@ using ctx_type = numsim::materials::material_context<policy>;
 using param_type = policy::ParameterHandler;
 using tensor2 = tmech::tensor<T, 3, 2>;
 using numsim::materials::umat::cutback_error;
+using numsim::materials::test::add;
 
 class J2PlasticityTest : public ::testing::Test {
 protected:
@@ -160,38 +162,15 @@ T tangent_error(ctx_type& ctx) {
 class J2TangentTest : public ::testing::Test {
 protected:
   void SetUp() override {
-    param_type p;
 
-    p.clear();
-    p.insert<std::string>("name", "stepper");
-    m_strain = &ctx.create<numsim::materials::external_strain_source<policy>>(p);
-
-    p.clear();
-    p.insert<std::string>("name", "elastic");
-    p.insert<std::string>("strain_producer_name", "stepper");
-    p.insert<T>("K", T{166.67});
-    p.insert<T>("G", T{76.92});
-    ctx.create<numsim::materials::linear_elasticity<policy>>(p);
-
-    p.clear();
-    p.insert<std::string>("name", "solver");
-    ctx.create<numsim::materials::local_newton<policy>>(p);
-
-    p.clear();
-    p.insert<std::string>("name", "hardening");
-    p.insert<std::string>("source", "j2");
-    p.insert<T>("K", T{1000.0});
-    ctx.create<numsim::materials::linear_isotropic_hardening<policy>>(p);
-
-    p.clear();
-    p.insert<std::string>("name", "j2");
-      p.insert<std::string>("hardening_source", "hardening");
-    p.insert<std::string>("strain_source", "stepper");
-    p.insert<std::string>("solver_source", "solver");
-    p.insert<T>("K", T{166.67});
-    p.insert<T>("G", T{76.92});
-    p.insert<T>("sigma_0", T{50.0});
-    ctx.create<numsim::materials::j2_plasticity<policy>>(p);
+    m_strain = &add<numsim::materials::external_strain_source<policy>>(ctx, "stepper");
+    add<numsim::materials::linear_elasticity<policy>>(ctx, "elastic",
+        {{"strain_producer_name", "stepper"}, {"K", T{166.67}}, {"G", T{76.92}}});
+    add<numsim::materials::local_newton<policy>>(ctx, "solver");
+    add<numsim::materials::linear_isotropic_hardening<policy>>(ctx, "hardening", {{"source", "j2"}, {"K", T{1000.0}}});
+    add<numsim::materials::j2_plasticity<policy>>(ctx, "j2",
+        {{"hardening_source", "hardening"}, {"strain_source", "stepper"}, {"solver_source", "solver"}, {"K", T{166.67}},
+         {"G", T{76.92}}, {"sigma_0", T{50.0}}});
 
     ctx.finalize();
   }
@@ -256,32 +235,13 @@ TEST_F(J2TangentTest, ConsistentTangentAllSteps) {
 namespace {
 ctx_type* build_softening(ctx_type& ctx, T hardening, T tolerance = T{1e-10}) {
   constexpr T G{76.92};
-  param_type p;
-  p.insert<std::string>("name", "stepper");
-  p.insert<T>("increment", T{0.05});
-  p.insert<std::vector<std::size_t>>("indices", {0, 0});
-  ctx.create<numsim::materials::tensor_component_stepper<2, policy>>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "solver");
-  p.insert<T>("tolerance", tolerance);
-  ctx.create<numsim::materials::local_newton<policy>>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "hardening");
-  p.insert<std::string>("source", "j2");
-  p.insert<T>("K", hardening);
-  ctx.create<numsim::materials::linear_isotropic_hardening<policy>>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "j2");
-  p.insert<std::string>("hardening_source", "hardening");
-  p.insert<std::string>("strain_source", "stepper");
-  p.insert<std::string>("solver_source", "solver");
-  p.insert<T>("K", T{166.67});
-  p.insert<T>("G", G);
-  p.insert<T>("sigma_0", T{50.0});
-  ctx.create<numsim::materials::j2_plasticity<policy>>(p);
+  add<numsim::materials::tensor_component_stepper<2, policy>>(ctx, "stepper",
+      {{"increment", T{0.05}}, {"indices", std::vector<std::size_t>{0, 0}}});
+  add<numsim::materials::local_newton<policy>>(ctx, "solver", {{"tolerance", tolerance}});
+  add<numsim::materials::linear_isotropic_hardening<policy>>(ctx, "hardening", {{"source", "j2"}, {"K", hardening}});
+  add<numsim::materials::j2_plasticity<policy>>(ctx, "j2",
+      {{"hardening_source", "hardening"}, {"strain_source", "stepper"}, {"solver_source", "solver"}, {"K", T{166.67}},
+       {"G", G}, {"sigma_0", T{50.0}}});
   ctx.finalize();
   return &ctx;
 }
@@ -339,34 +299,14 @@ class RKPlasticityTest : public ::testing::Test {
 protected:
   void setup_with_tableau(const std::string& name) {
     m_tableau_name = name;
-    param_type p;
 
-    p.clear();
-    p.insert<std::string>("name", "stepper");
-    m_strain = &ctx.create<numsim::materials::external_strain_source<policy>>(p);
-
-    p.clear();
-    p.insert<std::string>("name", "elastic");
-    p.insert<std::string>("strain_producer_name", "stepper");
-    p.insert<T>("K", T{166.67});
-    p.insert<T>("G", T{76.92});
-    ctx.create<numsim::materials::linear_elasticity<policy>>(p);
-
-    p.clear();
-    p.insert<std::string>("name", "hardening");
-    p.insert<std::string>("source", "j2");
-    p.insert<T>("K", T{1000.0});
-    ctx.create<numsim::materials::linear_isotropic_hardening<policy>>(p);
-
-    p.clear();
-    p.insert<std::string>("name", "j2");
-    p.insert<std::string>("hardening_source", "hardening");
-    p.insert<std::string>("strain_source", "stepper");
-    p.insert<T>("K", T{166.67});
-    p.insert<T>("G", T{76.92});
-    p.insert<T>("sigma_0", T{50.0});
-    p.insert<std::string>("tableau", m_tableau_name);
-    ctx.create<numsim::materials::j2_rk_plasticity<policy>>(p);
+    m_strain = &add<numsim::materials::external_strain_source<policy>>(ctx, "stepper");
+    add<numsim::materials::linear_elasticity<policy>>(ctx, "elastic",
+        {{"strain_producer_name", "stepper"}, {"K", T{166.67}}, {"G", T{76.92}}});
+    add<numsim::materials::linear_isotropic_hardening<policy>>(ctx, "hardening", {{"source", "j2"}, {"K", T{1000.0}}});
+    add<numsim::materials::j2_rk_plasticity<policy>>(ctx, "j2",
+        {{"hardening_source", "hardening"}, {"strain_source", "stepper"}, {"K", T{166.67}}, {"G", T{76.92}},
+         {"sigma_0", T{50.0}}, {"tableau", m_tableau_name}});
 
     ctx.finalize();
   }
@@ -469,27 +409,12 @@ TEST_F(RKPlasticityTest, SDIRK3TangentCheck) {
 /// interest here.
 T rk_alpha(const std::string& tableau, T hardening) {
   ctx_type ctx;
-  param_type p;
-  p.insert<std::string>("name", "stepper");
-  p.insert<T>("increment", T{0.05});
-  p.insert<std::vector<std::size_t>>("indices", {0, 0});
-  ctx.create<numsim::materials::tensor_component_stepper<2, policy>>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "hardening");
-  p.insert<std::string>("source", "j2");
-  p.insert<T>("K", hardening);
-  ctx.create<numsim::materials::linear_isotropic_hardening<policy>>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "j2");
-  p.insert<std::string>("hardening_source", "hardening");
-  p.insert<std::string>("strain_source", "stepper");
-  p.insert<T>("K", T{166.67});
-  p.insert<T>("G", T{76.92});
-  p.insert<T>("sigma_0", T{50.0});
-  p.insert<std::string>("tableau", tableau);
-  ctx.create<numsim::materials::j2_rk_plasticity<policy>>(p);
+  add<numsim::materials::tensor_component_stepper<2, policy>>(ctx, "stepper",
+      {{"increment", T{0.05}}, {"indices", std::vector<std::size_t>{0, 0}}});
+  add<numsim::materials::linear_isotropic_hardening<policy>>(ctx, "hardening", {{"source", "j2"}, {"K", hardening}});
+  add<numsim::materials::j2_rk_plasticity<policy>>(ctx, "j2",
+      {{"hardening_source", "hardening"}, {"strain_source", "stepper"}, {"K", T{166.67}}, {"G", T{76.92}},
+       {"sigma_0", T{50.0}}, {"tableau", tableau}});
   ctx.finalize();
 
   for (int i = 0; i < 20; ++i) {
@@ -548,26 +473,12 @@ namespace {
 /// when the tableau turned into a named parameter.
 TEST(J2RKScheme, RefusesAFullyImplicitTableau) {
   numsim::materials::material_context<policy> ctx;
-  policy::ParameterHandler p;
-  p.insert<std::string>("name", "stepper");
-  p.insert<T>("increment", T{0.01});
-  p.insert<std::vector<std::size_t>>("indices", {0, 0});
-  ctx.create<numsim::materials::tensor_component_stepper<2, policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "hardening");
-  p.insert<std::string>("source", "m");
-  p.insert<T>("K", T{1000.0});
-  ctx.create<numsim::materials::linear_isotropic_hardening<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "m");
-  p.insert<std::string>("hardening_source", "hardening");
-  p.insert<std::string>("strain_source", "stepper");
-  p.insert<T>("K", T{166.67});
-  p.insert<T>("G", T{76.92});
-  p.insert<T>("sigma_0", T{50.0});
-  p.insert<std::string>("tableau", std::string("gauss_legendre_4"));
-  EXPECT_THROW(ctx.create<numsim::materials::j2_rk_plasticity<policy>>(p),
-               std::invalid_argument);
+  add<numsim::materials::tensor_component_stepper<2, policy>>(ctx, "stepper",
+      {{"increment", T{0.01}}, {"indices", std::vector<std::size_t>{0, 0}}});
+  add<numsim::materials::linear_isotropic_hardening<policy>>(ctx, "hardening", {{"source", "m"}, {"K", T{1000.0}}});
+  EXPECT_THROW((add<numsim::materials::j2_rk_plasticity<policy>>(ctx, "m",
+      {{"hardening_source", "hardening"}, {"strain_source", "stepper"}, {"K", T{166.67}}, {"G", T{76.92}},
+       {"sigma_0", T{50.0}}, {"tableau", std::string("gauss_legendre_4")}})), std::invalid_argument);
 }
 
 /// The DIRK and explicit schemes it CAN integrate must still be accepted, so
@@ -577,26 +488,12 @@ TEST(J2RKScheme, AcceptsEveryDirkAndExplicitScheme) {
                              "implicit_euler", "implicit_midpoint",
                              "crank_nicolson", "sdirk3"}) {
     numsim::materials::material_context<policy> ctx;
-    policy::ParameterHandler p;
-    p.insert<std::string>("name", "stepper");
-    p.insert<T>("increment", T{0.01});
-    p.insert<std::vector<std::size_t>>("indices", {0, 0});
-    ctx.create<numsim::materials::tensor_component_stepper<2, policy>>(p);
-    p.clear();
-    p.insert<std::string>("name", "hardening");
-    p.insert<std::string>("source", "m");
-    p.insert<T>("K", T{1000.0});
-    ctx.create<numsim::materials::linear_isotropic_hardening<policy>>(p);
-    p.clear();
-    p.insert<std::string>("name", "m");
-    p.insert<std::string>("hardening_source", "hardening");
-    p.insert<std::string>("strain_source", "stepper");
-    p.insert<T>("K", T{166.67});
-    p.insert<T>("G", T{76.92});
-    p.insert<T>("sigma_0", T{50.0});
-    p.insert<std::string>("tableau", std::string(scheme));
-    EXPECT_NO_THROW(ctx.create<numsim::materials::j2_rk_plasticity<policy>>(p))
-        << scheme;
+    add<numsim::materials::tensor_component_stepper<2, policy>>(ctx, "stepper",
+        {{"increment", T{0.01}}, {"indices", std::vector<std::size_t>{0, 0}}});
+    add<numsim::materials::linear_isotropic_hardening<policy>>(ctx, "hardening", {{"source", "m"}, {"K", T{1000.0}}});
+    EXPECT_NO_THROW((add<numsim::materials::j2_rk_plasticity<policy>>(ctx, "m",
+        {{"hardening_source", "hardening"}, {"strain_source", "stepper"}, {"K", T{166.67}}, {"G", T{76.92}},
+         {"sigma_0", T{50.0}}, {"tableau", std::string(scheme)}}))) << scheme;
   }
 }
 

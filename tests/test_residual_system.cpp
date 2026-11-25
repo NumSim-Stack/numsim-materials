@@ -25,6 +25,7 @@
 #define NUMSIM_HAVE_JSON 1
 #include <nlohmann/json.hpp>
 #include "numsim-materials/io/json_material_factory.h"
+#include "test_support.h"
 #endif
 
 namespace {
@@ -38,6 +39,7 @@ using tensor2 = tmech::tensor<T, 3, 2>;
 using tensor4 = tmech::tensor<T, 3, 4>;
 using system_type = nm::residual_system<policy>;
 using solver_type = nm::vector_newton<policy>;
+using numsim::materials::test::add;
 
 enum class system_mode { linear, nonlinear, singular, decoupled };
 
@@ -566,14 +568,10 @@ private:
 system_type &make_system(ctx_type &ctx, std::vector<nm::system_unknown> unknowns, std::vector<nm::system_equation> equations,
                          std::string const &method = "newton", int max_iter = 50, T tolerance = 1e-10,
                          std::string const &name = "solver") {
-  param_type p;
-  p.insert<std::string>("name", name);
-  p.insert<std::string>("method", method);
-  p.insert<std::vector<nm::system_unknown>>("unknowns", std::move(unknowns));
-  p.insert<std::vector<nm::system_equation>>("equations", std::move(equations));
-  p.insert<int>("max_iter", max_iter);
-  p.insert<T>("tolerance", tolerance);
-  return ctx.create<system_type>(p);
+  return add<system_type>(ctx, name,
+      {{"method", method}, {"unknowns", std::vector<nm::system_unknown>(std::move(unknowns))},
+       {"equations", std::vector<nm::system_equation>(std::move(equations))}, {"max_iter", static_cast<int>(max_iter)},
+       {"tolerance", tolerance}});
 }
 
 std::vector<nm::system_unknown> xy() { return {{"x", nm::unknown_kind::scalar}, {"y", nm::unknown_kind::scalar}}; }
@@ -590,13 +588,8 @@ struct scalar_rig {
     system = &make_system(ctx, xy(), equations, method, max_iter);
     for (auto const &[name, rows] : split ? std::vector<std::pair<std::string, std::string>>{{"fx", "x"}, {"fy", "y"}}
                                           : std::vector<std::pair<std::string, std::string>>{{"sys", "xy"}}) {
-      param_type p;
-      p.insert<std::string>("name", name);
-      p.insert<std::string>("rows", rows);
-      p.insert<int>("mode", static_cast<int>(mode));
-      p.insert<T>("a", a);
-      p.insert<T>("b", b);
-      ctx.create<scalar_rows>(p);
+      add<scalar_rows>(ctx, name,
+          {{"rows", rows}, {"mode", static_cast<int>(static_cast<int>(mode))}, {"a", a}, {"b", b}});
     }
     ctx.finalize();
   }
@@ -675,11 +668,7 @@ newton_reference vector_newton_on(system_mode mode, T a, T b) {
     p.insert<std::vector<nm::unknown_spec>>("unknowns", {{"x", nm::unknown_kind::scalar}, {"y", nm::unknown_kind::scalar}});
     auto &solver{ctx.create<solver_type>(p)};
     p.clear();
-    p.insert<std::string>("name", "sys");
-    p.insert<int>("mode", static_cast<int>(mode));
-    p.insert<T>("a", a);
-    p.insert<T>("b", b);
-    ctx.create<scalar_system_2>(p);
+    add<scalar_system_2>(ctx, "sys", {{"mode", static_cast<int>(static_cast<int>(mode))}, {"a", a}, {"b", b}});
     ctx.finalize();
     solver.solve();
     if (solver.converged())
@@ -777,10 +766,7 @@ void mixed_case(T c, T tolerance) {
   p.insert<std::vector<nm::system_equation>>("equations", {{"sys::rB", "B"}, {"sys::rg", "g"}});
   auto &system{ctx.template create<nm::residual_system<Policy>>(p)};
   p.clear();
-  p.insert<std::string>("name", "sys");
-  p.insert<T>("a", 2);
-  p.insert<T>("c", c);
-  auto &sys{ctx.template create<mixed_rows<Policy>>(p)};
+  auto &sys{add<mixed_rows<Policy>>(ctx, "sys", {{"a", 2.0}, {"c", c}})};
   ctx.finalize();
   ctx.update();
   T const trP{tmech::trace(sys.P())}, s{1 + trP}, D{T(Policy::Dim)};
@@ -839,14 +825,10 @@ struct strain_rig {
   std::unique_ptr<nm::material_point<policy>> point;
 
   explicit strain_rig(std::string const &method = "newton") {
-    param_type p;
-    p.insert<std::string>("name", "strain");
-    ctx.create<nm::external_strain_source<policy>>(p);
+    add<nm::external_strain_source<policy>>(ctx, "strain");
     make_system(ctx, {{"g", nm::unknown_kind::scalar}, {"B", nm::unknown_kind::sym_tensor}}, {{"sys::rg", "g"}, {"sys::rB", "B"}},
                 method);
-    p.clear();
-    p.insert<std::string>("name", "sys");
-    ctx.create<strain_rows>(p);
+    add<strain_rows>(ctx, "sys");
     ctx.finalize();
     param_type q;
     q.insert<std::vector<std::string>>("inputs", {"strain"});
@@ -898,8 +880,7 @@ void strain_tangent_case() {
   p.insert<std::vector<nm::system_equation>>("equations", {{"sys::rg", "g"}, {"sys::rB", "B"}});
   ctx.template create<nm::residual_system<Policy>>(p);
   p.clear();
-  p.insert<std::string>("name", "sys");
-  ctx.template create<rows>(p);
+  add<rows>(ctx, "sys");
   ctx.finalize();
   auto const &dg{ctx.template derivative<Seed>("solver", "g", source, read)};
   auto const &dB{ctx.template derivative<dB_type>("solver", "B", source, read)};
@@ -942,14 +923,9 @@ TEST(ResidualSystemTangent, AMemberReadOutsideGetsTheTotalDerivative) {
 
 TEST(ResidualSystemTangent, AMissingPartialOnTheNewtonPathThrowsAtFinalize) {
   ctx_type ctx;
-  param_type p;
-  p.insert<std::string>("name", "load");
-  ctx.create<nm::external_scalar_source<policy>>(p);
+  add<nm::external_scalar_source<policy>>(ctx, "load");
   make_system(ctx, {{"x", nm::unknown_kind::scalar}}, {{"f::r", "x"}});
-  p.clear();
-  p.insert<std::string>("name", "f");
-  p.insert<bool>("declares_partials", false);
-  ctx.create<cubic_row>(p);
+  add<cubic_row>(ctx, "f", {{"declares_partials", false}});
   auto const message{thrown<std::logic_error>([&] { ctx.finalize(); })};
   EXPECT_TRUE(message.contains("'f::r'")) << message;
   EXPECT_TRUE(message.contains("solver::x")) << message;
@@ -957,14 +933,9 @@ TEST(ResidualSystemTangent, AMissingPartialOnTheNewtonPathThrowsAtFinalize) {
 
 TEST(ResidualSystemTangent, NewtonFdNeedsNoPartials) {
   ctx_type ctx;
-  param_type p;
-  p.insert<std::string>("name", "load");
-  auto &load{ctx.create<nm::external_scalar_source<policy>>(p)};
+  auto &load{add<nm::external_scalar_source<policy>>(ctx, "load")};
   make_system(ctx, {{"x", nm::unknown_kind::scalar}}, {{"f::r", "x"}}, "newton_fd");
-  p.clear();
-  p.insert<std::string>("name", "f");
-  p.insert<bool>("declares_partials", false);
-  ctx.create<cubic_row>(p);
+  add<cubic_row>(ctx, "f", {{"declares_partials", false}});
   ctx.finalize();
   load.bind(0, 2);
   ctx.update();
@@ -975,14 +946,9 @@ TEST(ResidualSystemTangent, NewtonFdNeedsNoPartials) {
 
 TEST(ResidualSystem, PicardWithUnknownsIteratesXMinusR) {
   ctx_type ctx;
-  param_type p;
-  p.insert<std::string>("name", "load");
-  auto &load{ctx.create<nm::external_scalar_source<policy>>(p)};
+  auto &load{add<nm::external_scalar_source<policy>>(ctx, "load")};
   auto &picard{make_system(ctx, {{"x", nm::unknown_kind::scalar}}, {{"f::r", "x"}}, "picard", 200, 1e-12)};
-  p.clear();
-  p.insert<std::string>("name", "f");
-  p.insert<bool>("picard", true);
-  ctx.create<cubic_row>(p);
+  add<cubic_row>(ctx, "f", {{"picard", true}});
   ctx.finalize();
   load.bind(0, 0.3);
   ctx.update();
@@ -1025,22 +991,15 @@ TEST(ResidualSystemValidation, RejectsInconsistentUnknownsAndEquations) {
 TEST(ResidualSystemValidation, AResidualOfAnotherKindFailsToWire) {
   ctx_type ctx;
   make_system(ctx, {{"B", nm::unknown_kind::sym_tensor}}, {{"load::state", "B"}});
-  param_type p;
-  p.insert<std::string>("name", "load");
-  ctx.create<nm::external_scalar_source<policy>>(p);
+  add<nm::external_scalar_source<policy>>(ctx, "load");
   EXPECT_THROW(ctx.finalize(), std::runtime_error) << "a scalar residual for a tensor unknown fails to wire";
 }
 
 TEST(ResidualSystemValidation, AStatefulMemberThrowsAtFinalize) {
   ctx_type ctx;
-  param_type p;
-  p.insert<std::string>("name", "load");
-  ctx.create<nm::external_scalar_source<policy>>(p);
+  add<nm::external_scalar_source<policy>>(ctx, "load");
   make_system(ctx, {{"x", nm::unknown_kind::scalar}}, {{"f::r", "x"}});
-  p.clear();
-  p.insert<std::string>("name", "f");
-  p.insert<bool>("counts", true);
-  ctx.create<cubic_row>(p);
+  add<cubic_row>(ctx, "f", {{"counts", true}});
   auto const message{thrown<std::logic_error>([&] { ctx.finalize(); })};
   EXPECT_TRUE(message.contains("f::r")) << message;
   EXPECT_TRUE(message.contains("stateful")) << message;
@@ -1050,9 +1009,7 @@ TEST(ResidualSystemValidation, SystemsAreDisjoint) {
   ctx_type ctx; // f::r reads the unknowns of both
   make_system(ctx, {{"x", nm::unknown_kind::scalar}}, {{"f::r", "x"}});
   make_system(ctx, {{"state", nm::unknown_kind::scalar}}, {{"f::r", "state"}}, "newton", 50, 1e-10, "load");
-  param_type p;
-  p.insert<std::string>("name", "f");
-  ctx.create<cubic_row>(p);
+  add<cubic_row>(ctx, "f");
   auto const message{thrown<std::logic_error>([&] { ctx.finalize(); })};
   EXPECT_TRUE(message.contains("'solver'") && message.contains("'load'")) << message;
 }
@@ -1060,9 +1017,7 @@ TEST(ResidualSystemValidation, SystemsAreDisjoint) {
 TEST(ResidualSystemValidation, NoPathFromTheUnknownsToTheResidualsThrowsAtFinalize) {
   ctx_type ctx;
   make_system(ctx, {{"x", nm::unknown_kind::scalar}}, {{"load::state", "x"}});
-  param_type p;
-  p.insert<std::string>("name", "load");
-  ctx.create<nm::external_scalar_source<policy>>(p);
+  add<nm::external_scalar_source<policy>>(ctx, "load");
   auto const message{thrown<std::logic_error>([&] { ctx.finalize(); })};
   EXPECT_TRUE(message.contains("'solver'")) << message;
 }
@@ -1077,13 +1032,9 @@ struct history_rig {
   std::unique_ptr<nm::material_point<policy>> point;
 
   explicit history_rig(bool history) {
-    param_type p;
-    p.insert<std::string>("name", "load");
-    ctx.create<nm::external_scalar_source<policy>>(p);
+    add<nm::external_scalar_source<policy>>(ctx, "load");
     system = &make_system(ctx, {{"x", nm::unknown_kind::scalar, 0, history}}, {{"f::r", "x"}}, "newton", 50, 1e-12);
-    p.clear();
-    p.insert<std::string>("name", "f");
-    ctx.create<cubic_row>(p);
+    add<cubic_row>(ctx, "f");
     ctx.finalize();
     param_type q;
     q.insert<std::vector<std::string>>("inputs", {"load"});
@@ -1140,9 +1091,7 @@ struct row_rig {
   nm::external_scalar_source<policy> *load{nullptr};
 
   row_rig(std::string const &method, int max_iter, T tolerance, T seed, param_type row = {}) {
-    param_type p;
-    p.insert<std::string>("name", "load");
-    load = &ctx.create<nm::external_scalar_source<policy>>(p);
+    load = &add<nm::external_scalar_source<policy>>(ctx, "load");
     system = &make_system(ctx, {{"x", nm::unknown_kind::scalar, static_cast<double>(seed)}}, {{"f::r", "x"}}, method, max_iter, tolerance);
     row.insert<std::string>("name", "f");
     ctx.create<Row>(row);
@@ -1294,17 +1243,10 @@ TEST(ResidualSystemScalar, NewtonFillsOnlyTheJacobianPartialOnRequest) {
 
 TEST(ResidualSystem, NewtonFillsOnlyTheJacobianPartialsOnRequest) {
   ctx_type ctx;
-  param_type p;
-  p.insert<std::string>("name", "load");
-  auto &load{ctx.create<nm::external_scalar_source<policy>>(p)};
+  auto &load{add<nm::external_scalar_source<policy>>(ctx, "load")};
   make_system(ctx, xy(), {{"f::r", "x"}, {"g::r", "y"}});
-  p.clear();
-  p.insert<std::string>("name", "f");
-  auto &f{ctx.create<on_request_row>(p)};
-  p.clear();
-  p.insert<std::string>("name", "g");
-  p.insert<std::string>("unknown", "y");
-  auto &g{ctx.create<on_request_row>(p)};
+  auto &f{add<on_request_row>(ctx, "f")};
+  auto &g{add<on_request_row>(ctx, "g", {{"unknown", "y"}})};
   ctx.finalize();
   load.bind(0, 2);
   ctx.update();
@@ -1332,17 +1274,11 @@ TEST(ResidualSystemScalar, NewtonFillsNoPartialOfAnOutputBesideTheResidual) {
 
 TEST(ResidualSystemTangent, TwoCoupledSystemsMatchCentralDifferences) {
   ctx_type ctx;
-  param_type p;
-  p.insert<std::string>("name", "load");
-  auto &load{ctx.create<nm::external_scalar_source<policy>>(p)};
+  auto &load{add<nm::external_scalar_source<policy>>(ctx, "load")};
   make_system(ctx, {{"x", nm::unknown_kind::scalar}}, {{"f::r", "x"}}, "newton", 50, 1e-13);
   make_system(ctx, {{"y", nm::unknown_kind::scalar}}, {{"g::r", "y"}}, "newton", 50, 1e-13, "second");
-  p.clear();
-  p.insert<std::string>("name", "f");
-  ctx.create<cubic_row>(p);
-  p.clear();
-  p.insert<std::string>("name", "g");
-  ctx.create<chain_row>(p);
+  add<cubic_row>(ctx, "f");
+  add<chain_row>(ctx, "g");
   ctx.finalize();
   auto const &dx{ctx.derivative<T>("solver", "x", "load", "state")};
   auto const &dy{ctx.derivative<T>("second", "y", "load", "state")};

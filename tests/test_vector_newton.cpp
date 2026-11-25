@@ -20,6 +20,7 @@
 #define NUMSIM_HAVE_JSON 1
 #include <nlohmann/json.hpp>
 #include "numsim-materials/io/json_material_factory.h"
+#include "test_support.h"
 #endif
 
 namespace {
@@ -33,6 +34,7 @@ using param_type = policy::ParameterHandler;
 using tensor2 = tmech::tensor<T, 3, 2>;
 using tensor4 = tmech::tensor<T, 3, 4>;
 using solver_type = vector_newton<policy>;
+using numsim::materials::test::add;
 
 // ---------------------------------------------------------------------------
 // Test function material: two coupled scalar unknowns.
@@ -139,12 +141,8 @@ struct scalar_fixture {
     solver = &ctx.create<solver_type>(p);
 
     p.clear();
-    p.insert<std::string>("name", "sys");
-    p.insert<std::string>("solver_name", "solver");
-    p.insert<int>("mode", static_cast<int>(mode));
-    p.insert<T>("a", a);
-    p.insert<T>("b", b);
-    ctx.create<scalar_system_2>(p);
+    add<scalar_system_2>(ctx, "sys",
+        {{"solver_name", "solver"}, {"mode", static_cast<int>(static_cast<int>(mode))}, {"a", a}, {"b", b}});
 
     ctx.finalize();
   }
@@ -395,10 +393,7 @@ TEST(VectorNewton, MixedScalarAndSymmetricTensorSystem) {
   auto& solver = ctx.create<solver_type>(p);
 
   p.clear();
-  p.insert<std::string>("name", "sys");
-  p.insert<std::string>("solver_name", "solver");
-  p.insert<T>("a", a);
-  auto& sys = ctx.create<mixed_system>(p);
+  auto& sys = add<mixed_system>(ctx, "sys", {{"solver_name", "solver"}, {"a", a}});
 
   ctx.finalize();
 
@@ -442,11 +437,7 @@ TEST(VectorNewton, NonlinearMixedSystemActuallyIterates) {
     auto& s = ctx.create<solver_type>(p);
 
     p.clear();
-    p.insert<std::string>("name", "sys");
-    p.insert<std::string>("solver_name", "solver");
-    p.insert<T>("a", a);
-    p.insert<T>("c", c);
-    auto& m = ctx.create<mixed_system>(p);
+    auto& m = add<mixed_system>(ctx, "sys", {{"solver_name", "solver"}, {"a", a}, {"c", c}});
 
     ctx.finalize();
     return built{s, m};
@@ -505,10 +496,7 @@ TEST(VectorNewton, MixedSystemIn2D) {
   auto& solver = ctx.create<solver2d>(p);
 
   p.clear();
-  p.insert<std::string>("name", "sys");
-  p.insert<std::string>("solver_name", "solver");
-  p.insert<T>("a", a);
-  auto& sys = ctx.create<sys2d>(p);
+  auto& sys = add<sys2d>(ctx, "sys", {{"solver_name", "solver"}, {"a", a}});
 
   ctx.finalize();
 
@@ -542,12 +530,9 @@ TEST(VectorNewton, VerifyZeroBlocksCatchesAFalseClaim) {
     p.insert<bool>("verify_zero_blocks", verify);
     auto& solver = ctx->create<solver_type>(p);
     p.clear();
-    p.insert<std::string>("name", "sys");
-    p.insert<std::string>("solver_name", "solver");
-    p.insert<int>("mode", static_cast<int>(system_mode::linear));
-    p.insert<T>("a", 5.0);
-    p.insert<T>("b", 10.0);
-    ctx->create<scalar_system_2>(p);
+    add<scalar_system_2>(*ctx, "sys",
+        {{"solver_name", "solver"}, {"mode", static_cast<int>(static_cast<int>(system_mode::linear))}, {"a", 5.0},
+         {"b", 10.0}});
     ctx->finalize();
     return std::pair{std::move(ctx), &solver};
   };
@@ -579,12 +564,9 @@ TEST(VectorNewton, VerifyZeroBlocksAcceptsATrueClaim) {
   p.insert<bool>("verify_zero_blocks", true);
   auto& solver = ctx.create<solver_type>(p);
   p.clear();
-  p.insert<std::string>("name", "sys");
-  p.insert<std::string>("solver_name", "solver");
-  p.insert<int>("mode", static_cast<int>(system_mode::decoupled));
-  p.insert<T>("a", 5.0);
-  p.insert<T>("b", 10.0);
-  ctx.create<scalar_system_2>(p);
+  add<scalar_system_2>(ctx, "sys",
+      {{"solver_name", "solver"}, {"mode", static_cast<int>(static_cast<int>(system_mode::decoupled))}, {"a", 5.0},
+       {"b", 10.0}});
   ctx.finalize();
 
   EXPECT_NO_THROW(solver.solve());
@@ -613,12 +595,9 @@ TEST(VectorNewton, StructurallyZeroBlockIsSkipped) {
   auto& solver = ctx.create<solver_type>(p);
 
   p.clear();
-  p.insert<std::string>("name", "sys");
-  p.insert<std::string>("solver_name", "solver");
-  p.insert<int>("mode", static_cast<int>(system_mode::decoupled));
-  p.insert<T>("a", 5.0);
-  p.insert<T>("b", 10.0);
-  ctx.create<scalar_system_2>(p);
+  add<scalar_system_2>(ctx, "sys",
+      {{"solver_name", "solver"}, {"mode", static_cast<int>(static_cast<int>(system_mode::decoupled))}, {"a", 5.0},
+       {"b", 10.0}});
 
   ctx.finalize();
   solver.solve();
@@ -733,10 +712,7 @@ TEST(VectorNewtonTangent, MatchesTheAnalyticStrainDerivative) {
   auto& solver = ctx.create<solver_type>(p);
 
   p.clear();
-  p.insert<std::string>("name", "sys");
-  p.insert<std::string>("solver_name", "solver");
-  p.insert<T>("a", a);
-  auto& sys = ctx.create<strain_coupled_system>(p);
+  auto& sys = add<strain_coupled_system>(ctx, "sys", {{"solver_name", "solver"}, {"a", a}});
 
   ctx.finalize();
   solver.solve();
@@ -886,18 +862,10 @@ private:
 
 TEST(VectorNewtonValidation, MistypedProducerPropertyFailsToWire) {
   ctx_type ctx;
-  param_type p;
 
-  p.clear();
-  p.insert<std::string>("name", "solver");
-  p.insert<std::string>("function", "sys");
-  p.insert<std::vector<unknown_spec>>("unknowns", {{"B", unknown_kind::sym_tensor}});
-  ctx.create<solver_type>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "sys");
-  p.insert<std::string>("solver_name", "solver");
-  ctx.create<mistyped_system>(p);
+  add<solver_type>(ctx, "solver",
+      {{"function", "sys"}, {"unknowns", std::vector<unknown_spec>{{"B", unknown_kind::sym_tensor}}}});
+  add<mistyped_system>(ctx, "sys", {{"solver_name", "solver"}});
 
   EXPECT_THROW(ctx.finalize(), std::runtime_error)
       << "a scalar residual where a tensor is expected must fail at wire time";
@@ -965,9 +933,7 @@ TEST(VectorNewton, WorksWhenComputeIsBoundToAJacobianBlock) {
   auto& solver = ctx.create<solver_type>(p);
 
   p.clear();
-  p.insert<std::string>("name", "sys");
-  p.insert<std::string>("solver_name", "solver");
-  ctx.create<jacobian_bound_system>(p);
+  add<jacobian_bound_system>(ctx, "sys", {{"solver_name", "solver"}});
 
   ctx.finalize();
   solver.solve();

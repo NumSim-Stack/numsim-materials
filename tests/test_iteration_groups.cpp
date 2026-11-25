@@ -16,6 +16,7 @@
 #include "numsim-materials/materials/constant_scalar.h"
 #include "numsim-materials/postprocessing/property_recorder.h"
 #include "numsim-materials/solvers/system.h"
+#include "test_support.h"
 
 namespace {
 
@@ -24,6 +25,7 @@ using policy = nm::material_policy_default;
 using T = policy::value_type;
 using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
+using numsim::materials::test::add;
 
 /// The names of the callbacks in the order they ran.
 std::vector<std::string> g_log;
@@ -278,10 +280,7 @@ private:
 };
 
 void constant(ctx_type &ctx, std::string const &name, T value) {
-  param_type p;
-  p.insert<std::string>("name", name);
-  p.insert<T>("value", value);
-  ctx.create<nm::constant_scalar<policy>>(p);
+  add<nm::constant_scalar<policy>>(ctx, name, {{"value", value}});
 }
 
 /// goal -> probe -> [guess -> relax] (the group, closed by guess reading relax::x over a local edge), and with
@@ -290,20 +289,12 @@ std::unique_ptr<ctx_type> build(param_type relax = {}, bool recorded = false, bo
   auto owner{std::make_unique<ctx_type>()};
   auto &ctx{*owner};
   constant(ctx, "goal", 2);
-  param_type p;
-  p.insert<std::string>("name", "probe");
-  ctx.create<probe<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "guess");
-  p.insert<std::string>("source", "relax");
-  ctx.create<guess<policy>>(p);
+  add<probe<policy>>(ctx, "probe");
+  add<guess<policy>>(ctx, "guess", {{"source", "relax"}});
   relax.insert<std::string>("name", "relax");
   ctx.create<relaxer<policy>>(relax);
   if (recorded) {
-    p.clear();
-    p.insert<std::string>("name", "rec");
-    p.insert<std::vector<std::string>>("scalar_sources", {"relax::x"});
-    ctx.create<nm::property_recorder<policy>>(p);
+    add<nm::property_recorder<policy>>(ctx, "rec", {{"scalar_sources", std::vector<std::string>{"relax::x"}}});
   }
   if (finalize)
     ctx.finalize();
@@ -398,10 +389,7 @@ TEST(IterationGroups, ConstantsUpstreamStayFoldedAndFollowSetParameter) {
 TEST(IterationGroups, AGroupDownstreamOfAnotherRunsAfterIt) {
   auto ctx{build({}, false, false)};
   param_type p;
-  p.insert<std::string>("name", "guess2");
-  p.insert<std::string>("source", "relax2");
-  ctx->create<guess<policy>>(p);
-  p.clear();
+  add<guess<policy>>(*ctx, "guess2", {{"source", "relax2"}});
   p.insert<std::string>("name", "relax2");
   p.insert<std::string>("guess", "guess2");
   p.insert<std::string>("target_source", "relax::x"); // the converged x of the first group
@@ -415,15 +403,8 @@ TEST(IterationGroups, AGroupDownstreamOfAnotherRunsAfterIt) {
 
 TEST(IterationGroups, AGroupDownstreamOfAnotherRunsAfterItInTheCallLog) {
   auto ctx{build({}, false, false)};
-  param_type p;
-  p.insert<std::string>("name", "guess2");
-  p.insert<std::string>("source", "relax2");
-  ctx->create<guess<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "relax2");
-  p.insert<std::string>("guess", "guess2");
-  p.insert<std::string>("target_source", "relax::x");
-  ctx->create<relaxer<policy>>(p);
+  add<guess<policy>>(*ctx, "guess2", {{"source", "relax2"}});
+  add<relaxer<policy>>(*ctx, "relax2", {{"guess", "guess2"}, {"target_source", "relax::x"}});
   ctx->finalize();
   g_log.clear();
   ctx->update();
@@ -441,15 +422,8 @@ TEST(IterationGroups, GroupsThatReadEachOtherThrowAtFinalize) {
   param_type relax;
   relax.insert<std::string>("target_source", "guess2::used"); // each group reads the front of the other
   auto ctx{build(relax, false, false)};
-  param_type p;
-  p.insert<std::string>("name", "guess2");
-  p.insert<std::string>("source", "relax2");
-  ctx->create<guess<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "relax2");
-  p.insert<std::string>("guess", "guess2");
-  p.insert<std::string>("target_source", "guess::used");
-  ctx->create<relaxer<policy>>(p);
+  add<guess<policy>>(*ctx, "guess2", {{"source", "relax2"}});
+  add<relaxer<policy>>(*ctx, "relax2", {{"guess", "guess2"}, {"target_source", "guess::used"}});
   auto const message{thrown<std::logic_error>([&] { ctx->finalize(); })};
   EXPECT_NE(message.find("relax::residual"), std::string::npos) << message;
   EXPECT_NE(message.find("relax2::residual"), std::string::npos) << message;
@@ -459,17 +433,9 @@ TEST(IterationGroups, GroupsThatReadEachOtherThrowAtFinalize) {
 TEST(IterationGroups, ALocalEdgeWhoseProducerIsOutsideTheGroupThrowsAtFinalize) {
   ctx_type ctx; // guess reads probe::target of the previous pass, but probe is not downstream of guess
   constant(ctx, "goal", 2);
-  param_type p;
-  p.insert<std::string>("name", "probe");
-  ctx.create<probe<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "guess");
-  p.insert<std::string>("source", "probe");
-  p.insert<std::string>("property", "target");
-  ctx.create<guess<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "relax");
-  ctx.create<relaxer<policy>>(p);
+  add<probe<policy>>(ctx, "probe");
+  add<guess<policy>>(ctx, "guess", {{"source", "probe"}, {"property", "target"}});
+  add<relaxer<policy>>(ctx, "relax");
   auto const message{thrown<std::logic_error>([&] { ctx.finalize(); })};
   EXPECT_NE(message.find("relax::residual"), std::string::npos) << message;
   EXPECT_NE(message.find("closed local loop"), std::string::npos) << message;
@@ -478,20 +444,10 @@ TEST(IterationGroups, ALocalEdgeWhoseProducerIsOutsideTheGroupThrowsAtFinalize) 
 TEST(IterationGroups, AResidualInTheMiddleOfTheLoopThrowsAtFinalize) {
   ctx_type ctx; // guess -> relax -> follow -> (local) guess: the producer of the edge is behind the residual
   constant(ctx, "goal", 2);
-  param_type p;
-  p.insert<std::string>("name", "probe");
-  ctx.create<probe<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "guess");
-  p.insert<std::string>("source", "follow");
-  ctx.create<guess<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "relax");
-  ctx.create<relaxer<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "follow");
-  p.insert<std::string>("source", "relax::x");
-  ctx.create<follow<policy>>(p);
+  add<probe<policy>>(ctx, "probe");
+  add<guess<policy>>(ctx, "guess", {{"source", "follow"}});
+  add<relaxer<policy>>(ctx, "relax");
+  add<follow<policy>>(ctx, "follow", {{"source", "relax::x"}});
   auto const message{thrown<std::logic_error>([&] { ctx.finalize(); })};
   EXPECT_NE(message.find("relax::residual"), std::string::npos) << message;
   EXPECT_NE(message.find("closed local loop"), std::string::npos) << message;
@@ -500,27 +456,11 @@ TEST(IterationGroups, AResidualInTheMiddleOfTheLoopThrowsAtFinalize) {
 TEST(IterationGroups, ANestedLoopThrowsAtFinalize) {
   ctx_type ctx; // the inner loop (gi, ri) feeds the outer one (go, ro), which feeds the inner one back through ro::x
   constant(ctx, "goal", 2);
-  param_type p;
-  p.insert<std::string>("name", "probe");
-  ctx.create<probe<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "go");
-  p.insert<std::string>("source", "ro");
-  ctx.create<guess<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "gi");
-  p.insert<std::string>("source", "ri");
-  ctx.create<guess<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "ri");
-  p.insert<std::string>("guess", "gi");
-  p.insert<std::string>("target_source", "go::used");
-  ctx.create<relaxer<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "ro");
-  p.insert<std::string>("guess", "go");
-  p.insert<std::string>("target_source", "ri::x");
-  ctx.create<relaxer<policy>>(p);
+  add<probe<policy>>(ctx, "probe");
+  add<guess<policy>>(ctx, "go", {{"source", "ro"}});
+  add<guess<policy>>(ctx, "gi", {{"source", "ri"}});
+  add<relaxer<policy>>(ctx, "ri", {{"guess", "gi"}, {"target_source", "go::used"}});
+  add<relaxer<policy>>(ctx, "ro", {{"guess", "go"}, {"target_source", "ri::x"}});
   auto const message{thrown<std::logic_error>([&] { ctx.finalize(); })};
   EXPECT_NE(message.find("ri::residual"), std::string::npos) << message;
   EXPECT_NE(message.find("ro::residual"), std::string::npos) << message;
@@ -531,15 +471,8 @@ TEST(IterationGroups, ALoopThroughTheGroupOfAnotherResidualThrowsAtFinalize) {
   param_type relax; // relax2 -> (local) guess3 -> relax (target_source) -> relax2: the loop runs through relax's group
   relax.insert<std::string>("target_source", "guess3::used");
   auto ctx{build(relax, false, false)};
-  param_type p;
-  p.insert<std::string>("name", "guess3");
-  p.insert<std::string>("source", "relax2");
-  ctx->create<guess<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "relax2");
-  p.insert<std::string>("guess", "guess3");
-  p.insert<std::string>("target_source", "relax::x");
-  ctx->create<relaxer<policy>>(p);
+  add<guess<policy>>(*ctx, "guess3", {{"source", "relax2"}});
+  add<relaxer<policy>>(*ctx, "relax2", {{"guess", "guess3"}, {"target_source", "relax::x"}});
   auto const message{thrown<std::logic_error>([&] { ctx->finalize(); })};
   EXPECT_NE(message.find("relax2::residual"), std::string::npos) << message;
   EXPECT_NE(message.find("relax::residual"), std::string::npos) << message;
@@ -549,25 +482,11 @@ TEST(IterationGroups, ALoopThroughTheGroupOfAnotherResidualThrowsAtFinalize) {
 TEST(IterationGroups, ASolverWithLocalEdgesUpstreamOfAResidualRunsOncePerUpdate) {
   ctx_type ctx; // a and b read each other over local edges, as j2_plasticity and its hardening law do
   constant(ctx, "goal", 2);
-  param_type p;
-  p.insert<std::string>("name", "a");
-  p.insert<std::string>("other", "b");
-  ctx.create<half<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "b");
-  p.insert<std::string>("other", "a");
-  ctx.create<half<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "probe");
-  ctx.create<probe<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "guess");
-  p.insert<std::string>("source", "relax");
-  ctx.create<guess<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "relax");
-  p.insert<std::string>("target_source", "b::out");
-  ctx.create<relaxer<policy>>(p);
+  add<half<policy>>(ctx, "a", {{"other", "b"}});
+  add<half<policy>>(ctx, "b", {{"other", "a"}});
+  add<probe<policy>>(ctx, "probe");
+  add<guess<policy>>(ctx, "guess", {{"source", "relax"}});
+  add<relaxer<policy>>(ctx, "relax", {{"target_source", "b::out"}});
   ASSERT_NO_THROW(ctx.finalize()) << "neither is a member of the group: both are stateful";
   for (int n{1}; n <= 3; ++n) {
     ctx.update();
@@ -602,9 +521,7 @@ TEST(IterationGroups, SettingsChangedAfterFinalizeAreCheckedAtTheNextUpdate) {
 
 TEST(IterationGroups, ConvergesWithoutALocalEdgeBehindItThrowsAtFinalize) {
   ctx_type ctx;
-  param_type p;
-  p.insert<std::string>("name", "alone");
-  ctx.create<lonely<policy>>(p);
+  add<lonely<policy>>(ctx, "alone");
   auto const message{thrown<std::logic_error>([&] { ctx.finalize(); })};
   EXPECT_NE(message.find("alone::residual"), std::string::npos) << message;
   EXPECT_NE(message.find("closed local loop"), std::string::npos) << message;
@@ -647,13 +564,9 @@ TEST(IterationGroups, APicardSystemWithoutUnknownsIsTheGroup) {
     param_type relax;
     relax.insert<bool>("converges", false);
     auto ctx{build(relax, false, false)};
-    param_type p;
-    p.insert<std::string>("name", "fix");
-    p.insert<std::string>("method", "picard");
-    p.insert<std::vector<nm::system_equation>>("equations", {{"relax::residual", ""}});
-    p.insert<T>("tolerance", 1e-8);
-    p.insert<int>("max_iter", max_iter);
-    ctx->create<nm::residual_system<policy>>(p);
+    add<nm::residual_system<policy>>(*ctx, "fix",
+        {{"method", "picard"}, {"equations", std::vector<nm::system_equation>{{"relax::residual", ""}}},
+         {"tolerance", 1e-8}, {"max_iter", static_cast<int>(max_iter)}});
     ctx->finalize();
     return ctx;
   }};
@@ -674,19 +587,15 @@ TEST(IterationGroups, APicardSystemWithoutUnknownsIsTheGroup) {
 
 TEST(IterationGroups, ConvergesNamesAnOutputOfItsCallback) {
   ctx_type ctx;
-  param_type p;
-  p.insert<std::string>("name", "misnamed");
-  auto const message{thrown<std::logic_error>([&] { ctx.create<misnamed<policy>>(p); })};
+  auto const message{thrown<std::logic_error>([&] {add<misnamed<policy>>(ctx, "misnamed"); })};
   EXPECT_NE(message.find("misnamed::residual"), std::string::npos) << message;
   EXPECT_NE(message.find("not an output of the callback"), std::string::npos) << message;
 }
 
 TEST(IterationGroups, ConvergesNamingAMissingParameterThrowsAtConstruction) {
   ctx_type ctx;
-  param_type p;
-  p.insert<std::string>("name", "relax");
-  p.insert<std::string>("tolerance_key", "tolerence");
-  auto const message{thrown<std::invalid_argument>([&] { ctx.create<relaxer<policy>>(p); })};
+  auto const message{thrown<std::invalid_argument>([&] {add<relaxer<policy>>(ctx, "relax",
+      {{"tolerance_key", "tolerence"}}); })};
   EXPECT_NE(message.find("'tolerence'"), std::string::npos) << message;
 }
 

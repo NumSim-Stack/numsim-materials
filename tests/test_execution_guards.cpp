@@ -5,6 +5,7 @@
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/core/parameter_helpers.h"
 #include "numsim-materials/driver/external_state_source.h"
+#include "test_support.h"
 
 // Rules of execution (#187): no update() from inside a callback, a nested update_property() leaves the running
 // update intact, and a context whose update threw is partly updated until revert().
@@ -16,6 +17,7 @@ using policy = nm::material_policy_default;
 using T = policy::value_type;
 using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
+using numsim::materials::test::add;
 
 /// "value" = x::state (or 1 with "constant"), counting its runs; throws above "limit".
 template <typename Traits>
@@ -111,8 +113,7 @@ struct setup {
 
   explicit setup(std::string const &mode, T limit = 1e30) {
     param_type p;
-    p.insert<std::string>("name", "x");
-    x = &ctx.create<nm::external_scalar_source<policy>>(p);
+    x = &add<nm::external_scalar_source<policy>>(ctx, "x");
     k = &make("k", true, 1e30);
     probe = &make("probe", false, limit);
     p.clear();
@@ -127,11 +128,7 @@ struct setup {
   }
 
   tally<policy> &make(std::string const &name, bool constant, T limit) {
-    param_type p;
-    p.insert<std::string>("name", name);
-    p.insert<bool>("constant", constant);
-    p.insert<T>("limit", limit);
-    return ctx.create<tally<policy>>(p);
+    return add<tally<policy>>(ctx, name, {{"constant", constant}, {"limit", limit}});
   }
 };
 

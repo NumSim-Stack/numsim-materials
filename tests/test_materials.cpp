@@ -13,6 +13,7 @@
 #include "numsim-materials/materials/scalar_identity_weight.h"
 #include "numsim-materials/materials/autocatalytic_reaction.h"
 #include "numsim-materials/solvers/backward_euler.h"
+#include "test_support.h"
 
 namespace {
 
@@ -22,26 +23,18 @@ using ctx_type = numsim::materials::material_context<policy>;
 using param_type = policy::ParameterHandler;
 using tensor2 = tmech::tensor<T, 3, 2>;
 using tensor4 = tmech::tensor<T, 3, 4>;
+using numsim::materials::test::add;
 
 // --- Linear elasticity ---
 
 class LinearElasticityTest : public ::testing::Test {
 protected:
   void SetUp() override {
-    param_type p;
 
-    p.clear();
-    p.insert<std::string>("name", "stepper");
-    p.insert<T>("increment", T{0.001});
-    p.insert<std::vector<std::size_t>>("indices", {0, 0});
-    ctx.create<numsim::materials::tensor_component_stepper<2, policy>>(p);
-
-    p.clear();
-    p.insert<std::string>("name", "elastic");
-    p.insert<std::string>("strain_producer_name", "stepper");
-    p.insert<T>("K", K);
-    p.insert<T>("G", G);
-    ctx.create<numsim::materials::linear_elasticity<policy>>(p);
+    add<numsim::materials::tensor_component_stepper<2, policy>>(ctx, "stepper",
+        {{"increment", T{0.001}}, {"indices", std::vector<std::size_t>{0, 0}}});
+    add<numsim::materials::linear_elasticity<policy>>(ctx, "elastic",
+        {{"strain_producer_name", "stepper"}, {"K", K}, {"G", G}});
 
     ctx.finalize();
   }
@@ -89,17 +82,9 @@ TEST_F(LinearElasticityTest, BulkModulus) {
 
 TEST(ScalarWeight, IdentityWeight) {
   ctx_type ctx;
-  param_type p;
 
-  p.clear();
-  p.insert<std::string>("name", "time");
-  p.insert<T>("increment", T{0.5});
-  ctx.create<numsim::materials::scalar_stepper<policy>>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "w_time");
-  p.insert<std::string>("source", "time::state");
-  ctx.create<numsim::materials::scalar_identity_weight<policy>>(p);
+  add<numsim::materials::scalar_stepper<policy>>(ctx, "time", {{"increment", T{0.5}}});
+  add<numsim::materials::scalar_identity_weight<policy>>(ctx, "w_time", {{"source", "time::state"}});
 
   ctx.finalize();
   ctx.update();
@@ -197,31 +182,18 @@ TEST(CuringSimulation, ConvergesToFullCure) {
 /// function material reads, so only a dependency edge (not the creation order) can run it after them.
 T cure_after(int steps, bool solver_first) {
   ctx_type ctx;
-  param_type p;
   auto const solver{[&] {
-    p.clear();
-    p.insert<std::string>("name", "solver");
-    p.insert<std::string>("function", "curing");
-    ctx.create<numsim::materials::backward_euler<policy>>(p);
+    add<numsim::materials::backward_euler<policy>>(ctx, "solver", {{"function", "curing"}});
   }};
   if (solver_first)
     solver();
   for (auto const &[name, increment] : {std::pair{"temperature", T{0}}, std::pair{"time", T{0.5}}}) {
-    p.clear();
-    p.insert<std::string>("name", name);
-    p.insert<T>("increment", increment);
-    ctx.create<numsim::materials::scalar_stepper<policy>>(p);
+    add<numsim::materials::scalar_stepper<policy>>(ctx, name, {{"increment", increment}});
   }
   if (!solver_first)
     solver();
-  p.clear();
-  p.insert<std::string>("name", "curing");
-  p.insert<T>("A", T{1e6});
-  p.insert<T>("E", T{50000});
-  p.insert<T>("n", T{1.2});
-  p.insert<T>("m", T{0.8});
-  p.insert<T>("start_value", T{1e-8});
-  ctx.create<numsim::materials::autocatalytic_reaction<policy>>(p);
+  add<numsim::materials::autocatalytic_reaction<policy>>(ctx, "curing",
+      {{"A", T{1e6}}, {"E", T{50000}}, {"n", T{1.2}}, {"m", T{0.8}}, {"start_value", T{1e-8}}});
   ctx.finalize();
   ctx.get_mutable<T>("temperature", "state") = T{80};
   for (int i{0}; i < steps; ++i) {
@@ -250,10 +222,7 @@ namespace nm_be = numsim::materials;
 /// now, chosen by naming a type rather than by omitting a parameter.
 TEST(BackwardEulerSetup, RequiresAFunctionToSolve) {
   nm_be::material_context<policy> ctx;
-  policy::ParameterHandler p;
-  p.insert<std::string>("name", "solver");
-  EXPECT_THROW(ctx.create<nm_be::backward_euler<policy>>(p),
-               std::invalid_argument)
+  EXPECT_THROW((add<nm_be::backward_euler<policy>>(ctx, "solver")), std::invalid_argument)
       << "omitting \"function\" must fail at setup, not produce an inert "
          "solver whose consumers silently never advance";
 }
@@ -263,14 +232,8 @@ TEST(BackwardEulerSetup, RequiresAFunctionToSolve) {
 TEST(BackwardEulerSetup, RejectsAFunctionWithoutResidualOrJacobian) {
   using T2 = policy::value_type;
   nm_be::material_context<policy> ctx;
-  policy::ParameterHandler p;
-  p.insert<std::string>("name", "drv");
-  p.insert<T2>("increment", T2{0.1});
-  ctx.create<nm_be::scalar_stepper<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "solver");
-  p.insert<std::string>("function", std::string("drv"));
-  ctx.create<nm_be::backward_euler<policy>>(p);
+  add<nm_be::scalar_stepper<policy>>(ctx, "drv", {{"increment", T2{0.1}}});
+  add<nm_be::backward_euler<policy>>(ctx, "solver", {{"function", std::string("drv")}});
   EXPECT_THROW(ctx.finalize(), std::runtime_error);
 }
 
@@ -357,9 +320,7 @@ TEST(NewtonScalar, AVanishingJacobianStopsWithoutConverging) {
 TEST(LocalNewtonSolver, SolvesAndReportsConvergence) {
   using T2 = policy::value_type;
   nm_be::material_context<policy> ctx;
-  policy::ParameterHandler p;
-  p.insert<std::string>("name", "solver");
-  auto& s = ctx.create<nm_be::local_newton<policy>>(p);
+  auto& s = add<nm_be::local_newton<policy>>(ctx, "solver");
   ctx.finalize();
 
   // x^2 - 4 = 0 from x0 = 3
@@ -392,16 +353,9 @@ TEST(WireMaterials, WrongTypeIsNotReportedAsMissing) {
   nm_w::material_context<policy> ctx;
   policy::ParameterHandler p;
 
-  p.insert<std::string>("name", "stepper");
-  p.insert<T2>("increment", T2{0.01});
-  p.insert<std::vector<std::size_t>>("indices", {0, 0});
-  ctx.create<nm_w::tensor_component_stepper<2, policy>>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "hardening");
-  p.insert<std::string>("source", "j2");
-  p.insert<T2>("K", T2{1000.0});
-  ctx.create<nm_w::linear_isotropic_hardening<policy>>(p);
+  add<nm_w::tensor_component_stepper<2, policy>>(ctx, "stepper",
+      {{"increment", T2{0.01}}, {"indices", std::vector<std::size_t>{0, 0}}});
+  add<nm_w::linear_isotropic_hardening<policy>>(ctx, "hardening", {{"source", "j2"}, {"K", T2{1000.0}}});
 
   // A backward_euler where a local_newton is required: it EXISTS.
   p.clear();
@@ -410,14 +364,9 @@ TEST(WireMaterials, WrongTypeIsNotReportedAsMissing) {
   ctx.create<nm_w::backward_euler<policy>>(p);
 
   p.clear();
-  p.insert<std::string>("name", "j2");
-  p.insert<std::string>("hardening_source", "hardening");
-  p.insert<std::string>("strain_source", "stepper");
-  p.insert<std::string>("solver_source", "solver");
-  p.insert<T2>("K", T2{166.67});
-  p.insert<T2>("G", T2{76.92});
-  p.insert<T2>("sigma_0", T2{50.0});
-  ctx.create<nm_w::j2_plasticity<policy>>(p);
+  add<nm_w::j2_plasticity<policy>>(ctx, "j2",
+      {{"hardening_source", "hardening"}, {"strain_source", "stepper"}, {"solver_source", "solver"}, {"K", T2{166.67}},
+       {"G", T2{76.92}}, {"sigma_0", T2{50.0}}});
 
   try {
     ctx.finalize();
@@ -454,33 +403,15 @@ TEST(WireMaterials, WrongTypeIsNotReportedAsMissing) {
 TEST(WireMaterials, AFailedConstructionLeavesNoMaterialBehind) {
   using T2 = policy::value_type;
   nm_w::material_context<policy> ctx;
-  policy::ParameterHandler p;
 
-  p.insert<std::string>("name", "stepper");
-  p.insert<T2>("increment", T2{0.01});
-  p.insert<std::vector<std::size_t>>("indices", {0, 0});
-  ctx.create<nm_w::tensor_component_stepper<2, policy>>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "hardening");
-  p.insert<std::string>("source", "j2");
-  p.insert<T2>("K", T2{1000.0});
-  ctx.create<nm_w::linear_isotropic_hardening<policy>>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "solver");
-  EXPECT_ANY_THROW(ctx.create<nm_w::backward_euler<policy>>(p))
+  add<nm_w::tensor_component_stepper<2, policy>>(ctx, "stepper",
+      {{"increment", T2{0.01}}, {"indices", std::vector<std::size_t>{0, 0}}});
+  add<nm_w::linear_isotropic_hardening<policy>>(ctx, "hardening", {{"source", "j2"}, {"K", T2{1000.0}}});
+  EXPECT_ANY_THROW((add<nm_w::backward_euler<policy>>(ctx, "solver")))
       << "backward_euler must reject a missing \"function\"";
-
-  p.clear();
-  p.insert<std::string>("name", "j2");
-  p.insert<std::string>("hardening_source", "hardening");
-  p.insert<std::string>("strain_source", "stepper");
-  p.insert<std::string>("solver_source", "solver");
-  p.insert<T2>("K", T2{166.67});
-  p.insert<T2>("G", T2{76.92});
-  p.insert<T2>("sigma_0", T2{50.0});
-  ctx.create<nm_w::j2_plasticity<policy>>(p);
+  add<nm_w::j2_plasticity<policy>>(ctx, "j2",
+      {{"hardening_source", "hardening"}, {"strain_source", "stepper"}, {"solver_source", "solver"}, {"K", T2{166.67}},
+       {"G", T2{76.92}}, {"sigma_0", T2{50.0}}});
 
   try {
     ctx.finalize();
@@ -497,26 +428,13 @@ TEST(WireMaterials, AFailedConstructionLeavesNoMaterialBehind) {
 TEST(WireMaterials, MissingIsStillReportedAsMissing) {
   using T2 = policy::value_type;
   nm_w::material_context<policy> ctx;
-  policy::ParameterHandler p;
 
-  p.insert<std::string>("name", "stepper");
-  p.insert<T2>("increment", T2{0.01});
-  p.insert<std::vector<std::size_t>>("indices", {0, 0});
-  ctx.create<nm_w::tensor_component_stepper<2, policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "hardening");
-  p.insert<std::string>("source", "j2");
-  p.insert<T2>("K", T2{1000.0});
-  ctx.create<nm_w::linear_isotropic_hardening<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "j2");
-  p.insert<std::string>("hardening_source", "hardening");
-  p.insert<std::string>("strain_source", "stepper");
-  p.insert<std::string>("solver_source", "no_such_solver");
-  p.insert<T2>("K", T2{166.67});
-  p.insert<T2>("G", T2{76.92});
-  p.insert<T2>("sigma_0", T2{50.0});
-  ctx.create<nm_w::j2_plasticity<policy>>(p);
+  add<nm_w::tensor_component_stepper<2, policy>>(ctx, "stepper",
+      {{"increment", T2{0.01}}, {"indices", std::vector<std::size_t>{0, 0}}});
+  add<nm_w::linear_isotropic_hardening<policy>>(ctx, "hardening", {{"source", "j2"}, {"K", T2{1000.0}}});
+  add<nm_w::j2_plasticity<policy>>(ctx, "j2",
+      {{"hardening_source", "hardening"}, {"strain_source", "stepper"}, {"solver_source", "no_such_solver"},
+       {"K", T2{166.67}}, {"G", T2{76.92}}, {"sigma_0", T2{50.0}}});
 
   try {
     ctx.finalize();

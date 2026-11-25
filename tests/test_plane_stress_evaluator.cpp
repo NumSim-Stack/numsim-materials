@@ -12,6 +12,7 @@
 #include "numsim-materials/umat/plane_stress_evaluator.h"
 #include "numsim-materials/solvers/local_newton.h"
 #include "numsim-materials/materials/j2_plasticity.h"
+#include "test_support.h"
 
 namespace {
 
@@ -25,6 +26,7 @@ using param_type = policy::ParameterHandler;
 using tensor2 = tmech::tensor<T, 3, 2>;
 using ps_evaluator = u::plane_stress_evaluator<policy>;
 using evaluator = u::material_point_evaluator<policy>;
+using numsim::materials::test::add;
 
 constexpr T K = 166.67;
 constexpr T G = 76.92;
@@ -35,53 +37,24 @@ const T E = 9.0 * K * G / (3.0 * K + G);
 const T nu = (3.0 * K - 2.0 * G) / (2.0 * (3.0 * K + G));
 
 void add_strain_source(ctx_type& ctx) {
-  param_type p;
-  p.insert<std::string>("name", "stepper");
-  ctx.create<nm::external_strain_source<policy>>(p);
+  add<nm::external_strain_source<policy>>(ctx, "stepper");
 }
 
 void build_elastic(ctx_type& ctx) {
   add_strain_source(ctx);
-  param_type p;
-  p.clear();
-  p.insert<std::string>("name", "elastic");
-  p.insert<std::string>("strain_producer_name", "stepper");
-  p.insert<T>("K", K);
-  p.insert<T>("G", G);
-  ctx.create<nm::linear_elasticity<policy>>(p);
+  add<nm::linear_elasticity<policy>>(ctx, "elastic", {{"strain_producer_name", "stepper"}, {"K", K}, {"G", G}});
   ctx.finalize();
 }
 
 void build_j2(ctx_type& ctx) {
   add_strain_source(ctx);
-  param_type p;
 
-  p.clear();
-  p.insert<std::string>("name", "elastic");
-  p.insert<std::string>("strain_producer_name", "stepper");
-  p.insert<T>("K", K);
-  p.insert<T>("G", G);
-  ctx.create<nm::linear_elasticity<policy>>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "solver");
-  ctx.create<nm::local_newton<policy>>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "hardening");
-  p.insert<std::string>("source", "j2");
-  p.insert<T>("K", H_mod);
-  ctx.create<nm::linear_isotropic_hardening<policy>>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "j2");
-  p.insert<T>("K", K);
-  p.insert<std::string>("hardening_source", "hardening");
-  p.insert<std::string>("strain_source", "stepper");
-  p.insert<std::string>("solver_source", "solver");
-  p.insert<T>("G", G);
-  p.insert<T>("sigma_0", sigma_0);
-  ctx.create<nm::j2_plasticity<policy>>(p);
+  add<nm::linear_elasticity<policy>>(ctx, "elastic", {{"strain_producer_name", "stepper"}, {"K", K}, {"G", G}});
+  add<nm::local_newton<policy>>(ctx, "solver");
+  add<nm::linear_isotropic_hardening<policy>>(ctx, "hardening", {{"source", "j2"}, {"K", H_mod}});
+  add<nm::j2_plasticity<policy>>(ctx, "j2",
+      {{"K", K}, {"hardening_source", "hardening"}, {"strain_source", "stepper"}, {"solver_source", "solver"}, {"G", G},
+       {"sigma_0", sigma_0}});
 
   ctx.finalize();
 }

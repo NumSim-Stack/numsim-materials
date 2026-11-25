@@ -5,6 +5,7 @@
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/materials/constant_scalar.h"
 #include "numsim-materials/materials/scalar_split.h"
+#include "test_support.h"
 
 namespace {
 
@@ -13,17 +14,11 @@ using policy = nm::material_policy_default;
 using T = policy::value_type;
 using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
+using numsim::materials::test::add;
 
 void build(ctx_type &ctx, std::vector<T> const &weights) {
-  param_type p;
-  p.insert<std::string>("name", "c");
-  p.insert<T>("value", 2.0);
-  ctx.create<nm::constant_scalar<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "split");
-  p.insert<std::string>("source", "c");
-  p.insert<std::vector<T>>("weights", weights);
-  ctx.create<nm::scalar_split<policy>>(p);
+  add<nm::constant_scalar<policy>>(ctx, "c", {{"value", 2.0}});
+  add<nm::scalar_split<policy>>(ctx, "split", {{"source", "c"}, {"weights", std::vector<T>(weights)}});
 }
 
 TEST(ScalarSplit, OneOutputPerWeight) {

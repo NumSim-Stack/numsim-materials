@@ -18,6 +18,7 @@
 #include "numsim-materials/materials/von_mises_state_function.h"
 #include "numsim-materials/umat/external_state_source.h"
 #include "numsim-materials/umat/json_model.h"
+#include "test_support.h"
 
 /// Materials that had no test at all. Three of the five are the SECOND of a
 /// pair whose first is well covered -- exponential hardening beside linear,
@@ -32,6 +33,7 @@ using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
 using tensor2 = tmech::tensor<T, 3, 2>;
 using tensor4 = tmech::tensor<T, 3, 4>;
+using numsim::materials::test::add;
 
 /// Publishes one scalar under a caller-chosen property name, so a material can
 /// be exercised in isolation instead of behind a full plasticity model. The
@@ -70,11 +72,7 @@ template <typename Material>
 std::unique_ptr<ctx_type> with_scalar_source(const std::string& property,
                                              T value, param_type mat) {
   auto ctx = std::make_unique<ctx_type>();
-  param_type p;
-  p.insert<std::string>("name", "src");
-  p.insert<std::string>("property", property);
-  p.insert<T>("value", value);
-  ctx->template create<scalar_source_stub<policy>>(p);
+  add<scalar_source_stub<policy>>(*ctx, "src", {{"property", property}, {"value", value}});
   ctx->template create<Material>(mat);
   ctx->finalize();
   ctx->update();
@@ -83,10 +81,7 @@ std::unique_ptr<ctx_type> with_scalar_source(const std::string& property,
 
 /// A scalar_stepper driving `name`, so a scalar consumer has a live source.
 void add_driver(ctx_type& ctx, const std::string& name, T increment) {
-  param_type p;
-  p.insert<std::string>("name", name);
-  p.insert<T>("increment", increment);
-  ctx.create<nm::scalar_stepper<policy>>(p);
+  add<nm::scalar_stepper<policy>>(ctx, name, {{"increment", increment}});
 }
 
 // ---------------------------------------------------------------------------
@@ -188,10 +183,7 @@ TEST(ScalarComplementWeight, IsOneMinusItsSource) {
   constexpr T inc = 0.1;
   ctx_type ctx;
   add_driver(ctx, "frac", inc);
-  param_type p;
-  p.insert<std::string>("name", "complement");
-  p.insert<std::string>("source", "frac::state");
-  ctx.create<nm::scalar_complement_weight<policy>>(p);
+  add<nm::scalar_complement_weight<policy>>(ctx, "complement", {{"source", "frac::state"}});
   ctx.finalize();
 
   for (int step = 1; step <= 8; ++step) {
@@ -211,22 +203,11 @@ TEST(StrainEnergyStateFunction, DerivativeMatchesAFiniteDifference) {
   constexpr T K = 166.67, G = 76.92, E_mod = 9 * K * G / (3 * K + G);
   auto build = [&](T e11) {
     auto ctx = std::make_unique<ctx_type>();
-    param_type p;
-    p.insert<std::string>("name", "stepper");
-    p.insert<T>("increment", e11);
-    p.insert<std::vector<std::size_t>>("indices", {0, 0});
-    ctx->create<nm::tensor_component_stepper<2, policy>>(p);
-    p.clear();
-    p.insert<std::string>("name", "elastic");
-    p.insert<std::string>("strain_producer_name", "stepper");
-    p.insert<T>("K", K); p.insert<T>("G", G);
-    ctx->create<nm::linear_elasticity<policy>>(p);
-    p.clear();
-    p.insert<std::string>("name", "state");
-    p.insert<std::string>("strain_source", "stepper");
-    p.insert<std::string>("tangent_source", "elastic");
-    p.insert<T>("youngs_modulus", E_mod);
-    ctx->create<nm::strain_energy_state_function<policy>>(p);
+    add<nm::tensor_component_stepper<2, policy>>(*ctx, "stepper",
+        {{"increment", e11}, {"indices", std::vector<std::size_t>{0, 0}}});
+    add<nm::linear_elasticity<policy>>(*ctx, "elastic", {{"strain_producer_name", "stepper"}, {"K", K}, {"G", G}});
+    add<nm::strain_energy_state_function<policy>>(*ctx, "state",
+        {{"strain_source", "stepper"}, {"tangent_source", "elastic"}, {"youngs_modulus", E_mod}});
     ctx->finalize();
     ctx->update();
     return ctx;
@@ -278,18 +259,10 @@ tensor2 sym_tensor(T a, T b, T c, T d, T e, T f) {
 
 std::unique_ptr<ctx_type> asymmetric_energy_model(tensor2 const &strain) {
   auto ctx = std::make_unique<ctx_type>();
-  param_type p;
-  p.insert<std::string>("name", "strain");
-  ctx->create<nm::external_strain_source<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "elastic");
-  ctx->create<asymmetric_tangent_stub<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "state");
-  p.insert<std::string>("strain_source", "strain");
-  p.insert<std::string>("tangent_source", "elastic");
-  p.insert<T>("youngs_modulus", 200.0);
-  ctx->create<nm::strain_energy_state_function<policy>>(p);
+  add<nm::external_strain_source<policy>>(*ctx, "strain");
+  add<asymmetric_tangent_stub<policy>>(*ctx, "elastic");
+  add<nm::strain_energy_state_function<policy>>(*ctx, "state",
+      {{"strain_source", "strain"}, {"tangent_source", "elastic"}, {"youngs_modulus", 200.0}});
   ctx->finalize();
   dynamic_cast<nm::external_strain_source<policy> *>(ctx->find("strain"))->bind(tensor2{}, strain);
   ctx->update();
@@ -321,17 +294,11 @@ TEST(StrainEnergyStateFunction, AsymmetricTangentGivesTheFiniteDifferenceGradien
 TEST(VectorStrainStateFunction, PicksOneComponentAndIsSignSymmetric) {
   auto build = [](T e11) {
     auto ctx = std::make_unique<ctx_type>();
-    param_type p;
-    p.insert<std::string>("name", "stepper");
-    p.insert<T>("increment", e11);
-    p.insert<std::vector<std::size_t>>("indices", {0, 0});
-    ctx->create<nm::tensor_component_stepper<2, policy>>(p);
-    p.clear();
-    p.insert<std::string>("name", "state");
-    p.insert<std::string>("strain_source", "stepper");
-    p.insert<std::vector<std::size_t>>("n_direction", {0});
-    p.insert<std::vector<std::size_t>>("m_direction", {0});
-    ctx->create<nm::vector_strain_state_function<policy>>(p);
+    add<nm::tensor_component_stepper<2, policy>>(*ctx, "stepper",
+        {{"increment", e11}, {"indices", std::vector<std::size_t>{0, 0}}});
+    add<nm::vector_strain_state_function<policy>>(*ctx, "state",
+        {{"strain_source", "stepper"}, {"n_direction", std::vector<std::size_t>{0}},
+         {"m_direction", std::vector<std::size_t>{0}}});
     ctx->finalize();
     ctx->update();
     return ctx;

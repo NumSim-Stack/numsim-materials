@@ -8,6 +8,7 @@
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/materials/tensor_component_stepper.h"
 #include "numsim-materials/solvers/local_newton.h"
+#include "test_support.h"
 
 namespace {
 
@@ -17,6 +18,7 @@ using T = policy::value_type;
 using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
 using stepper2 = nm::tensor_component_stepper<2, policy>;
+using numsim::materials::test::add;
 
 // --- material_ref::get() before wiring (#59) ---
 
@@ -67,17 +69,9 @@ private:
 
 TEST(WiringContract, AMaterialRefReadBeforeFinalizeThrows) {
   ctx_type ctx;
-  param_type p;
 
-  p.insert<std::string>("name", "solver");
-  p.insert<T>("tolerance", T{1e-10});
-  p.insert<int>("max_iter", 50);
-  ctx.create<nm::local_newton<policy>>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "holder");
-  p.insert<std::string>("solver_source", "solver");
-  auto& holder = ctx.create<ref_holder<policy>>(p);
+  add<nm::local_newton<policy>>(ctx, "solver", {{"tolerance", T{1e-10}}, {"max_iter", 50}});
+  auto& holder = add<ref_holder<policy>>(ctx, "holder", {{"solver_source", "solver"}});
 
   // Wiring happens in finalize(), which has not run. Before the guard this
   // dereferenced nullptr in Release. Both overloads, because a material can
@@ -88,17 +82,9 @@ TEST(WiringContract, AMaterialRefReadBeforeFinalizeThrows) {
 
 TEST(WiringContract, TheUnwiredRefErrorNamesTheTarget) {
   ctx_type ctx;
-  param_type p;
 
-  p.insert<std::string>("name", "the_solver");
-  p.insert<T>("tolerance", T{1e-10});
-  p.insert<int>("max_iter", 50);
-  ctx.create<nm::local_newton<policy>>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "holder");
-  p.insert<std::string>("solver_source", "the_solver");
-  auto& holder = ctx.create<ref_holder<policy>>(p);
+  add<nm::local_newton<policy>>(ctx, "the_solver", {{"tolerance", T{1e-10}}, {"max_iter", 50}});
+  auto& holder = add<ref_holder<policy>>(ctx, "holder", {{"solver_source", "the_solver"}});
 
   try {
     holder.touch_target();
@@ -113,17 +99,9 @@ TEST(WiringContract, TheUnwiredRefErrorNamesTheTarget) {
 /// pass the test above while breaking every model.
 TEST(WiringContract, AMaterialRefReadAfterFinalizeSucceeds) {
   ctx_type ctx;
-  param_type p;
 
-  p.insert<std::string>("name", "solver");
-  p.insert<T>("tolerance", T{1e-10});
-  p.insert<int>("max_iter", 50);
-  ctx.create<nm::local_newton<policy>>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "holder");
-  p.insert<std::string>("solver_source", "solver");
-  auto& holder = ctx.create<ref_holder<policy>>(p);
+  add<nm::local_newton<policy>>(ctx, "solver", {{"tolerance", T{1e-10}}, {"max_iter", 50}});
+  auto& holder = add<ref_holder<policy>>(ctx, "holder", {{"solver_source", "solver"}});
 
   ctx.finalize();
   EXPECT_NO_THROW(holder.touch_target());
@@ -157,11 +135,7 @@ TEST(WiringContract, AMaterialsOwnUpdateStillDrivesItsProperty) {
                 "tensor_component_stepper lost its update()");
 
   ctx_type ctx;
-  param_type p;
-  p.insert<std::string>("name", "stepper");
-  p.insert<T>("increment", T{0.25});
-  p.insert<std::vector<std::size_t>>("indices", {0, 0});
-  ctx.create<stepper2>(p);
+  add<stepper2>(ctx, "stepper", {{"increment", T{0.25}}, {"indices", std::vector<std::size_t>{0, 0}}});
   ctx.finalize();
   ctx.update();
 

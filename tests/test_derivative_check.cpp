@@ -11,6 +11,7 @@
 #include "numsim-materials/materials/linear_isotropic_hardening.h"
 #include "numsim-materials/materials/tensor_component_stepper.h"
 #include "numsim-materials/solvers/local_newton.h"
+#include "test_support.h"
 
 /// check_derivative(): name the output and the input; the graph perturbs the input along the directions of its
 /// codec, reverting and updating as a host does.
@@ -23,6 +24,7 @@ using T = policy::value_type;
 using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
 using tensor2 = tmech::tensor<T, 3, 2>;
+using numsim::materials::test::add;
 
 param_type check(std::string const &output, std::string const &input, std::string const &analytical) {
   param_type p;
@@ -59,28 +61,12 @@ struct j2_point {
       strain = &ctx.create<nm::external_strain_source<policy>>(p);
     }
     p.clear();
-    p.insert<std::string>("name", "elastic");
-    p.insert<std::string>("strain_producer_name", "stepper");
-    p.insert<T>("K", K);
-    p.insert<T>("G", G);
-    ctx.create<nm::linear_elasticity<policy>>(p);
-    p.clear();
-    p.insert<std::string>("name", "solver");
-    ctx.create<nm::local_newton<policy>>(p);
-    p.clear();
-    p.insert<std::string>("name", "hardening");
-    p.insert<std::string>("source", "j2");
-    p.insert<T>("K", T{1000.0});
-    ctx.create<nm::linear_isotropic_hardening<policy>>(p);
-    p.clear();
-    p.insert<std::string>("name", "j2");
-    p.insert<std::string>("hardening_source", "hardening");
-    p.insert<std::string>("strain_source", "stepper");
-    p.insert<std::string>("solver_source", "solver");
-    p.insert<T>("K", K);
-    p.insert<T>("G", G);
-    p.insert<T>("sigma_0", T{50.0});
-    ctx.create<nm::j2_plasticity<policy>>(p);
+    add<nm::linear_elasticity<policy>>(ctx, "elastic", {{"strain_producer_name", "stepper"}, {"K", K}, {"G", G}});
+    add<nm::local_newton<policy>>(ctx, "solver");
+    add<nm::linear_isotropic_hardening<policy>>(ctx, "hardening", {{"source", "j2"}, {"K", T{1000.0}}});
+    add<nm::j2_plasticity<policy>>(ctx, "j2",
+        {{"hardening_source", "hardening"}, {"strain_source", "stepper"}, {"solver_source", "solver"}, {"K", K},
+         {"G", G}, {"sigma_0", T{50.0}}});
     ctx.finalize();
   }
 
@@ -131,9 +117,7 @@ struct scalar_point {
 
   explicit scalar_point(T value) {
     param_type p;
-    p.insert<std::string>("name", "x");
-    x = &ctx.create<nm::external_scalar_source<policy>>(p);
-    p.clear();
+    x = &add<nm::external_scalar_source<policy>>(ctx, "x");
     p.insert<std::string>("name", "square");
     ctx.create<square<policy>>(p);
     ctx.finalize();
@@ -427,9 +411,7 @@ TEST(DerivativeCheck, ComponentsSelectTheDirections) {
 
 TEST(DerivativeCheck, AnInputWithoutACodecIsRejected) {
   ctx_type ctx;
-  param_type p;
-  p.insert<std::string>("name", "frozen");
-  ctx.create<frozen<policy>>(p);
+  add<frozen<policy>>(ctx, "frozen");
   ctx.finalize();
   auto const message{thrown([&] { ctx.check_derivative(check("frozen::value", "frozen::value", "frozen::value")); })};
   EXPECT_NE(message.find("frozen::value"), std::string::npos) << message;
@@ -439,12 +421,8 @@ TEST(DerivativeCheck, AnInputWithoutACodecIsRejected) {
 /// F is a two-point tensor: all nine components are perturbed.
 TEST(DerivativeCheck, TheDeterminantOfANonSymmetricDeformationGradient) {
   ctx_type ctx;
-  param_type p;
-  p.insert<std::string>("name", "F");
-  auto &F{ctx.create<nm::external_deformation_gradient_source<policy>>(p)};
-  p.clear();
-  p.insert<std::string>("name", "cof");
-  ctx.create<cofactor<policy>>(p);
+  auto &F{add<nm::external_deformation_gradient_source<policy>>(ctx, "F")};
+  add<cofactor<policy>>(ctx, "cof");
   ctx.finalize();
   tensor2 f{tmech::eye<T, 3, 2>()};
   f(0, 1) = 0.3;
@@ -459,15 +437,9 @@ TEST(DerivativeCheck, TheDeterminantOfANonSymmetricDeformationGradient) {
 
 TEST(DerivativeCheck, AnotherHostBoundInputKeepsItsValue) {
   ctx_type ctx;
-  param_type p;
-  p.insert<std::string>("name", "t");
-  auto &t{ctx.create<nm::external_scalar_source<policy>>(p)};
-  p.clear();
-  p.insert<std::string>("name", "x");
-  auto &x{ctx.create<nm::external_scalar_source<policy>>(p)};
-  p.clear();
-  p.insert<std::string>("name", "rate");
-  ctx.create<rate<policy>>(p);
+  auto &t{add<nm::external_scalar_source<policy>>(ctx, "t")};
+  auto &x{add<nm::external_scalar_source<policy>>(ctx, "x")};
+  add<rate<policy>>(ctx, "rate");
   ctx.finalize();
   t.bind(T{1}, T{1.5});
   x.bind(T{0}, T{2});
@@ -481,15 +453,9 @@ TEST(DerivativeCheck, AnotherHostBoundInputKeepsItsValue) {
 
 TEST(DerivativeCheck, AnOutputAnotherCallbackFillsIsRejected) {
   ctx_type ctx;
-  param_type p;
-  p.insert<std::string>("name", "x");
-  ctx.create<nm::external_scalar_source<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "bare");
-  ctx.create<bare<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "square");
-  ctx.create<square<policy>>(p); // reads x::state, a host-bound input
+  add<nm::external_scalar_source<policy>>(ctx, "x");
+  add<bare<policy>>(ctx, "bare");
+  add<square<policy>>(ctx, "square"); // reads x::state, a host-bound input
   ctx.finalize();
   ctx.update();
   auto const message{thrown([&] { ctx.check_derivative(check("bare::copy", "bare::bare", "bare::copy")); })};
@@ -499,12 +465,8 @@ TEST(DerivativeCheck, AnOutputAnotherCallbackFillsIsRejected) {
 
 TEST(DerivativeCheck, ATangentThatIsNotMinorSymmetricFails) {
   ctx_type ctx;
-  param_type p;
-  p.insert<std::string>("name", "e");
-  ctx.create<nm::external_strain_source<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "shear");
-  ctx.create<shear<policy>>(p);
+  add<nm::external_strain_source<policy>>(ctx, "e");
+  add<shear<policy>>(ctx, "shear");
   ctx.finalize();
   ctx.update();
   auto const symmetric{ctx.check_derivative(check("shear::value", "e::strain", "shear::symmetric"))};
@@ -533,15 +495,9 @@ TEST(DerivativeCheck, AWrongAnalyticalSizeLeavesTheStateAlone) {
 
 TEST(DerivativeCheck, AnInputTheOutputDoesNotDependOnIsRejected) {
   ctx_type ctx;
-  param_type p;
-  p.insert<std::string>("name", "x");
-  ctx.create<nm::external_scalar_source<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "y");
-  ctx.create<nm::external_scalar_source<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "square");
-  ctx.create<square<policy>>(p);
+  add<nm::external_scalar_source<policy>>(ctx, "x");
+  add<nm::external_scalar_source<policy>>(ctx, "y");
+  add<square<policy>>(ctx, "square");
   ctx.finalize();
   ctx.update();
   auto const message{thrown([&] { ctx.check_derivative(check("square::value", "y::state", "square::slope")); })};
@@ -551,9 +507,7 @@ TEST(DerivativeCheck, AnInputTheOutputDoesNotDependOnIsRejected) {
 TEST(DerivativeCheck, AVectorInputHasThreeDirections) {
   ctx_type ctx;
   param_type p;
-  p.insert<std::string>("name", "v");
-  ctx.create<vector_source<policy>>(p);
-  p.clear();
+  add<vector_source<policy>>(ctx, "v");
   p.insert<std::string>("name", "dot");
   ctx.create<dot<policy>>(p);
   ctx.finalize();

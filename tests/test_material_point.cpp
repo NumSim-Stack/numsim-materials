@@ -13,6 +13,7 @@
 #include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/umat/statev_map.h"
 #include "test_fixture_materials.h"
+#include "test_support.h"
 
 // The material point core (#184 phase 2): input variables, output variables and history management, with the
 // history owned either by the host (load/store) or by the engine (accept/reset).
@@ -26,6 +27,7 @@ using tensor2 = tmech::tensor<T, 3, 2>;
 using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
 using point_type = nm::material_point<policy>;
+using numsim::materials::test::add;
 
 /// "count" (history) counts the accepted steps, "last" (history) is the strain, "stress" = 2 strain + last_n;
 /// throws when |strain| exceeds "limit".
@@ -101,17 +103,10 @@ struct setup {
   ctx_type ctx;
 
   explicit setup(T limit = 1e30, bool tagged = false) {
-    param_type p;
-    p.insert<std::string>("name", "strain");
-    ctx.create<nm::external_strain_source<policy>>(p);
-    p.clear();
-    p.insert<std::string>("name", "mem");
-    p.insert<T>("limit", limit);
-    ctx.create<memory<policy>>(p);
+    add<nm::external_strain_source<policy>>(ctx, "strain");
+    add<memory<policy>>(ctx, "mem", {{"limit", limit}});
     if (tagged) {
-      p.clear();
-      p.insert<std::string>("name", "tag");
-      ctx.create<nm::test::int_counter<policy>>(p);
+      add<nm::test::int_counter<policy>>(ctx, "tag");
     }
     ctx.finalize();
   }
@@ -304,10 +299,7 @@ TEST(MaterialPoint, IteratesToTheResidual) {
 TEST(MaterialPoint, ResidualCountsByMagnitudeAndNaNNeverConverges) {
   for (T const value : {T{-1}, std::numeric_limits<T>::quiet_NaN()}) {
     ctx_type ctx;
-    param_type p;
-    p.insert<std::string>("name", "stuck");
-    p.insert<T>("value", value);
-    ctx.create<nm::constant_scalar<policy>>(p);
+    add<nm::constant_scalar<policy>>(ctx, "stuck", {{"value", value}});
     ctx.finalize();
     auto parameters{residual("stuck::value")};
     parameters.insert<int>("max_passes", 3);
@@ -318,9 +310,7 @@ TEST(MaterialPoint, ResidualCountsByMagnitudeAndNaNNeverConverges) {
 
 TEST(MaterialPoint, InvalidResidualSettingsAreFatal) {
   ctx_type ctx;
-  param_type p;
-  p.insert<std::string>("name", "relax");
-  ctx.create<relaxer<policy>>(p);
+  add<relaxer<policy>>(ctx, "relax");
   ctx.finalize();
   for (T const tolerance : {T{-1}, std::numeric_limits<T>::quiet_NaN()}) {
     auto parameters{residual("relax::residual")};

@@ -11,6 +11,7 @@
 #include "numsim-materials/umat/tensor_conversion.h"
 #include "numsim-materials/solvers/local_newton.h"
 #include "numsim-materials/materials/j2_plasticity.h"
+#include "test_support.h"
 
 namespace {
 
@@ -22,6 +23,7 @@ using T = policy::value_type;
 using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
 using tensor2 = tmech::tensor<T, 3, 2>;
+using numsim::materials::test::add;
 
 constexpr T K = 166.67;
 constexpr T G = 76.92;
@@ -32,34 +34,13 @@ constexpr T d_eps = 0.05;
 /// Everything downstream of the strain producer. Identical in both contexts —
 /// only the producer differs, which is the whole point of the comparison.
 void add_j2_chain(ctx_type& ctx) {
-  param_type p;
 
-  p.clear();
-  p.insert<std::string>("name", "elastic");
-  p.insert<std::string>("strain_producer_name", "stepper");
-  p.insert<T>("K", K);
-  p.insert<T>("G", G);
-  ctx.create<nm::linear_elasticity<policy>>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "solver");
-  ctx.create<nm::local_newton<policy>>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "hardening");
-  p.insert<std::string>("source", "j2");
-  p.insert<T>("K", H_mod);
-  ctx.create<nm::linear_isotropic_hardening<policy>>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "j2");
-  p.insert<T>("K", K);
-  p.insert<std::string>("hardening_source", "hardening");
-  p.insert<std::string>("strain_source", "stepper");
-  p.insert<std::string>("solver_source", "solver");
-  p.insert<T>("G", G);
-  p.insert<T>("sigma_0", sigma_0);
-  ctx.create<nm::j2_plasticity<policy>>(p);
+  add<nm::linear_elasticity<policy>>(ctx, "elastic", {{"strain_producer_name", "stepper"}, {"K", K}, {"G", G}});
+  add<nm::local_newton<policy>>(ctx, "solver");
+  add<nm::linear_isotropic_hardening<policy>>(ctx, "hardening", {{"source", "j2"}, {"K", H_mod}});
+  add<nm::j2_plasticity<policy>>(ctx, "j2",
+      {{"K", K}, {"hardening_source", "hardening"}, {"strain_source", "stepper"}, {"solver_source", "solver"}, {"G", G},
+       {"sigma_0", sigma_0}});
 }
 
 tensor2 uniaxial(T value) {
@@ -80,19 +61,14 @@ tensor2 uniaxial(T value) {
 TEST(ExternalStrainSource, ReproducesStepperTrajectoryExactly) {
   ctx_type ref;
   {
-    param_type p;
-    p.insert<std::string>("name", "stepper");
-    p.insert<T>("increment", d_eps);
-    p.insert<std::vector<std::size_t>>("indices", {0, 0});
-    ref.create<nm::tensor_component_stepper<2, policy>>(p);
+    add<nm::tensor_component_stepper<2, policy>>(ref, "stepper",
+        {{"increment", d_eps}, {"indices", std::vector<std::size_t>{0, 0}}});
   }
   add_j2_chain(ref);
   ref.finalize();
 
   ctx_type ext;
-  param_type ep;
-  ep.insert<std::string>("name", "stepper");
-  auto& src = ext.create<nm::external_strain_source<policy>>(ep);
+  auto& src = add<nm::external_strain_source<policy>>(ext, "stepper");
   add_j2_chain(ext);
   ext.finalize();
 
@@ -137,35 +113,16 @@ TEST(ExternalScalarSource, ReproducesScalarStepperCuringExactly) {
   constexpr T temp = 353.0;
 
   auto add_curing_chain = [](ctx_type& ctx) {
-    param_type p;
-    p.clear();
-    p.insert<std::string>("name", "solver");
-    p.insert<std::string>("function", "curing");
-    ctx.create<nm::backward_euler<policy>>(p);
-
-    p.clear();
-    p.insert<std::string>("name", "curing");
-    p.insert<T>("A", T{1e6});
-    p.insert<T>("E", T{50000});
-    p.insert<T>("n", T{1.2});
-    p.insert<T>("m", T{0.8});
-    p.insert<std::string>("temperature_name", "temperature");
-    p.insert<std::string>("timer_name", "time");
-    p.insert<std::string>("solver_name", "solver");
-    ctx.create<nm::autocatalytic_reaction<policy>>(p);
+    add<nm::backward_euler<policy>>(ctx, "solver", {{"function", "curing"}});
+    add<nm::autocatalytic_reaction<policy>>(ctx, "curing",
+        {{"A", T{1e6}}, {"E", T{50000}}, {"n", T{1.2}}, {"m", T{0.8}}, {"temperature_name", "temperature"},
+         {"timer_name", "time"}, {"solver_name", "solver"}});
   };
 
   ctx_type ref;
   {
-    param_type p;
-    p.clear();
-    p.insert<std::string>("name", "temperature");
-    p.insert<T>("increment", T{0});
-    ref.create<nm::scalar_stepper<policy>>(p);
-    p.clear();
-    p.insert<std::string>("name", "time");
-    p.insert<T>("increment", dt);
-    ref.create<nm::scalar_stepper<policy>>(p);
+    add<nm::scalar_stepper<policy>>(ref, "temperature", {{"increment", T{0}}});
+    add<nm::scalar_stepper<policy>>(ref, "time", {{"increment", dt}});
   }
   add_curing_chain(ref);
   ref.finalize();
@@ -175,13 +132,8 @@ TEST(ExternalScalarSource, ReproducesScalarStepperCuringExactly) {
   nm::external_scalar_source<policy>* temp_src = nullptr;
   nm::external_scalar_source<policy>* time_src = nullptr;
   {
-    param_type p;
-    p.clear();
-    p.insert<std::string>("name", "temperature");
-    temp_src = &ext.create<nm::external_scalar_source<policy>>(p);
-    p.clear();
-    p.insert<std::string>("name", "time");
-    time_src = &ext.create<nm::external_scalar_source<policy>>(p);
+    temp_src = &add<nm::external_scalar_source<policy>>(ext, "temperature");
+    time_src = &add<nm::external_scalar_source<policy>>(ext, "time");
   }
   add_curing_chain(ext);
   ext.finalize();
@@ -212,9 +164,7 @@ TEST(ExternalScalarSource, ReproducesScalarStepperCuringExactly) {
 /// old/new split must land on the right sides.
 TEST(ExternalStrainSource, BindsFromCanonicalBuffersWithEngineeringShear) {
   ctx_type ctx;
-  param_type p;
-  p.insert<std::string>("name", "stepper");
-  auto& src = ctx.create<nm::external_strain_source<policy>>(p);
+  auto& src = add<nm::external_strain_source<policy>>(ctx, "stepper");
   ctx.finalize();
 
   // STRAN and STRAN + DSTRAN, Abaqus/Standard order, engineering shear.
@@ -247,17 +197,8 @@ TEST(ExternalStrainSource, BindsFromCanonicalBuffersWithEngineeringShear) {
 /// existing strain consumer work against a history-valued "strain" unchanged.
 TEST(ExternalStrainSource, PlainConsumerSeesNewValue) {
   ctx_type ctx;
-  param_type p;
-  p.clear();
-  p.insert<std::string>("name", "stepper");
-  auto& src = ctx.create<nm::external_strain_source<policy>>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "elastic");
-  p.insert<std::string>("strain_producer_name", "stepper");
-  p.insert<T>("K", K);
-  p.insert<T>("G", G);
-  ctx.create<nm::linear_elasticity<policy>>(p);
+  auto& src = add<nm::external_strain_source<policy>>(ctx, "stepper");
+  add<nm::linear_elasticity<policy>>(ctx, "elastic", {{"strain_producer_name", "stepper"}, {"K", K}, {"G", G}});
   ctx.finalize();
 
   src.bind(uniaxial(0.001), uniaxial(0.002));

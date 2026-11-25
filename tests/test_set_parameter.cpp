@@ -8,6 +8,7 @@
 #include "numsim-materials/core/parameter_helpers.h"
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/driver/external_state_source.h"
+#include "test_support.h"
 #include <tmech/tmech.h>
 
 namespace {
@@ -18,6 +19,7 @@ using policy = nm::material_policy_default;
 using T = policy::value_type;
 using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
+using numsim::materials::test::add;
 using tensor2 = tmech::tensor<T, 3, 2>;   // named: commas break the gtest macros
 
 /// Too large for std::any's small buffer — a scalar would hide the bug.
@@ -56,11 +58,7 @@ private:
 };
 
 probe_material<policy>& build(ctx_type& ctx) {
-  param_type p;
-  p.insert<std::string>("name", "probe");
-  p.insert<T>("K", 100.0);
-  p.insert<big_parameter>("big", big_parameter{});
-  auto& m = ctx.create<probe_material<policy>>(p);
+  auto& m = add<probe_material<policy>>(ctx, "probe", {{"K", 100.0}, {"big", big_parameter{}}});
   ctx.finalize();
   return m;
 }
@@ -152,15 +150,9 @@ TEST(SetParameter, LeavesOtherParametersAlone) {
 /// parameters alone, so a write to K recomputes it on the next update.
 TEST(SetParameterShippedMaterials, AConstantTangentFollowsTheWrite) {
   ctx_type ctx;
-  param_type p;
-  p.insert<std::string>("name", "strain_in");
-  auto& src = ctx.create<nm::external_strain_source<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "elastic");
-  p.insert<std::string>("strain_producer_name", "strain_in");
-  p.insert<T>("K", 100.0);
-  p.insert<T>("G", 40.0);
-  auto& el = ctx.create<nm::linear_elasticity<policy>>(p);
+  auto& src = add<nm::external_strain_source<policy>>(ctx, "strain_in");
+  auto& el = add<nm::linear_elasticity<policy>>(ctx, "elastic",
+      {{"strain_producer_name", "strain_in"}, {"K", 100.0}, {"G", 40.0}});
   ctx.finalize();
 
   tensor2 eps;
@@ -201,18 +193,10 @@ TEST(SetParameterShippedMaterials, WriteIsLocalToTheMaterial) {
 /// Writing it afterwards cannot re-wire anything.
 TEST(SetParameterShippedMaterials, WritingAWiringKeyDoesNotRewire) {
   ctx_type ctx;
-  param_type p;
-  p.insert<std::string>("name", "strain_in");
-  auto& src = ctx.create<nm::external_strain_source<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "other");
-  ctx.create<nm::external_strain_source<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "elastic");
-  p.insert<std::string>("strain_producer_name", "strain_in");
-  p.insert<T>("K", 100.0);
-  p.insert<T>("G", 40.0);
-  auto& el = ctx.create<nm::linear_elasticity<policy>>(p);
+  auto& src = add<nm::external_strain_source<policy>>(ctx, "strain_in");
+  add<nm::external_strain_source<policy>>(ctx, "other");
+  auto& el = add<nm::linear_elasticity<policy>>(ctx, "elastic",
+      {{"strain_producer_name", "strain_in"}, {"K", 100.0}, {"G", 40.0}});
   ctx.finalize();
 
   el.template set_parameter<std::string>("strain_producer_name", "other");

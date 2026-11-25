@@ -20,6 +20,7 @@
 #include "numsim-materials/umat/json_model.h"
 #include "numsim-materials/umat/material_point_evaluator.h"
 #include "numsim-materials/umat/statev_map.h"
+#include "test_support.h"
 
 namespace {
 
@@ -32,6 +33,7 @@ using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
 using tensor2 = tmech::tensor<T, 3, 2>;
 using tensor4 = tmech::tensor<T, 3, 4>;
+using numsim::materials::test::add;
 
 constexpr T K = 0.833;
 constexpr T G = 0.386;
@@ -39,13 +41,8 @@ constexpr T G = 0.386;
 template <typename Model>
 nm::external_deformation_gradient_source<policy>& add_model(ctx_type& ctx) {
   param_type p;
-  p.insert<std::string>("name", "F");
-  auto& src = ctx.create<nm::external_deformation_gradient_source<policy>>(p);
-  p.clear();
-  p.insert<std::string>("name", "kinematics");
-  p.insert<std::string>("deformation_gradient_source", "F");
-  ctx.create<nm::deformation_gradient_kinematics<policy>>(p);
-  p.clear();
+  auto& src = add<nm::external_deformation_gradient_source<policy>>(ctx, "F");
+  add<nm::deformation_gradient_kinematics<policy>>(ctx, "kinematics", {{"deformation_gradient_source", "F"}});
   p.insert<std::string>("name", "model");
   p.insert<std::string>("deformation_gradient_source", "F");
   if constexpr (std::is_same_v<Model, nm::neo_hooke<policy>>)

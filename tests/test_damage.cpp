@@ -11,6 +11,7 @@
 #include "numsim-materials/materials/vector_strain_state_function.h"
 #include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/umat/json_model.h"
+#include "test_support.h"
 
 namespace {
 
@@ -20,52 +21,26 @@ using ctx_type = numsim::materials::material_context<policy>;
 using param_type = policy::ParameterHandler;
 using tensor2 = tmech::tensor<T, 3, 2>;
 using tensor4 = tmech::tensor<T, 3, 4>;
+using numsim::materials::test::add;
 
 T relative(tensor4 const &a, tensor4 const &b) { return tmech::norm(tensor4{a - b}) / tmech::norm(b); }
 
 class IsotropicDamageTest : public ::testing::Test {
 protected:
   void SetUp() override {
-    param_type p;
 
-    p.clear();
-    p.insert<std::string>("name", "stepper");
-    p.insert<T>("increment", T{0.001});
-    p.insert<std::vector<std::size_t>>("indices", {0, 0});
-    ctx.create<numsim::materials::tensor_component_stepper<2, policy>>(p);
-
-    p.clear();
-    p.insert<std::string>("name", "state_func");
-    p.insert<std::string>("strain_source", "stepper");
-    ctx.create<numsim::materials::von_mises_state_function<policy>>(p);
-
-    p.clear();
-    p.insert<std::string>("name", "yield");
-    p.insert<std::string>("state_source", "state_func");
-    p.insert<T>("kappa_critical", T{0.003});
-    ctx.create<numsim::materials::strain_threshold_yield<policy>>(p);
-
-    p.clear();
-    p.insert<std::string>("name", "damage_law");
-    p.insert<std::string>("yield_source", "yield");
-    p.insert<T>("kappa_0", T{0.003});
-    p.insert<T>("beta", T{100});
-    ctx.create<numsim::materials::exponential_damage_law<policy>>(p);
-
-    p.clear();
-    p.insert<std::string>("name", "elastic");
-    p.insert<std::string>("strain_producer_name", "stepper");
-    p.insert<T>("K", T{166.67});
-    p.insert<T>("G", T{76.92});
-    ctx.create<numsim::materials::linear_elasticity<policy>>(p);
-
-    p.clear();
-    p.insert<std::string>("name", "damaged");
-    p.insert<std::string>("elastic_source", "elastic");
-    p.insert<std::string>("damage_source", "damage_law");
-    p.insert<std::string>("state_source", "state_func");
-    p.insert<std::string>("yield_source", "yield");
-    ctx.create<numsim::materials::isotropic_damage<policy>>(p);
+    add<numsim::materials::tensor_component_stepper<2, policy>>(ctx, "stepper",
+        {{"increment", T{0.001}}, {"indices", std::vector<std::size_t>{0, 0}}});
+    add<numsim::materials::von_mises_state_function<policy>>(ctx, "state_func", {{"strain_source", "stepper"}});
+    add<numsim::materials::strain_threshold_yield<policy>>(ctx, "yield",
+        {{"state_source", "state_func"}, {"kappa_critical", T{0.003}}});
+    add<numsim::materials::exponential_damage_law<policy>>(ctx, "damage_law",
+        {{"yield_source", "yield"}, {"kappa_0", T{0.003}}, {"beta", T{100}}});
+    add<numsim::materials::linear_elasticity<policy>>(ctx, "elastic",
+        {{"strain_producer_name", "stepper"}, {"K", T{166.67}}, {"G", T{76.92}}});
+    add<numsim::materials::isotropic_damage<policy>>(ctx, "damaged",
+        {{"elastic_source", "elastic"}, {"damage_source", "damage_law"}, {"state_source", "state_func"},
+         {"yield_source", "yield"}});
 
     ctx.finalize();
   }
@@ -204,44 +179,18 @@ TEST_F(IsotropicDamageTest, UpdatePropertyLeavesAnExcludedProducerOut) {
 class TangentCheckerTest : public ::testing::Test {
 protected:
   void SetUp() override {
-    param_type p;
 
-    p.clear();
-    p.insert<std::string>("name", "stepper");
-    strain = &ctx.create<numsim::materials::external_strain_source<policy>>(p);
-
-    p.clear();
-    p.insert<std::string>("name", "state_func");
-    p.insert<std::string>("strain_source", "stepper");
-    ctx.create<numsim::materials::von_mises_state_function<policy>>(p);
-
-    p.clear();
-    p.insert<std::string>("name", "yield");
-    p.insert<std::string>("state_source", "state_func");
-    p.insert<T>("kappa_critical", T{0.003});
-    ctx.create<numsim::materials::strain_threshold_yield<policy>>(p);
-
-    p.clear();
-    p.insert<std::string>("name", "damage_law");
-    p.insert<std::string>("yield_source", "yield");
-    p.insert<T>("kappa_0", T{0.003});
-    p.insert<T>("beta", T{100});
-    ctx.create<numsim::materials::exponential_damage_law<policy>>(p);
-
-    p.clear();
-    p.insert<std::string>("name", "elastic");
-    p.insert<std::string>("strain_producer_name", "stepper");
-    p.insert<T>("K", T{166.67});
-    p.insert<T>("G", T{76.92});
-    ctx.create<numsim::materials::linear_elasticity<policy>>(p);
-
-    p.clear();
-    p.insert<std::string>("name", "damaged");
-    p.insert<std::string>("elastic_source", "elastic");
-    p.insert<std::string>("damage_source", "damage_law");
-    p.insert<std::string>("state_source", "state_func");
-    p.insert<std::string>("yield_source", "yield");
-    ctx.create<numsim::materials::isotropic_damage<policy>>(p);
+    strain = &add<numsim::materials::external_strain_source<policy>>(ctx, "stepper");
+    add<numsim::materials::von_mises_state_function<policy>>(ctx, "state_func", {{"strain_source", "stepper"}});
+    add<numsim::materials::strain_threshold_yield<policy>>(ctx, "yield",
+        {{"state_source", "state_func"}, {"kappa_critical", T{0.003}}});
+    add<numsim::materials::exponential_damage_law<policy>>(ctx, "damage_law",
+        {{"yield_source", "yield"}, {"kappa_0", T{0.003}}, {"beta", T{100}}});
+    add<numsim::materials::linear_elasticity<policy>>(ctx, "elastic",
+        {{"strain_producer_name", "stepper"}, {"K", T{166.67}}, {"G", T{76.92}}});
+    add<numsim::materials::isotropic_damage<policy>>(ctx, "damaged",
+        {{"elastic_source", "elastic"}, {"damage_source", "damage_law"}, {"state_source", "state_func"},
+         {"yield_source", "yield"}});
 
 
     ctx.finalize();

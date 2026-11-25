@@ -16,6 +16,7 @@
 #include "numsim-materials/umat/statev_map.h"
 #include "numsim-materials/solvers/local_newton.h"
 #include "numsim-materials/materials/j2_plasticity.h"
+#include "test_support.h"
 
 namespace {
 
@@ -28,6 +29,7 @@ using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
 using tensor2 = tmech::tensor<T, 3, 2>;
 using evaluator = u::material_point_evaluator<policy>;
+using numsim::materials::test::add;
 
 constexpr T K = 166.67;
 constexpr T G = 76.92;
@@ -36,38 +38,14 @@ constexpr T H_mod = 1000.0;
 
 /// The J2 chain, with a host-driven strain source named "stepper".
 void build_j2(ctx_type& ctx) {
-  param_type p;
 
-  p.clear();
-  p.insert<std::string>("name", "stepper");
-  ctx.create<nm::external_strain_source<policy>>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "elastic");
-  p.insert<std::string>("strain_producer_name", "stepper");
-  p.insert<T>("K", K);
-  p.insert<T>("G", G);
-  ctx.create<nm::linear_elasticity<policy>>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "solver");
-  ctx.create<nm::local_newton<policy>>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "hardening");
-  p.insert<std::string>("source", "j2");
-  p.insert<T>("K", H_mod);
-  ctx.create<nm::linear_isotropic_hardening<policy>>(p);
-
-  p.clear();
-  p.insert<std::string>("name", "j2");
-  p.insert<T>("K", K);
-  p.insert<std::string>("hardening_source", "hardening");
-  p.insert<std::string>("strain_source", "stepper");
-  p.insert<std::string>("solver_source", "solver");
-  p.insert<T>("G", G);
-  p.insert<T>("sigma_0", sigma_0);
-  ctx.create<nm::j2_plasticity<policy>>(p);
+  add<nm::external_strain_source<policy>>(ctx, "stepper");
+  add<nm::linear_elasticity<policy>>(ctx, "elastic", {{"strain_producer_name", "stepper"}, {"K", K}, {"G", G}});
+  add<nm::local_newton<policy>>(ctx, "solver");
+  add<nm::linear_isotropic_hardening<policy>>(ctx, "hardening", {{"source", "j2"}, {"K", H_mod}});
+  add<nm::j2_plasticity<policy>>(ctx, "j2",
+      {{"K", K}, {"hardening_source", "hardening"}, {"strain_source", "stepper"}, {"solver_source", "solver"}, {"G", G},
+       {"sigma_0", sigma_0}});
 
   ctx.finalize();
 }
@@ -91,37 +69,16 @@ TEST(MaterialPointEvaluator, ReproducesStepperDrivenTrajectory) {
 
   ctx_type ref;
   {
-    param_type p;
-    p.insert<std::string>("name", "stepper");
-    p.insert<T>("increment", d_eps);
-    p.insert<std::vector<std::size_t>>("indices", {0, 0});
-    ref.create<nm::tensor_component_stepper<2, policy>>(p);
+    add<nm::tensor_component_stepper<2, policy>>(ref, "stepper",
+        {{"increment", d_eps}, {"indices", std::vector<std::size_t>{0, 0}}});
   }
   {
-    param_type p;
-    p.clear();
-    p.insert<std::string>("name", "elastic");
-    p.insert<std::string>("strain_producer_name", "stepper");
-    p.insert<T>("K", K);
-    p.insert<T>("G", G);
-    ref.create<nm::linear_elasticity<policy>>(p);
-    p.clear();
-    p.insert<std::string>("name", "solver");
-    ref.create<nm::local_newton<policy>>(p);
-    p.clear();
-    p.insert<std::string>("name", "hardening");
-    p.insert<std::string>("source", "j2");
-    p.insert<T>("K", H_mod);
-    ref.create<nm::linear_isotropic_hardening<policy>>(p);
-    p.clear();
-    p.insert<std::string>("name", "j2");
-    p.insert<T>("K", K);
-    p.insert<std::string>("hardening_source", "hardening");
-    p.insert<std::string>("strain_source", "stepper");
-    p.insert<std::string>("solver_source", "solver");
-    p.insert<T>("G", G);
-    p.insert<T>("sigma_0", sigma_0);
-    ref.create<nm::j2_plasticity<policy>>(p);
+    add<nm::linear_elasticity<policy>>(ref, "elastic", {{"strain_producer_name", "stepper"}, {"K", K}, {"G", G}});
+    add<nm::local_newton<policy>>(ref, "solver");
+    add<nm::linear_isotropic_hardening<policy>>(ref, "hardening", {{"source", "j2"}, {"K", H_mod}});
+    add<nm::j2_plasticity<policy>>(ref, "j2",
+        {{"K", K}, {"hardening_source", "hardening"}, {"strain_source", "stepper"}, {"solver_source", "solver"},
+         {"G", G}, {"sigma_0", sigma_0}});
   }
   ref.finalize();
 
@@ -205,10 +162,7 @@ private:
 TEST(MaterialPointEvaluator, ACallAfterAFailedOneStartsFromStatev) {
   ctx_type failing, fresh;
   for (auto* ctx : {&failing, &fresh}) {
-    param_type p;
-    p.insert<std::string>("name", "fuse");
-    p.insert<T>("limit", 0.5);
-    ctx->create<fuse<policy>>(p);
+    add<fuse<policy>>(*ctx, "fuse", {{"limit", 0.5}});
     build_j2(*ctx);
   }
   evaluator eval(failing, j2_config()), reference(fresh, j2_config());
@@ -616,18 +570,9 @@ TEST(MaterialPointEvaluator, OmittingDrotLeavesStateUnrotated) {
 TEST(MaterialPointEvaluator, BindsTimeSourceAndExcludesItFromStatev) {
   ctx_type ctx;
   {
-    param_type p;
-    p.insert<std::string>("name", "stepper");
-    ctx.create<nm::external_strain_source<policy>>(p);
-    p.clear();
-    p.insert<std::string>("name", "clock");
-    ctx.create<nm::external_scalar_source<policy>>(p);
-    p.clear();
-    p.insert<std::string>("name", "elastic");
-    p.insert<std::string>("strain_producer_name", "stepper");
-    p.insert<T>("K", K);
-    p.insert<T>("G", G);
-    ctx.create<nm::linear_elasticity<policy>>(p);
+    add<nm::external_strain_source<policy>>(ctx, "stepper");
+    add<nm::external_scalar_source<policy>>(ctx, "clock");
+    add<nm::linear_elasticity<policy>>(ctx, "elastic", {{"strain_producer_name", "stepper"}, {"K", K}, {"G", G}});
     ctx.finalize();
   }
 
@@ -870,8 +815,7 @@ public:
 TEST(StatevMap, StressLikeHistoryKeepsItsShearComponentsForTheHost) {
   nm::material_context<policy> ctx;
   typename policy::ParameterHandler p;
-  p.insert<std::string>("name", "probe");
-  auto& probe = ctx.create<history_kind_probe<policy>>(p);
+  auto& probe = add<history_kind_probe<policy>>(ctx, "probe");
   ctx.finalize();
   u::statev_map<policy> map{ctx, {}};
   ASSERT_EQ(map.nstatv(), 12u);

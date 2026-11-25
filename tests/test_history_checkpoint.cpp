@@ -10,6 +10,7 @@
 #include "numsim-materials/umat/errors.h"
 #include "numsim-materials/umat/external_state_source.h"
 #include "test_fixture_materials.h"
+#include "test_support.h"
 
 // History checkpoints within a step (#215): restore() returns to the checkpoint after any number of commits, and
 // clears a failed update like revert().
@@ -23,6 +24,7 @@ using tensor2 = tmech::tensor<T, 3, 2>;
 using tensor4 = tmech::tensor<T, 3, 4>;
 using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
+using numsim::materials::test::add;
 
 /// A rank-4 history "moment" summing strain ⊗ strain over the steps; throws a cutback_error above "limit".
 template <typename Traits>
@@ -63,16 +65,9 @@ struct setup {
   ctx_type ctx;
 
   explicit setup(T limit = 1e30) {
-    param_type p;
-    p.insert<std::string>("name", "strain");
-    ctx.create<nm::external_strain_source<policy>>(p);
-    p.clear();
-    p.insert<std::string>("name", "tag");
-    ctx.create<nm::test::int_counter<policy>>(p);
-    p.clear();
-    p.insert<std::string>("name", "mom");
-    p.insert<T>("limit", limit);
-    ctx.create<moments<policy>>(p);
+    add<nm::external_strain_source<policy>>(ctx, "strain");
+    add<nm::test::int_counter<policy>>(ctx, "tag");
+    add<moments<policy>>(ctx, "mom", {{"limit", limit}});
     ctx.finalize();
   }
 

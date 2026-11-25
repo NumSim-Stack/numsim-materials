@@ -23,6 +23,7 @@
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/materials/thermal_eigenstrain.h"
 #include "numsim-materials/umat/external_state_source.h"
+#include "test_support.h"
 
 // Partial derivatives per callback and their forward accumulation (#217).
 
@@ -37,6 +38,7 @@ using tensor6 = tmech::tensor<T, 3, 6>;
 using tensor8 = tmech::tensor<T, 3, 8>;
 using ctx_type = nm::material_context<policy>;
 using param_type = policy::ParameterHandler;
+using numsim::materials::test::add;
 
 tensor2 const I{tmech::eye<T, 3, 2>()};
 tensor4 const Is{nm::sym_identity<T, 3>()};
@@ -379,21 +381,13 @@ struct chain {
   ctx_type &ctx{*owner};
 
   chain() {
-    param_type p;
-    p.insert<std::string>("name", "strain");
-    ctx.create<nm::external_strain_source<policy>>(p);
-    p.clear();
-    p.insert<std::string>("name", "temperature");
-    ctx.create<nm::external_scalar_source<policy>>(p);
+    add<nm::external_strain_source<policy>>(ctx, "strain");
+    add<nm::external_scalar_source<policy>>(ctx, "temperature");
   }
 
   template <typename Law>
   law_node<Law, policy> &node(std::string const &name, std::string const &x_source, std::string const &partials = "declared") {
-    param_type p;
-    p.insert<std::string>("name", name);
-    p.insert<std::string>("x_source", x_source);
-    p.insert<std::string>("partials", partials);
-    return ctx.create<law_node<Law, policy>>(p);
+    return add<law_node<Law, policy>>(ctx, name, {{"x_source", x_source}, {"partials", partials}});
   }
 
   void load(tensor2 const &strain, T temperature) {
@@ -493,9 +487,7 @@ TEST(PartialDerivatives, ParallelPathsAreSummed) {
   chain c;
   c.node<map_a>("a", "strain::strain");
   c.node<map_b>("b", "strain::strain");
-  param_type p;
-  p.insert<std::string>("name", "s");
-  c.ctx.create<sum_node<policy>>(p);
+  add<sum_node<policy>>(c.ctx, "s");
   c.node<project_c>("z", "s::y");
   c.ctx.finalize();
   auto const &d{c.ctx.derivative<tensor2>("z", "y", "strain", "strain")};
@@ -572,10 +564,7 @@ TEST(PartialDerivatives, TheResultTypeMustMatchTheRanks) {
 TEST(PartialDerivatives, PartialsAreDeclaredForReadsAndOutputsOfTheCallback) {
   for (auto const *mistake : {"unread", "twice", "both", "other_output", "before_reads", "handle_undeclared"}) {
     chain c;
-    param_type p;
-    p.insert<std::string>("name", "m");
-    p.insert<std::string>("mistake", mistake);
-    EXPECT_THROW(c.ctx.create<misdeclared<policy>>(p), std::logic_error) << mistake;
+    EXPECT_THROW((add<misdeclared<policy>>(c.ctx, "m", {{"mistake", mistake}})), std::logic_error) << mistake;
   }
 }
 
@@ -771,10 +760,7 @@ TEST(PartialDerivatives, PartialsOnRequestFollowTheState) {
 
 TEST(PartialDerivatives, AConstantCallbackFillsItsPartialsOnRequestOnce) {
   chain c;
-  param_type p;
-  p.insert<std::string>("name", "c");
-  p.insert<T>("value", s0);
-  c.ctx.create<nm::constant_scalar<policy>>(p);
+  add<nm::constant_scalar<policy>>(c.ctx, "c", {{"value", s0}});
   auto &s{c.node<square>("s", "c::value", "on_request")};
   c.ctx.finalize();
   auto const &d{c.ctx.derivative<T>("s", "y", "c", "value")};
@@ -798,9 +784,7 @@ TEST(PartialDerivatives, TheFiniteDifferenceCheckFillsPartialsOnRequest) {
 
 TEST(PartialDerivatives, AHandleFillsOnlyTheBlockOfARequestedDerivative) {
   chain c;
-  param_type p;
-  p.insert<std::string>("name", "t");
-  auto &t{c.ctx.create<two_reads<policy>>(p)};
+  auto &t{add<two_reads<policy>>(c.ctx, "t")};
   c.ctx.finalize();
   auto const &dw{c.ctx.derivative<tensor2>("t", "y", "temperature", "state")};
   for (int i{0}; i < 3; ++i)
@@ -817,9 +801,7 @@ TEST(PartialDerivatives, AHandleFillsOnlyTheBlockOfARequestedDerivative) {
 
 TEST(PartialDerivatives, ACallbackThatThrowsLeavesItsPartialsToBeFilledAgain) {
   chain c;
-  param_type p;
-  p.insert<std::string>("name", "t");
-  auto &t{c.ctx.create<two_reads<policy>>(p)};
+  auto &t{add<two_reads<policy>>(c.ctx, "t")};
   c.ctx.finalize();
   (void)c.ctx.derivative<tensor2>("t", "y", "temperature", "state");
   c.load(x0, s0);
@@ -875,9 +857,7 @@ TEST(PartialDerivatives, TheFiniteDifferenceCheckComparesWithThePartialsAtTheSta
   chain c;
   c.node<map_a>("a", "strain::strain");
   c.node<scale_b>("b", "temperature::state");
-  param_type p;
-  p.insert<std::string>("name", "q");
-  c.ctx.create<product_node<policy>>(p);
+  add<product_node<policy>>(c.ctx, "q");
   c.ctx.finalize();
   c.ctx.derivative<tensor4>("q", "y", "strain", "strain"); // keeps the partials of q requested
   c.load(x0, s0);
@@ -932,26 +912,13 @@ struct thermoelastic {
 
   thermoelastic() {
     param_type p;
-    p.insert<std::string>("name", "strain");
-    ctx.create<nm::external_strain_source<policy>>(p);
-    p.clear();
-    p.insert<std::string>("name", "temperature");
-    ctx.create<nm::external_scalar_source<policy>>(p);
-    p.clear();
-    p.insert<std::string>("name", "alpha");
-    p.insert<T>("value", alpha);
-    ctx.create<nm::constant_scalar<policy>>(p);
-    p.clear();
-    p.insert<std::string>("name", "thermal");
-    p.insert<std::string>("alpha_source", "alpha::value");
-    p.insert<T>("reference_temperature", T_ref);
-    ctx.create<nm::thermal_eigenstrain<policy>>(p);
-    p.clear();
-    p.insert<std::string>("name", "elastic_strain");
-    p.insert<std::string>("strain_source", "strain");
-    p.insert<std::vector<std::string>>("eigenstrain_sources", {"thermal"});
-    ctx.create<nm::elastic_strain<policy>>(p);
-    p.clear();
+    add<nm::external_strain_source<policy>>(ctx, "strain");
+    add<nm::external_scalar_source<policy>>(ctx, "temperature");
+    add<nm::constant_scalar<policy>>(ctx, "alpha", {{"value", alpha}});
+    add<nm::thermal_eigenstrain<policy>>(ctx, "thermal",
+        {{"alpha_source", "alpha::value"}, {"reference_temperature", T_ref}});
+    add<nm::elastic_strain<policy>>(ctx, "elastic_strain",
+        {{"strain_source", "strain"}, {"eigenstrain_sources", std::vector<std::string>{"thermal"}}});
     p.insert<std::string>("name", "elastic");
     p.insert<std::string>("strain_producer_name", "elastic_strain");
     p.insert<T>("K", K);
