@@ -101,21 +101,40 @@ or orientations the Mori–Tanaka tangent loses its major symmetry — a propert
 
 ### Self-consistent
 
-The reference medium is the unknown effective medium, so its Eshelby tensors depend on the result. The kernel
-iterates the fixed point inside the node — relaxed steps from the last converged medium (Voigt at first) until
-‖ℂ_new − ℂ‖ / ‖ℂ_new‖ ≤ `tolerance` — and evaluates Sᵣ itself from its `shapes`:
+The reference medium is the unknown effective medium, so the dilute concentrations depend on the result. The
+kernel iterates the fixed point inside the node — relaxed steps from the last converged medium (Voigt at first)
+until ‖ℂ_new − ℂ‖ / ‖ℂ_new‖ ≤ `tolerance` — and evaluates the inclusion problem itself from its `shapes`:
 
 ```json
 {"type": "mean_field_composite_global", "name": "sc", "phases": ["matrix", "spheres"],
- "kernel": {"type": "self_consistent", "relaxation": 0.5, "tolerance": 1e-10, "max_iterations": 100,
+ "kernel": {"type": "self_consistent", "reference": "anisotropic", "quadrature_order": 12,
+            "relaxation": 0.5, "tolerance": 1e-10, "max_iterations": 100,
             "shapes": {"matrix": {"type": "sphere"}, "spheres": {"type": "spheroid", "aspect_ratio": 3, "direction": [1, 0, 0]}}}}
 ```
 
 Shapes: `sphere`, `cylinder` (`direction`), `spheroid` (`aspect_ratio`, `direction`), `ellipsoid` (`semi_axes`).
 One update gives the converged tangent; it throws with the residual after `max_iterations`. The rule:
 **fixed points of the homogenisation converge inside a node, fixed points of the materials go through the
-graph** (§5). Sᵣ is the closed form at the Poisson's ratio of the isotropised effective tangent — exact for an
-isotropic medium, an approximation for an anisotropic one (aligned fibres).
+graph** (§5).
+
+`reference` selects the medium the inclusions are embedded in:
+
+- `anisotropic` (default): the self-consistent scheme proper. Tᵣ = (I + ℙᵣ(ℂ) : (ℂᵣ − ℂ))⁻¹ with Hill's
+  polarisation tensor of the shape in the anisotropic effective medium,
+  ℙ = (a₁a₂a₃ / 4π) ∫ sym[ξⱼ Nᵢₖ(ξ) ξₗ] / |Aξ|³ dS over the unit sphere, N = (ℂᵢⱼₖₗ ξⱼ ξₗ)⁻¹, with the semi-axes
+  in the shape's frame. The integral is a quadrature of directions fixed by the shape (`core/polarisation.h`):
+  Gauss–Legendre in the polar angle on panels graded towards the peak of the weight, so elongated and flat
+  spheroids stay accurate, and the trapezoid rule in the azimuth; an infinite cylinder is the line integral over
+  the circle across its axis. `quadrature_order` is the number of Gauss points per panel (4× that in the
+  azimuth). In an isotropic medium the default reproduces the closed-form Eshelby tensors to 1e-10 for spheres,
+  cylinders, spheroids of aspect ratio 0.01 to 1000 and moderately triaxial ellipsoids; strongly triaxial
+  ellipsoids and strongly anisotropic media converge more slowly and may need a higher order.
+- `isotropised`: one isotropic comparison medium ℂ₀ = iso(ℂ) for both the closed-form Sᵣ(ν₀) and the reference
+  stiffness, Tᵣ = (I + Sᵣ : ℂ₀⁻¹ : (ℂᵣ − ℂ₀))⁻¹. Cheaper, exact for spheres in an isotropic composite and an
+  approximation otherwise.
+
+Both give a major-symmetric tangent when all phases share one shape and orientation, and for continuous aligned
+fibres of equal Poisson's ratio both give the rule of mixtures along the fibres.
 
 ---
 

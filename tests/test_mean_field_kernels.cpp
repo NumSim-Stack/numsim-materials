@@ -1,5 +1,7 @@
 /// The mean-field kernels: strain concentration tensors of phases from their tangents, fractions and shapes.
 #include <gtest/gtest.h>
+#include <any>
+#include <array>
 #include <cmath>
 #include <map>
 #include <memory>
@@ -126,14 +128,148 @@ PH self_consistent_parameters() {
 // Hill's self-consistent equations for spheres: sum_r c_r (K_r - K)/(K_r + 4/3 G) = 0 and
 // sum_r c_r (G_r - G)/(G_r + zeta(K, G)) = 0 at the effective moduli
 TEST(MeanFieldKernels, SelfConsistentSpheresSolveHillsEquations) {
-  two_phases ph;
-  auto k{make("self_consistent", self_consistent_parameters())};
-  EXPECT_FALSE(k->needs().eshelby); // its shapes are its own: S at the effective medium
-  auto const A{concentrations(*k, ph)};
-  expect_partition(A);
-  auto const [K, G]{nm::isotropize(effective(ph, A))};
-  EXPECT_NEAR((1 - c) * (Km - K) / (Km + 4 * G / 3) + c * (Ki - K) / (Ki + 4 * G / 3), 0, 1e-10);
-  EXPECT_NEAR((1 - c) * (Gm - G) / (Gm + zeta(K, G)) + c * (Gi - G) / (Gi + zeta(K, G)), 0, 1e-10);
+  for (auto const *reference : {"anisotropic", "isotropised"}) {
+    SCOPED_TRACE(reference);
+    two_phases ph;
+    PH p{self_consistent_parameters()};
+    p.insert<std::string>("reference", reference);
+    auto k{make("self_consistent", p)};
+    EXPECT_FALSE(k->needs().eshelby); // its shapes are its own: S at the effective medium
+    auto const A{concentrations(*k, ph)};
+    expect_partition(A);
+    auto const [K, G]{nm::isotropize(effective(ph, A))};
+    EXPECT_NEAR((1 - c) * (Km - K) / (Km + 4 * G / 3) + c * (Ki - K) / (Ki + 4 * G / 3), 0, 1e-10);
+    EXPECT_NEAR((1 - c) * (Gm - G) / (Gm + zeta(K, G)) + c * (Gi - G) / (Gi + zeta(K, G)), 0, 1e-10);
+  }
+}
+
+/// Continuous fibres along x1 in a matrix (the inclusion study of #160): both phases cylinders, equal nu.
+struct aligned_fibres {
+  static constexpr T nu{0.3}, cf{0.3}, Em{3000.0}, Ef{200000.0};
+  tensor4 Cm{iso(nm::bulk_modulus(Em, nu), nm::shear_modulus(Em, nu))}, Cf{iso(nm::bulk_modulus(Ef, nu), nm::shear_modulus(Ef, nu))};
+  std::vector<mf::phase_view<T>> views() const { return {{1 - cf, &Cm, nullptr}, {cf, &Cf, nullptr}}; }
+};
+
+PH fibre_parameters(spec const &shape, std::string const &reference = {}) {
+  PH p;
+  p.insert<std::map<std::string, spec>>("shapes", {{"matrix", shape}, {"fibres", shape}});
+  if (!reference.empty())
+    p.insert<std::string>("reference", reference);
+  p.insert<T>("tolerance", 1e-12);
+  p.insert<int>("max_iterations", 1000);
+  return p;
+}
+
+PH cylinder_x1() {
+  PH p;
+  p.insert<std::vector<T>>("direction", {1, 0, 0});
+  return p;
+}
+
+tensor4 effective_of(mf::kernel<policy> &k, aligned_fibres const &ph) {
+  k.bind({"matrix", "fibres"});
+  std::vector<tensor4> A(2);
+  auto const v{ph.views()};
+  k.concentrations(v, A);
+  EXPECT_LT(relative(tensor4{(1 - ph.cf) * A[0] + ph.cf * A[1]}, Is()), 1e-12);
+  return tensor4{(1 - ph.cf) * tmech::dcontract(ph.Cm, A[0]) + ph.cf * tmech::dcontract(ph.Cf, A[1])};
+}
+
+tensor4 major_transpose(tensor4 const &C) { return tensor4{tmech::basis_change<tmech::sequence<3, 4, 1, 2>>(C)}; }
+
+// equal nu: a uniaxial stress along the fibres strains both phases alike, so E1 is the rule of mixtures
+TEST(MeanFieldKernels, SelfConsistentAlignedFibresFollowTheRuleOfMixtures) {
+  for (std::string const reference : {"", "anisotropic", "isotropised"}) {
+    SCOPED_TRACE(reference);
+    aligned_fibres ph;
+    auto k{mf::kernel_registry<policy>::instance().make(spec{"self_consistent", fibre_parameters(spec{"cylinder", cylinder_x1()}, reference)})};
+    tensor4 const C{effective_of(*k, ph)};
+    tensor4 const compliance{tmech::inv(C)};
+    T const E1{1 / compliance(0, 0, 0, 0)};
+    EXPECT_NEAR(E1 / ((1 - ph.cf) * ph.Em + ph.cf * ph.Ef), 1, 1e-10);
+    EXPECT_LT(relative(C, major_transpose(C)), 1e-10);
+  }
+}
+
+// cylinders in the transversely isotropic medium: Hill's (1965) self-consistent k, m, p and E2 from them
+TEST(MeanFieldKernels, SelfConsistentAlignedFibresAreHillsTransverselyIsotropicSolution) {
+  aligned_fibres ph;
+  auto k{mf::kernel_registry<policy>::instance().make(spec{"self_consistent", fibre_parameters(spec{"cylinder", cylinder_x1()}, "anisotropic")})};
+  tensor4 const C{effective_of(*k, ph)};
+  std::array<T, 2> const fraction{1 - ph.cf, ph.cf}, E{ph.Em, ph.Ef};
+  std::array<T, 2> G{}, k_r{};
+  for (std::size_t r{0}; r < 2; ++r) {
+    G[r] = nm::shear_modulus(E[r], ph.nu);
+    k_r[r] = nm::bulk_modulus(E[r], ph.nu) + G[r] / 3; // plane-strain bulk modulus
+  }
+  auto const solve = [&](std::array<T, 2> const &moduli, T shift) { // the root of sum_r c_r (x_r - x) / (x_r + shift)
+    T num{0}, den{0};
+    for (std::size_t r{0}; r < 2; ++r) {
+      num += fraction[r] * moduli[r] / (moduli[r] + shift);
+      den += fraction[r] / (moduli[r] + shift);
+    }
+    return num / den;
+  };
+  T kt{k_r[0]}, m{G[0]}, p{G[0]};
+  for (int it{0}; it < 10000; ++it) {
+    kt = solve(k_r, m);
+    m = solve(G, kt * m / (kt + 2 * m));
+    p = solve(G, p);
+  }
+  T const E1{(1 - ph.cf) * ph.Em + ph.cf * ph.Ef}, E2{1 / (1 / (4 * kt) + 1 / (4 * m) + ph.nu * ph.nu / E1)};
+  tensor4 const compliance{tmech::inv(C)};
+  EXPECT_NEAR(C(0, 1, 0, 1) / p, 1, 1e-10);         // G12
+  EXPECT_NEAR(C(1, 2, 1, 2) / m, 1, 1e-10);         // G23
+  EXPECT_NEAR(1 / compliance(1, 1, 1, 1) / E2, 1, 1e-10);
+  EXPECT_NEAR((C(1, 1, 1, 1) + C(1, 1, 2, 2)) / 2 / kt, 1, 1e-10);
+}
+
+T energy(tensor4 const &C, tmech::tensor<T, 3, 2> const &e) { return tmech::dcontract(e, tmech::tensor<T, 3, 2>{tmech::dcontract(C, e)}); }
+
+// aligned spheroids: major symmetric, between Voigt and Reuss, and settled in the quadrature order
+TEST(MeanFieldKernels, SelfConsistentAlignedSpheroidsAreSymmetricAndBounded) {
+  aligned_fibres ph;
+  PH shape;
+  shape.insert<T>("aspect_ratio", 5);
+  auto const at = [&](int order) {
+    PH p{fibre_parameters(spec{"spheroid", shape}, "anisotropic")};
+    p.insert<int>("quadrature_order", order);
+    auto k{mf::kernel_registry<policy>::instance().make(spec{"self_consistent", p})};
+    return effective_of(*k, ph);
+  };
+  tensor4 const C{at(12)}, coarse{at(4)}, fine{at(24)};
+  EXPECT_LT(relative(C, major_transpose(C)), 1e-10);
+  EXPECT_LT(relative(C, fine), 1e-10);
+  EXPECT_LT(relative(C, fine), relative(coarse, fine));
+  tensor4 const voigt{(1 - ph.cf) * ph.Cm + ph.cf * ph.Cf}, reuss{tmech::inv(tensor4{(1 - ph.cf) * tmech::inv(ph.Cm) + ph.cf * tmech::inv(ph.Cf)})};
+  std::vector<tmech::tensor<T, 3, 2>> strains(4);
+  strains[0](0, 0) = 1;
+  strains[1](1, 1) = 1;
+  strains[2](0, 1) = strains[2](1, 0) = 1;
+  strains[3](0, 0) = 0.3;
+  strains[3](1, 1) = -1;
+  strains[3](2, 2) = 0.5;
+  strains[3](1, 2) = strains[3](2, 1) = 0.2;
+  for (auto const &e : strains) {
+    EXPECT_GT(energy(voigt, e), energy(C, e));
+    EXPECT_GT(energy(C, e), energy(reuss, e));
+  }
+}
+
+TEST(MeanFieldKernels, SelfConsistentReferenceIsValidated) {
+  PH p{self_consistent_parameters()};
+  p.insert<std::string>("reference", "isotropic");
+  try {
+    make("self_consistent", p);
+    FAIL() << "an unknown reference was accepted";
+  } catch (std::invalid_argument const &e) {
+    std::string const what{e.what()};
+    EXPECT_NE(what.find("anisotropic"), std::string::npos) << what;
+    EXPECT_NE(what.find("isotropised"), std::string::npos) << what;
+  }
+  PH q{self_consistent_parameters()};
+  q.insert<int>("quadrature_order", 1);
+  EXPECT_THROW(make("self_consistent", q), std::invalid_argument);
 }
 
 TEST(MeanFieldKernels, SelfConsistentThrowsWhenItDoesNotConverge) {
@@ -167,7 +303,7 @@ TEST(MeanFieldKernels, ParametersAreValidated) {
 TEST(MeanFieldKernels, ReadFromAJsonObject) {
   auto registry{nm::make_default_json_registry<json>()};
   nm::add_object_readers<policy>(registry);
-  json const j = {{"type", "self_consistent"}, {"relaxation", 0.8},
+  json const j = {{"type", "self_consistent"}, {"relaxation", 0.8}, {"reference", "isotropised"}, {"quadrature_order", 8},
                   {"shapes", {{"matrix", {{"type", "sphere"}}}, {"spheres", {{"type", "spheroid"}, {"aspect_ratio", 1.0}}}}}};
   auto const s{std::any_cast<spec>(registry.read(typeid(spec), j, "kernel"))};
   EXPECT_EQ(s.type, "self_consistent");
@@ -179,6 +315,10 @@ TEST(MeanFieldKernels, ReadFromAJsonObject) {
   json bad = j;
   bad["shapes"]["spheres"] = {{"type", "cube"}};
   EXPECT_THROW((void)registry.read(typeid(spec), bad, "kernel"), std::runtime_error);
+  json unknown = j;
+  unknown["reference"] = "voigt";
+  EXPECT_THROW((void)mf::kernel_registry<policy>::instance().make(std::any_cast<spec>(registry.read(typeid(spec), unknown, "kernel"))),
+               std::invalid_argument);
 }
 
 } // namespace
