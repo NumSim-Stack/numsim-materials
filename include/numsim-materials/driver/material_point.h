@@ -68,6 +68,10 @@ public:
     }
     for (auto const &source : m_parameters.template get<std::vector<std::string>>("host_owned")) {
       auto const src{connection_source::parse(source)};
+      if (!std::ranges::any_of(m_ctx.property_execution_order(), [&](auto const *prop) {
+            return prop->is_history() && prop->traits().id.owner == src.material && prop->traits().id.name == src.property;
+          }))
+        throw fatal_error("material_point: host_owned '" + source + "' is not a history property in this context");
       m_exclusions.emplace_back(src.material, src.property);
     }
     if (!(m_tolerance >= 0) || m_max_passes < 1)

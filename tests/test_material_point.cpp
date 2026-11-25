@@ -268,6 +268,15 @@ TEST(MaterialPoint, HostOwnedKeepsFurtherExclusionsOut) {
   EXPECT_EQ(point.history_width(), nm::umat::canonical_width);
 }
 
+TEST(MaterialPoint, UnknownHostOwnedIsFatalAtConstruction) {
+  setup s;
+  for (std::string const name : {"mem::nothing", "mem::stress", "nothing::count"}) {
+    auto parameters{strain_input()};
+    parameters.insert<std::vector<std::string>>("host_owned", {name});
+    EXPECT_THROW((point_type{s.ctx, parameters}), nm::umat::fatal_error) << name << " is no history property";
+  }
+}
+
 TEST(MaterialPoint, ParametersHaveDefaultsAndAreChecked) {
   setup s;
   point_type plain{s.ctx, param_type{}};
