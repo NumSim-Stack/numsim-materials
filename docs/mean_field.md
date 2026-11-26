@@ -126,21 +126,52 @@ graph** (§5).
   Gauss–Legendre in the polar angle on panels graded towards the peak of the weight, so elongated and flat
   spheroids stay accurate, and the trapezoid rule in the azimuth; an infinite cylinder is the line integral over
   the circle across its axis. `quadrature_order` is the number of Gauss points per panel (4× that in the
-  azimuth). In an isotropic medium the default reproduces the closed-form Eshelby tensors to 1e-10 for spheres,
-  cylinders, spheroids of aspect ratio 0.01 to 1000 and moderately triaxial ellipsoids; strongly triaxial
-  ellipsoids and strongly anisotropic media converge more slowly and may need a higher order.
+  azimuth), 2 to 64. A sphere (all semi-axes equal) takes Lebedev degree 77 instead, whatever the order: the
+  product rule's pole is an axis of the shape frame, and for a sphere that axis has no relation to the medium.
+  In an isotropic medium the default reproduces the closed-form Eshelby tensors to 1e-10 for spheres,
+  cylinders, spheroids of aspect ratio 0.01 to 1000 and moderately triaxial ellipsoids.
+  In an anisotropic medium the accuracy depends on how the shape lies in it. Relative error in ℙ in a
+  transversely isotropic fibre-like medium (E₁/E₂ ≈ 11), against an independent 2000 × 2000 integration;
+  *aligned*: the shape axes on the medium axes, *tilted*: rotated by the Euler angles (0.3, 0.7, −0.4):
+
+  | shape | legendre 8 | legendre 12 | legendre 24 | lebedev 41 | lebedev 59 | lebedev 77 |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | sphere, aligned / tilted (worst of 300 orientations) | — | — | — | 4e-7 / 3e-5 | 4e-10 / 5e-7 | 3e-13 / 9e-9 |
+  | prolate 2, aligned / tilted | 1e-7 / 3e-5 | 4e-11 / 4e-7 | 2e-13 / 1e-11 | 9e-9 / 4e-6 | 3e-12 / 4e-8 | 3e-13 / 3e-10 |
+  | prolate 5 | 2e-8 / 8e-6 | 6e-12 / 3e-7 | 2e-13 / 3e-11 | 2e-5 / 2e-4 | 2e-7 / 1e-5 | 6e-9 / 1e-6 |
+  | prolate 100 | 4e-11 / 2e-5 | 3e-13 / 2e-7 | 3e-13 / 9e-14 | 3e-3 / 4e-3 | 9e-4 / 1e-3 | 4e-4 / 5e-4 |
+  | oblate 0.1 | 1e-6 / 3e-5 | 1e-8 / 2e-6 | 1e-13 / 2e-10 | 1e-2 / 3e-3 | 5e-3 / 9e-4 | 2e-3 / 2e-4 |
+  | ellipsoid 10 : 3 : 1 | 3e-8 / 6e-6 | 9e-13 / 2e-7 | 1e-13 / 2e-11 | 1e-4 / 4e-4 | 4e-6 / 1e-4 | 1e-6 / 1e-5 |
+
+  The sphere row is the rule a sphere gets (the `legendre` columns do not apply). The effective stiffness is
+  much less sensitive than ℙ, and it is rotation covariant: rotating the microstructure rotates the converged ℂ
+  to round-off.
   `"quadrature": "lebedev"` switches to Lebedev nodes u mapped to ξ = A⁻¹u / |A⁻¹u|, which absorbs the weight
   a₁a₂a₃ / |Aξ|³ exactly (the mapping of the fibre orientation average), at a tabled `lebedev_degree`
-  (3 … 77, default 41). It pays for spheres and near-spherical shapes: in a fibre-like medium degree 41 matches
-  the default `legendre` rule's accuracy for a sphere in half the time, degree 59 or 77 goes further. For
-  elongated and flat shapes the nodes miss the weight's peak region and it converges slowly (at degree 77 an
-  aspect ratio of 100 is at 4e-4 in ℙ, one of 0.1 at 2e-3); keep `legendre` there.
+  (3 … 77, default 41); an infinite axis uses the line rule with at least 48 points. It pays for spheres and
+  near-spherical shapes. For elongated and flat shapes the nodes miss the weight's peak region and it converges
+  slowly (see the table); keep `legendre` there.
 - `isotropised`: one isotropic comparison medium ℂ₀ = iso(ℂ) for both the closed-form Sᵣ(ν₀) and the reference
   stiffness, Tᵣ = (I + Sᵣ : ℂ₀⁻¹ : (ℂᵣ − ℂ₀))⁻¹. Cheaper, exact for spheres in an isotropic composite and an
   approximation otherwise.
 
 Both give a major-symmetric tangent when all phases share one shape and orientation, and for continuous aligned
 fibres of equal Poisson's ratio both give the rule of mixtures along the fibres.
+
+Cost. One concentration call iterates the fixed point to `tolerance`; with the default relaxation that is
+60 to 75 iterations from Voigt. Each iteration evaluates ℙ for every phase, one 3 × 3 inverse per direction.
+Measured at -O2 on one core for a matrix sphere and one inclusion phase (c = 0.3, E_i / E_m ≈ 67):
+
+| inclusions | `anisotropic`, first call | `anisotropic`, next call after a 1 % tangent change | `isotropised` |
+| --- | --- | --- | --- |
+| spheres | 11 ms | 7 ms | 0.3 ms |
+| spheroids, aspect ratio 20 | 15 ms | 10 ms | 0.4 ms |
+| spheroids, aspect ratio 100 | 20 ms | 13 ms | 0.4 ms |
+
+With constant phases a composite computes this once. `mean_field_strain` recomputes it on every update in which
+a phase tangent changes, so with nonlinear phases (damage, plasticity) the anisotropic reference costs this
+per integration point and per update, and `orientation_phases` multiplies it by the number of directions.
+Use `"reference": "isotropised"` there unless the anisotropic medium matters for the result.
 
 ---
 
@@ -162,6 +193,8 @@ strain ──► mean_field_strain ──strain_matrix──► matrix material 
   the global composite exactly; the self-consistent kernel converges its own fixed point inside every pass.
   The concentrations and the strains are separate callbacks: with constant phases the concentrations are
   computed once and only the strains every update; a phase read over a local edge recomputes them every pass.
+  For `self_consistent` with the default `anisotropic` reference that is milliseconds per point and update
+  (§3, Cost); `isotropised` is the cheap choice for nonlinear phases.
 - The phase materials consume those strains like any other strain: `"strain_source": "mt_strain",
   "strain_property": "strain_matrix"`. Every strain consumer takes `strain_property` (default `strain`).
 - `mean_field_composite_local_linear` / `_nonlinear` produce `stress` = Σ cᵣ σᵣ and `tangent` = Σ cᵣ ℂᵣ : Aᵣ.
