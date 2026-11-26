@@ -118,6 +118,10 @@ TEST(PropertyColumns, ComponentsAreCommaSeparatedNumbers) {
   EXPECT_THROW(columns(p.ctx, {{"x", "j2::stress[1 2,1]"}}), std::invalid_argument);
   EXPECT_THROW(columns(p.ctx, {{"x", "j2::stress[1,,2]"}}), std::invalid_argument);
   EXPECT_EQ(columns(p.ctx, {{"x", "j2::stress[ 1, 2 ]"}}).names().size(), 1u);
+  for (auto const *bad : {"j2::stress[99999999999999999999,1]", "j2::stress[1,]", "j2::stress[]"}) {
+    auto const message{error_of([&] { return columns(p.ctx, {{"x", bad}}); })};
+    EXPECT_TRUE(message.starts_with("column 'x': indices")) << bad << ": " << message;
+  }
 }
 
 TEST(ReportSpec, SubstitutesParameters) {

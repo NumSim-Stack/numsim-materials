@@ -3,6 +3,7 @@
 
 #include <array>
 #include <charconv>
+#include <cmath>
 #include <cstddef>
 #include <ostream>
 #include <string>
@@ -14,16 +15,18 @@
 namespace numsim::materials::report {
 
 namespace detail {
-/// `v` as C would print it, whatever the stream's locale and precision: the shortest form that reads back
-/// exactly, or `digits` significant digits; nan, inf and -inf as such.
+/// `v` whatever the stream's locale and precision: the shortest form that reads back exactly, or `digits`
+/// significant digits; inf, -inf, and nan for every NaN.
 template <typename V>
 std::string csv_field(V v, int digits = 0) {
   std::array<char, 64> buf{};
   std::to_chars_result res{};
-  if constexpr (std::is_floating_point_v<V>)
+  if constexpr (std::is_floating_point_v<V>) {
+    if (std::isnan(v))
+      return "nan";
     res = digits > 0 ? std::to_chars(buf.data(), buf.data() + buf.size(), v, std::chars_format::general, digits)
                      : std::to_chars(buf.data(), buf.data() + buf.size(), v);
-  else
+  } else
     res = std::to_chars(buf.data(), buf.data() + buf.size(), v);
   return std::string(buf.data(), res.ptr);
 }

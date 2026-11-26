@@ -52,6 +52,18 @@ class PanelTest(unittest.TestCase):
         self.assertTrue(plots[0][1].startswith(b"\x89PNG"))
         self.assertEqual(figures.render_check_figures(Expressions({"cases": [], "checks": [{"name": "x", "value": "0", "tolerance": 1}]}, {})), [])
 
+    def test_check_figure_draws_the_plot_y(self):
+        spec = {"cases": [{"name": "a"}], "checks": [{"name": "peak", "case": "a", "value": "np.max(stress_11)", "expected": 2,
+                                                       "tolerance": 1, "plot": {"x": "strain_11", "y": "stress_11"}}]}
+        drawn = []
+        original = figures.plt.Axes.plot
+        figures.plt.Axes.plot = lambda ax, x, y, *a, **k: drawn.append(np.asarray(y)) or original(ax, x, y, *a, **k)
+        try:
+            figures.render_check_figures(Expressions(spec, {"a": case("a")}))
+        finally:
+            figures.plt.Axes.plot = original
+        np.testing.assert_array_equal(drawn[0], case("a").columns["stress_11"][1:])
+
     def test_unknown_kind_is_an_error(self):
         expr = Expressions({"cases": [{"name": "a"}]}, {"a": case("a")})
         with self.assertRaises(ValueError):

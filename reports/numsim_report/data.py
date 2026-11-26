@@ -32,7 +32,7 @@ class RunOutput:
 
 
 class ToolError(RuntimeError):
-    """material_report rejected the input."""
+    """material_report rejected the input or failed (exit code other than 0 and 1)."""
 
 
 def read_csv(path: pathlib.Path) -> dict[str, np.ndarray]:
@@ -61,13 +61,14 @@ def run_tool(tool: str, report: pathlib.Path) -> RunOutput:
     with tempfile.TemporaryDirectory() as tmp:
         out = pathlib.Path(tmp)
         code = subprocess.run([tool, report, out]).returncode
-        if code == 2:
-            raise ToolError(f"{report}: material_report rejected the document")
+        if code not in (0, 1):  # 1: a case did not converge, every case ran
+            raise ToolError(f"{report}: material_report failed with exit code {code}"
+                            + (" (an input error)" if code == 2 else ""))
         spec = json.loads((out / "resolved.json").read_text())
         def load(stem: str) -> CaseData | None:
-            if not (out / f"{stem}.csv").exists():
-                return None
-            return CaseData(stem, with_invariants(read_csv(out / f"{stem}.csv")), read_csv(out / f"{stem}_iterations.csv"))
+            """None for a case without a recorded step."""
+            columns = read_csv(out / f"{stem}.csv") if (out / f"{stem}.csv").exists() else {}
+            return CaseData(stem, with_invariants(columns), read_csv(out / f"{stem}_iterations.csv")) if columns else None
 
         cases = {c["name"]: d for c in spec["cases"] if (d := load(c["name"]))}
         studies = {s["name"]: {n: d for n in s["steps"] if (d := load(f"{s['name']}_{n}"))} for s in spec.get("studies", [])}

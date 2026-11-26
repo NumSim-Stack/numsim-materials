@@ -104,7 +104,7 @@ def render_figures(expr: Expressions) -> list[bytes]:
 
 
 def render_check_figure(expr: Expressions, check: dict) -> bytes:
-    """Value and expected over x (default: step) per case, and the error of the check on a log scale."""
+    """Value (or plot y) and expected over x (default: step) per case, and the error of the check on a log scale."""
     plot = check["plot"] if isinstance(check["plot"], dict) else {}
     x_expr = plot.get("x", "step")
     relative = check.get("relative", False)
@@ -114,8 +114,9 @@ def render_check_figure(expr: Expressions, check: dict) -> bytes:
             x = np.broadcast_to(np.asarray(expr(x_expr, case), float), expr.cases[case].columns["step"].shape)
             value = np.broadcast_to(np.asarray(expr(check["value"], case), float), x.shape)
             expected = np.broadcast_to(np.asarray(expr(check.get("expected", 0), case), float), x.shape)
+            curve = np.broadcast_to(np.asarray(expr(plot["y"], case), float), x.shape) if "y" in plot else value
             prefix = f"{case}: " if len(expr.case_names(check)) > 1 else ""
-            left.plot(x[1:], value[1:], label=prefix + "value")
+            left.plot(x[1:], curve[1:], label=prefix + plot.get("y", "value"))
             left.plot(x[1:], expected[1:], "k--", lw=1, label="expected" if n == 0 else None)
             error = np.abs(value - expected)[1:]
             if relative:

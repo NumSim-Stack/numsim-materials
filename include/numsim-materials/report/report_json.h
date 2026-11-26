@@ -6,6 +6,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <initializer_list>
 #include <limits>
 #include <span>
 #include <stdexcept>
@@ -103,6 +104,24 @@ V positive(nlohmann::json const &c, std::string const &key, V fallback) {
   return bounded(c, key, fallback, true);
 }
 
+/// An invalid_argument naming the first key of `j` not in `known`.
+inline void require_known_keys(nlohmann::json const &j, std::initializer_list<std::string_view> known) {
+  for (auto const &[key, value] : j.items())
+    if (!std::ranges::contains(known, std::string_view{key}))
+      throw std::invalid_argument("unknown key \"" + key + "\"");
+}
+
+/// The document's "cases", a non-empty array.
+inline nlohmann::json const &case_list(nlohmann::json const &doc) {
+  if (!doc.is_object() || !doc.contains("cases"))
+    throw std::invalid_argument("report: no \"cases\"");
+  auto const &cases{doc["cases"]};
+  if (!cases.is_array() || cases.empty())
+    throw std::invalid_argument(std::string{"report: \"cases\": expected a non-empty array of cases, got "} +
+                                (cases.is_array() ? "an empty one" : cases.type_name()));
+  return cases;
+}
+
 /// "case 'name'" for messages.
 inline std::string case_label(nlohmann::json const &c) {
   if (c.is_object() && c.contains("name") && c["name"].is_string())
@@ -145,6 +164,8 @@ Control parse_control(nlohmann::json const &c, Control all_prescribed) {
     return Control::uniaxial_stress();
   if (kind == "mixed") {
     auto const names{get<std::vector<std::string>>(c, "stress_components")};
+    if (names.empty())
+      throw std::invalid_argument("\"stress_components\": expected at least one component");
     std::vector<std::string_view> const views(names.begin(), names.end());
     return in_context("\"stress_components\"", [&] { return Control::mixed(std::span<std::string_view const>{views}); });
   }
@@ -168,6 +189,8 @@ load_case<T> parse_case(nlohmann::json const &c, bool finite_strain) {
   using tensor2 = tmech::tensor<T, 3, 2>;
   if (!c.is_object())
     throw std::invalid_argument("expected an object, got " + c.dump());
+  require_known_keys(c, {"name", "control", "stress_components", "direction", "path", "points", "stress", "steps",
+                         "scale", "dt", "tangent_every", "fd_step", "max_cutbacks"});
   auto const name{get<std::string>(c, "name")};
   auto const scale{get<T>(c, "scale", T{1})};
   std::vector<tensor2> points;
@@ -214,10 +237,8 @@ deformation_control<T> parse_deformation_control(nlohmann::json const &c) {
   return detail::parse_control(c, deformation_control<T>::deformation());
 }
 
-/// Proportional: "direction" times the factors of "path". Non-proportional: "points", strain states
-/// in order (the load factor then counts segments). Both are scaled by "scale". Only the control of
-/// the point's kinematics is parsed (is_finite_strain()); the other stays all prescribed. Tensors take six
-/// components (or nine at finite strain); errors name the case and the key.
+/// A case: "direction" times "path", or "points" (the load factor counts segments), scaled by "scale". Only the
+/// control of `finite_strain` is parsed, the other stays all prescribed; errors name the case and the key.
 template <typename T>
 load_case<T> parse_case(nlohmann::json const &c, bool finite_strain = false) {
   return detail::in_context(detail::case_label(c), [&] { return detail::parse_case<T>(c, finite_strain); });
@@ -247,9 +268,12 @@ inline std::vector<refinement_study> parse_studies(nlohmann::json const &doc) {
                          ? "study '" + s["name"].get<std::string>() + "'"
                          : std::string{"a study without a \"name\""}};
     out.push_back(detail::in_context(label, [&] {
+      if (!s.is_object())
+        throw std::invalid_argument("expected an object, got " + s.dump());
+      detail::require_known_keys(s, {"name", "case", "steps", "quantity", "min_order"});
       auto const name{detail::get<std::string>(s, "name")};
       auto const case_name{detail::get<std::string>(s, "case")};
-      auto const &cases{doc.at("cases")};
+      auto const &cases{detail::case_list(doc)};
       for (auto const &c : cases)
         if (!c.is_object() || !c.contains("name") || !c["name"].is_string())
           throw std::invalid_argument(detail::case_label(c) + " in \"cases\"");
@@ -257,8 +281,8 @@ inline std::vector<refinement_study> parse_studies(nlohmann::json const &doc) {
       if (it == cases.end())
         throw std::invalid_argument("no case '" + case_name + "'");
       auto const &list{s.at("steps")};
-      if (!list.is_array())
-        throw std::invalid_argument("\"steps\": expected an array of step counts, got " + list.dump());
+      if (!list.is_array() || list.size() < 2)
+        throw std::invalid_argument("\"steps\": expected an array of at least two step counts, got " + list.dump());
       std::vector<int> steps;
       for (auto const &n : list)
         steps.push_back(detail::as_count(n, "\"steps\"", 1));
@@ -282,8 +306,9 @@ inline std::vector<std::string> output_stems(nlohmann::json const &doc) {
     out.push_back(std::move(stem));
   };
   std::vector<std::string> names;
+  auto const &cases{detail::case_list(doc)};
   detail::in_context("report: \"cases\"", [&] {
-    for (auto const &c : doc.at("cases"))
+    for (auto const &c : cases)
       names.push_back(detail::get<std::string>(c, "name"));
   });
   for (auto &name : names)
@@ -294,10 +319,8 @@ inline std::vector<std::string> output_stems(nlohmann::json const &doc) {
   return out;
 }
 
-/// "point": the parameters of the material-point driver (strain_source or deformation_gradient_source,
-/// stress_source, optional tangent_source, stress_property, tangent_property ("damaged_stress") and time_source,
-/// and optionally tolerance, max_iter, fd_step, and the deprecated fixed point residual_source, residual_tolerance,
-/// max_passes: a composite declaring converges() takes its tolerance and max_passes as parameters).
+/// "point": the driver's sources and properties, tolerance, max_iter, fd_step, and the deprecated fixed point
+/// residual_source, residual_tolerance, max_passes (a composite declaring converges() takes these itself).
 template <typename Traits>
 typename Traits::ParameterHandler parse_point(nlohmann::json const &doc) {
   using T = typename Traits::value_type;
@@ -324,6 +347,16 @@ typename Traits::ParameterHandler parse_point(nlohmann::json const &doc) {
   });
 }
 
+/// The top-level keys of a resolved document: those documented in reports/numsim_report/cli.py.
+inline void check_report_keys(nlohmann::json const &doc) {
+  detail::in_context("report", [&] {
+    if (!doc.is_object())
+      throw std::invalid_argument("a report document is a JSON object");
+    detail::require_known_keys(doc, {"include", "title", "notes", "parameters", "parameter_usage", "derived", "model",
+                                     "point", "record", "cases", "figures", "checks", "studies"});
+  });
+}
+
 /// A report column wired to a graph property.
 struct column_spec {
   std::string name;
@@ -331,9 +364,8 @@ struct column_spec {
   bool full{false};   ///< rank-2: nine components instead of the symmetric six
 };
 
-/// The point's kinematics and stress first (strain/stress, or F/P with nine components), then
-/// "record" (nlohmann::json orders those by column name; a value may be {"source", "full"}). Names
-/// are CSV fields: no comma, quote or control character.
+/// The point's kinematics and stress (strain/stress or F/P), then "record" by column name; a value may be
+/// {"source", "full"}. Names have no comma, quote or control character.
 inline std::vector<column_spec> parse_columns(nlohmann::json const &doc) {
   std::vector<column_spec> out;
   detail::in_context("report: \"point\"", [&] {
@@ -354,10 +386,13 @@ inline std::vector<column_spec> parse_columns(nlohmann::json const &doc) {
       detail::in_context("\"" + name + "\"", [&] {
         if (name.empty() || std::ranges::any_of(name, [](unsigned char ch) { return ch == ',' || ch == '"' || std::iscntrl(ch); }))
           throw std::invalid_argument("a column name is not empty and has no comma, quote or control character");
-        if (value.is_string())
+        if (value.is_string()) {
           out.push_back({name, value.get<std::string>()});
-        else
-          out.push_back({name, detail::get<std::string>(value, "source"), detail::get<bool>(value, "full", false)});
+          return;
+        }
+        if (value.is_object())
+          detail::require_known_keys(value, {"source", "full"});
+        out.push_back({name, detail::get<std::string>(value, "source"), detail::get<bool>(value, "full", false)});
       });
   });
   return out;

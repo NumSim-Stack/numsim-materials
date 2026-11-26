@@ -19,6 +19,13 @@ if(NUMSIM_MATERIALS_BUILD_TESTS)
   material_report_exit_test(wrong_type 2 "${_cli}/string_scale.json|${_cli_out}/wrong_type" "-DMATCH=case 'u'.*scale")
   material_report_exit_test(broken_json 2 "${_cli}/broken.json|${_cli_out}/broken_json" "-DMATCH=broken.json")
   material_report_exit_test(missing_file 2 "${_cli}/missing.json|${_cli_out}/missing_file" "-DMATCH=cannot open")
+  material_report_exit_test(numerical_failure 1 "${_cli}/numerical_failure.json|${_cli_out}/numerical_failure"
+                            "-DMATCH='c'.*det F" -DEXISTS=${_cli_out}/numerical_failure/ok.csv
+                            -DFILE=${_cli_out}/numerical_failure/c.csv "-DFILE_MATCH=\n1,1,1.5,0,0,nan,nan,")
+  material_report_exit_test(unknown_key 2 "${_cli}/unknown_key.json|${_cli_out}/unknown_key" "-DMATCH=case 'u'.*stpes")
+  material_report_exit_test(cases_object 2 "${_cli}/cases_object.json|${_cli_out}/cases_object" "-DMATCH=cases.*array")
+  material_report_exit_test(derived_column 2 "${_cli}/derived_column.json|${_cli_out}/derived_column" "-DMATCH='p'"
+                            -DABSENT=${_cli_out}/derived_column/resolved.json)
 endif()
 
 # Every docs/materials/<material>/report.json as a regression test (checks only, no figures).

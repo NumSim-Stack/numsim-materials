@@ -407,13 +407,56 @@ TEST(ReportJson, RecordIsAnObjectOfCsvSafeNames) {
   EXPECT_EQ(r::parse_columns(doc).size(), 3u);
 }
 
+TEST(ReportJson, UnknownKeysAreNamedWithTheirPlace) {
+  auto const u = [](std::string const &extra) { return R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1])" + extra + "}"; };
+  for (auto const &[extra, key] : std::vector<std::pair<std::string, std::string_view>>{{R"(, "stpes": 1)", "stpes"},
+                                                                                         {R"(, "contorl": "mixed")", "contorl"}}) {
+    auto const message{error_of([&] { return r::parse_case<T>(json::parse(u(extra))); })};
+    EXPECT_TRUE(names(message, {"case 'u'", key})) << message;
+  }
+  EXPECT_EQ(error_of([&] { return r::parse_case<T>(json::parse(u(R"(, "control": "mixed", "stress_components": ["22"],
+    "stress": [0, 0, 0, 0, 0, 0], "steps": 2, "scale": 2, "dt": 1, "tangent_every": 1, "fd_step": 1e-7, "max_cutbacks": 1)"))); }), "");
+
+  auto const study = json::parse(R"({"cases": [{"name": "u"}], "studies": [{"name": "s", "case": "u", "steps": [1, 2],
+    "quantity": "stress_11", "min_order": 1, "quanity": "x"}]})");
+  EXPECT_TRUE(names(error_of([&] { return r::parse_studies(study); }), {"study 's'", "quanity"}));
+
+  auto doc = elastic_report();
+  doc["record"] = json::parse(R"({"k": {"source": "elastic::stress", "fulll": true}})");
+  EXPECT_TRUE(names(error_of([&] { return r::parse_columns(doc); }), {"record", "k", "fulll"}));
+
+  doc = elastic_report();
+  EXPECT_EQ(error_of([&] { r::check_report_keys(doc); }), "");
+  for (auto const *key : {"title", "notes", "parameters", "parameter_usage", "derived", "figures", "checks", "studies"})
+    doc[key] = json::object();
+  EXPECT_EQ(error_of([&] { r::check_report_keys(doc); }), "");
+  doc["cses"] = json::array();
+  EXPECT_TRUE(names(error_of([&] { r::check_report_keys(doc); }), {"report", "cses"}));
+}
+
+TEST(ReportJson, CasesStudyStepsAndStressComponentsAreNonEmptyArrays) {
+  auto const stems = [](std::string const &doc) { return error_of([&] { return r::output_stems(json::parse(doc)); }); };
+  EXPECT_TRUE(names(stems(R"({"cases": {"x": {"name": "u"}}})"), {"\"cases\"", "array"}));
+  EXPECT_TRUE(names(stems(R"({"cases": []})"), {"\"cases\""}));
+  EXPECT_TRUE(names(error_of([] { return r::parse_studies(json::parse(R"({"cases": {"x": {"name": "u"}}, "studies": [{"name": "s", "case": "u", "steps": [1, 2]}]})")); }),
+                    {"\"cases\"", "array"}));
+  for (auto const *steps : {"[]", "[4]"})
+    EXPECT_TRUE(names(error_of([&] { return r::parse_studies(json::parse(std::string{R"({"cases": [{"name": "u"}], "studies": [{"name": "s", "case": "u", "steps": )"} + steps + "}]}")); }),
+                      {"study 's'", "steps"})) << steps;
+  auto const mixed = json::parse(R"({"name": "u", "control": "mixed", "stress_components": [], "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1]})");
+  EXPECT_TRUE(names(error_of([&] { return r::parse_case<T>(mixed); }), {"case 'u'", "stress_components"}));
+  EXPECT_TRUE(names(error_of([&] { return r::parse_case<T>(mixed, true); }), {"case 'u'", "stress_components"}));
+}
+
 TEST(CaseRunner, ColumnNamesAreUnique) {
   auto const c{r::parse_case<T>(json::parse(R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], "steps": 1})"))};
   for (auto const &[record, duplicate] : std::vector<std::pair<json, std::string_view>>{
            {json::object({{"strain_11", "elastic::stress[1,1]"}}), "strain_11"},
            {json::object({{"stress", "elastic::stress"}}), "stress_11"},
            {json::object({{"time", "elastic::stress[1,1]"}}), "time"},
-           {json::object({{"converged", "elastic::stress[1,1]"}}), "converged"}}) {
+           {json::object({{"converged", "elastic::stress[1,1]"}}), "converged"},
+           {json::object({{"p", "elastic::stress[1,1]"}}), "'p'"},
+           {json::object({{"q", "elastic::stress[1,1]"}}), "'q'"}}) {
     auto doc = elastic_report();
     doc["record"] = record;
     recording_sink sink;
@@ -424,6 +467,25 @@ TEST(CaseRunner, ColumnNamesAreUnique) {
   recording_sink sink;
   auto const finite{r::parse_case<T>(json::parse(R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], "steps": 1})"), true)};
   EXPECT_TRUE(names(error_of([&] { return r::run_case<policy>(doc, finite, sink); }), {"'J'"}));
+}
+
+TEST(CaseRunner, ModelPointAndColumnErrorsShowWithoutACase) {
+  EXPECT_EQ(error_of([] { r::check_model_and_columns<policy>(elastic_report()); }), "");
+  EXPECT_EQ(error_of([] { r::check_model_and_columns<policy>(neo_hooke_report()); }), "");
+  auto doc = elastic_report();
+  doc["record"] = json::object({{"p", "elastic::stress[1,1]"}});
+  EXPECT_TRUE(names(error_of([&] { r::check_model_and_columns<policy>(doc); }), {"'p'"}));
+  doc["record"] = json::object({{"k", "elastic::nope"}});
+  EXPECT_TRUE(names(error_of([&] { r::check_model_and_columns<policy>(doc); }), {"'k'", "nope"}));
+  doc = neo_hooke_report();
+  doc["record"] = json::object({{"J", "model::stress[1,1]"}});
+  EXPECT_TRUE(names(error_of([&] { r::check_model_and_columns<policy>(doc); }), {"'J'"}));
+  doc = elastic_report();
+  doc["point"]["tolerance"] = -1;
+  EXPECT_TRUE(names(error_of([&] { r::check_model_and_columns<policy>(doc); }), {"point", "tolerance"}));
+  doc = elastic_report();
+  doc["point"]["stress_source"] = "nope";
+  EXPECT_THROW(r::check_model_and_columns<policy>(doc), nm::umat::fatal_error) << "the driver's own check";
 }
 
 TEST(CaseRunner, FiniteStrainRecordsFPCauchyAndJ) {
@@ -457,13 +519,34 @@ TEST(CaseRunner, TheCaseFdStepReachesTheDriver) {
       << "fd_step must be > 0";
 }
 
+/// Elastic, plus a degree of cure z with dz/dt = z (1 - z) (E = 0), integrated by backward Euler from z = 0.5.
+json curing_report() {
+  return json::parse(R"({
+    "model": {"materials": [
+      {"type": "external_strain_source", "name": "strain"},
+      {"type": "linear_elasticity", "name": "elastic", "strain_producer_name": "strain", "K": 100.0, "G": 50.0},
+      {"type": "external_scalar_source", "name": "time"},
+      {"type": "scalar_stepper", "name": "temperature", "increment": 300.0},
+      {"type": "backward_euler", "name": "solver", "function": "curing"},
+      {"type": "autocatalytic_reaction", "name": "curing", "A": 1.0, "E": 0.0, "n": 1.0, "m": 1.0, "start_value": 0.5}]},
+    "point": {"strain_source": "strain", "stress_source": "elastic", "time_source": "time"},
+    "record": {"z": "curing::current_state", "t": "time::state"}})");
+}
+
 TEST(CaseRunner, TheUnloadedStepRunsWithTheCaseTimeStep) {
-  auto const c{r::parse_case<T>(json::parse(R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], "steps": 2, "dt": 0.5})"))};
-  recording_sink sink;
-  ASSERT_TRUE(r::run_case<policy>(elastic_report(), c, sink));
-  EXPECT_EQ(sink.records.front().step.dt, 0.5);
-  EXPECT_EQ(sink.records.front().step.time + sink.records.front().step.dt, 0);
-  EXPECT_EQ(sink.records.back().step.time + sink.records.back().step.dt, 1);
+  for (T const dt : {0.5, 2.0}) {
+    auto const c{r::parse_case<T>(json::parse(R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], "steps": 2,
+      "scale": 1e-3, "tangent_every": 0, "dt": )" + std::to_string(dt) + "}"))};
+    recording_sink sink;
+    ASSERT_TRUE(r::run_case<policy>(curing_report(), c, sink));
+    auto const col = [&](std::size_t step, std::string const &n) {
+      return sink.records[step].columns[static_cast<std::size_t>(std::ranges::find(sink.names, n) - sink.names.begin())];
+    };
+    // backward Euler over step 0: dz = dt (0.5 + dz) (0.5 - dz)
+    EXPECT_NEAR(col(0, "z"), 0.5 + (std::sqrt(1 + dt * dt) - 1) / (2 * dt), 1e-10) << "dt " << dt;
+    EXPECT_EQ(col(0, "t"), 0) << "step 0 ends at time 0";
+    EXPECT_EQ(col(2, "t"), 2 * dt);
+  }
 }
 
 TEST(CaseRunner, RecordsTheUnloadedStateAndEveryStep) {
@@ -856,11 +939,12 @@ TEST(CsvSink, KeepsTheStreamsPrecisionAndIgnoresItsLocale) {
 TEST(CsvSink, WritesNanAndInfinity) {
   std::ostringstream csv, its;
   r::csv_sink<policy> sink{csv, its};
-  sink.begin({"a", "b", "c"});
+  sink.begin({"a", "b", "c", "d"});
   r::step_record<policy> rec;
-  rec.columns = {std::numeric_limits<T>::infinity(), -std::numeric_limits<T>::infinity(), std::numeric_limits<T>::quiet_NaN()};
+  rec.columns = {std::numeric_limits<T>::infinity(), -std::numeric_limits<T>::infinity(), std::numeric_limits<T>::quiet_NaN(),
+                 std::copysign(std::numeric_limits<T>::quiet_NaN(), T{-1})}; // x86 0/0 has the sign bit set
   sink.record(rec);
-  EXPECT_EQ(csv.str(), "step,time,load,iterations,converged,tangent_error,a,b,c\n0,0,0,0,0,nan,inf,-inf,nan\n");
+  EXPECT_EQ(csv.str(), "step,time,load,iterations,converged,tangent_error,a,b,c,d\n0,0,0,0,0,nan,inf,-inf,nan,nan\n");
 }
 
 TEST(GraphDescription, ErrorsNameTheModel) {

@@ -2,8 +2,11 @@
 
 Writes <directory>/<material>.html, self-contained (figures embedded), and an index.html.
 --check runs the cases and checks only; the exit code is 1 if a check fails or a step does not converge.
+A key the sections below do not list is an error that names it and its place.
 
 report.json
+  title        page title
+  notes        remarks for the reader of report.json (not rendered)
   include      files merged first (arrays appended, local keys win); paths relative to the including
                file, a file included twice is merged once
   parameters   values; every string "$name" in the document is replaced by parameters.name (name: letters,
@@ -26,15 +29,19 @@ report.json
   figures      title, text, columns, panels: kind line (x, y, reference, logy, xlabel, ylabel),
                residuals, iterations; case or cases (list or "*")
   checks       name, case/cases, value, expected (default 0), tolerance, relative, where;
-               plot: true or {"x": ...} draws value, expected and the error per case
-  studies      step-size studies: name, case, steps (list of step counts), quantity (expression of
+               plot: true or {"x", "y" (default value), "xlabel", "ylabel"} draws y, expected and the error
+               per case
+  studies      step-size studies: name, case, steps (at least two step counts), quantity (expression of
                the final state, default stress_11), min_order (default 0.9); the error against the
                finest run is fitted with a power of the load increment
 
 Expressions are Python over numpy (np), the parameters, the derived values and the columns of the
 case: step, time (at the end of the step), load, iterations, converged (1 or 0), tangent_error,
 strain_11..23 and stress_11..23 (tensor components), p (pressure), q (von Mises stress) and the
-recorded columns.
+recorded columns (no column may be named p or q).
+
+material_report exits with 0 (converged), 1 (a case did not converge or failed numerically, e.g. det F <= 0; the
+other cases still ran) or 2 (an input error, before any case runs).
 """
 from __future__ import annotations
 
@@ -44,12 +51,13 @@ import sys
 
 from . import html
 from .data import run_tool
-from .expressions import Expressions, evaluate_checks
+from .expressions import Expressions, check_keys, evaluate_checks
 from .studies import evaluate_studies
 
 
 def build(tool: str, folder: pathlib.Path, out: pathlib.Path | None) -> html.ReportSummary:
     run = run_tool(tool, folder / "report.json")
+    check_keys(run.spec)
     expr = Expressions(run.spec, run.cases)
     checks = evaluate_checks(expr)
     studies = evaluate_studies(expr, run.studies)

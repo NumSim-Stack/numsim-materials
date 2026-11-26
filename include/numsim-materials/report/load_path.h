@@ -20,9 +20,8 @@ struct load_step {
   T fraction{0};          ///< position in the segment at the end of the step, (0, 1]
 };
 
-/// Step schedule along a piecewise linear path: `steps_per_segment` steps between consecutive
-/// points; `factors` (one per point, times `scale`) give the load factor of a step. The first
-/// factor is 0: step 0 is the unloaded state. Every step, step 0 too, takes `dt`.
+/// `steps_per_segment` steps between consecutive points; `factors` (from 0, times `scale`) give the load factor.
+/// Every step, step 0 (the unloaded state) too, takes `dt`.
 template <typename T>
 class load_path {
 public:
@@ -38,7 +37,7 @@ public:
 
   [[nodiscard]] std::size_t size() const noexcept { return (m_points.size() - 1) * static_cast<std::size_t>(m_steps); }
 
-  /// Step 0, at zero load: one time step that ends at time 0.
+  /// Step 0, at zero load, from -dt to 0: loading starts at time 0 and time never runs backwards.
   [[nodiscard]] load_step<T> unloaded() const noexcept { return {0, -m_dt, m_dt, 0}; }
 
   [[nodiscard]] load_step<T> at(int index) const {

@@ -10,9 +10,8 @@
 
 #include <nlohmann/json.hpp>
 
-/// Report documents: "include" files are merged first (arrays appended, named entries replaced
-/// by name, local keys win), then every string "$name" is replaced by parameters.name (name: letters,
-/// digits and '_', not starting with a digit; other strings starting with '$' stay text).
+/// Report documents: "include" files merged first (arrays appended, named entries replaced, local keys win),
+/// then every string "$name" (an identifier) replaced by parameters.name.
 namespace numsim::materials::report {
 
 namespace detail {

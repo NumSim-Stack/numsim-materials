@@ -17,13 +17,20 @@ namespace numsim::materials::report {
 inline constexpr std::array<std::string_view, 6> step_columns{"step", "time", "load", "iterations", "converged",
                                                               "tangent_error"};
 
-/// `names` with step_columns: all distinct, or an invalid_argument naming the repeated one.
+/// The columns reports/numsim_report/data.py adds: pressure and von Mises stress.
+inline constexpr std::array<std::string_view, 2> derived_columns{"p", "q"};
+
+/// `names` distinct and none of step_columns or derived_columns, or an invalid_argument naming the column.
 inline void require_unique_columns(std::vector<std::string> const &names) {
-  std::vector<std::string_view> seen(step_columns.begin(), step_columns.end());
+  std::vector<std::string_view> seen;
   for (auto const &n : names) {
-    if (std::ranges::contains(seen, std::string_view{n}))
+    std::string_view const name{n};
+    if (std::ranges::contains(step_columns, name) || std::ranges::contains(derived_columns, name))
+      throw std::invalid_argument("report: the column name '" + n + "' is reserved (step, time, load, iterations, "
+                                  "converged, tangent_error, p, q)");
+    if (std::ranges::contains(seen, name))
       throw std::invalid_argument("report: two columns are named '" + n + "'");
-    seen.push_back(n);
+    seen.push_back(name);
   }
 }
 
