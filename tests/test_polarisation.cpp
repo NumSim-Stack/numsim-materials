@@ -1,9 +1,12 @@
 /// Hill's polarisation tensor of ellipsoids in an anisotropic medium, as the quadrature rules of the shapes.
 #include <gtest/gtest.h>
+#include <array>
 #include <cmath>
+#include <cstddef>
 #include <limits>
 #include <map>
 #include <memory>
+#include <numbers>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -26,6 +29,7 @@ using policy = nm::material_policy_default;
 using T = policy::value_type;
 using PH = policy::ParameterHandler;
 using spec = nm::object_spec<PH>;
+using tensor1 = tmech::tensor<T, 3, 1>;
 using tensor2 = tmech::tensor<T, 3, 2>;
 using tensor4 = tmech::tensor<T, 3, 4>;
 using numsim::materials::test::relative;
@@ -109,20 +113,90 @@ TEST(Polarisation, AnEllipticCylinderIsTheClosedForm) {
   EXPECT_LT(relative(S, nm::eshelby::ellipsoid(nu, T{2}, inf, T{0.5})), 1e-10);
 }
 
-// P carries the symmetries of a compliance in any medium
-TEST(Polarisation, IsSymmetricInAnAnisotropicMedium) {
+/// Independent reference: midpoint rule in z = cos(theta) about the global x3 axis (Richardson-extrapolated),
+/// trapezoid rule in phi, plain loops and an own 3x3 inverse.
+tensor4 brute_force_hill(std::array<T, 3> const &a, tensor2 const &R, tensor4 const &C, std::size_t nz, std::size_t nphi) {
+  constexpr T pi{std::numbers::pi_v<T>};
+  auto const integrate = [&](std::size_t n) {
+    std::array<T, 81> X{};
+    for (std::size_t iz{0}; iz < n; ++iz) {
+      T const z{-1 + T(2 * iz + 1) / T(n)}, s{std::sqrt(1 - z * z)};
+      for (std::size_t ip{0}; ip < nphi; ++ip) {
+        T const phi{2 * pi * T(ip) / T(nphi)};
+        T const xi[3]{s * std::cos(phi), s * std::sin(phi), z};
+        T Axi2{0};
+        for (std::size_t i{0}; i < 3; ++i) {
+          T const local{R(0, i) * xi[0] + R(1, i) * xi[1] + R(2, i) * xi[2]};
+          Axi2 += a[i] * a[i] * local * local;
+        }
+        T const w{a[0] * a[1] * a[2] / (Axi2 * std::sqrt(Axi2)) * (2 / T(n)) * (2 * pi / T(nphi)) / (4 * pi)};
+        T K[3][3]{};
+        for (std::size_t i{0}; i < 3; ++i)
+          for (std::size_t k{0}; k < 3; ++k)
+            for (std::size_t j{0}; j < 3; ++j)
+              for (std::size_t l{0}; l < 3; ++l)
+                K[i][k] += C(i, j, k, l) * xi[j] * xi[l];
+        T const det{K[0][0] * (K[1][1] * K[2][2] - K[1][2] * K[2][1]) - K[0][1] * (K[1][0] * K[2][2] - K[1][2] * K[2][0]) +
+                    K[0][2] * (K[1][0] * K[2][1] - K[1][1] * K[2][0])};
+        T N[3][3];
+        for (std::size_t i{0}; i < 3; ++i)
+          for (std::size_t j{0}; j < 3; ++j)
+            N[i][j] = (K[(j + 1) % 3][(i + 1) % 3] * K[(j + 2) % 3][(i + 2) % 3] - K[(j + 1) % 3][(i + 2) % 3] * K[(j + 2) % 3][(i + 1) % 3]) / det;
+        for (std::size_t i{0}; i < 3; ++i)
+          for (std::size_t j{0}; j < 3; ++j)
+            for (std::size_t k{0}; k < 3; ++k)
+              for (std::size_t l{0}; l < 3; ++l)
+                X[27 * i + 9 * j + 3 * k + l] += w * N[i][k] * xi[j] * xi[l];
+      }
+    }
+    return X;
+  };
+  auto const coarse{integrate(nz)}, fine{integrate(2 * nz)};
+  auto const X = [&](std::size_t i, std::size_t j, std::size_t k, std::size_t l) {
+    std::size_t const m{27 * i + 9 * j + 3 * k + l};
+    return (4 * fine[m] - coarse[m]) / 3;
+  };
+  tensor4 P;
+  for (std::size_t i{0}; i < 3; ++i)
+    for (std::size_t j{0}; j < 3; ++j)
+      for (std::size_t k{0}; k < 3; ++k)
+        for (std::size_t l{0}; l < 3; ++l)
+          P(i, j, k, l) = (X(i, j, k, l) + X(j, i, k, l) + X(i, j, l, k) + X(j, i, l, k)) / 4;
+  return P;
+}
+
+tensor2 tilt() {
+  tmech::tensor<T, 3, 1> axis;
+  axis(0) = 1;
+  axis(1) = 2;
+  axis(2) = 3;
+  return nm::rotation(tensor1{axis / tmech::norm(axis)}, T{0.8});
+}
+
+// a tilted triaxial ellipsoid in the fibre medium against the independent integration (brute grid good to ~3e-8)
+TEST(Polarisation, MatchesAnIndependentIntegrationForATiltedEllipsoid) {
   tensor4 const C{fibre_medium()};
-  auto const shape{make_shape("spheroid", with_direction(with_aspect_ratio(5), {1, 1, 0}))};
-  tensor4 const P{hill(shape->polarisation_rule(gl(12)), C)};
-  EXPECT_LT(relative(tensor4{tmech::basis_change<tmech::sequence<3, 4, 1, 2>>(P)}, P), 1e-13);
-  EXPECT_LT(relative(tensor4{tmech::basis_change<tmech::sequence<2, 1, 3, 4>>(P)}, P), 1e-13);
-  EXPECT_LT(relative(tensor4{tmech::basis_change<tmech::sequence<1, 2, 4, 3>>(P)}, P), 1e-13);
+  std::array<T, 3> const a{4, 2, 1};
+  tensor2 const R{tilt()};
+  tensor4 const reference{brute_force_hill(a, R, C, 400, 64)};
+  EXPECT_LT(relative(hill(pol::legendre<T>(a, R, 12), C), reference), 1e-6);
+  EXPECT_LT(relative(hill(pol::legendre<T>(a, R, 24), C), reference), 1e-7);
+  EXPECT_LT(relative(hill(pol::lebedev<T>(a, R, 77), C), reference), 5e-6);
+}
+
+// the sphere's default rule does not single out an axis: as accurate in a tilted medium as in an aligned one
+// (P of the rotated medium is the rotated P; brute grid good to ~3e-8)
+TEST(Polarisation, ASphereIsAccurateInATiltedMedium) {
+  auto const sphere{make_shape("sphere")};
+  tensor4 const C{fibre_medium()}, reference{brute_force_hill({1, 1, 1}, identity(), C, 400, 128)};
+  EXPECT_LT(relative(hill(sphere->polarisation_rule(gl(12)), C), reference), 1e-7);
+  EXPECT_LT(relative(hill(sphere->polarisation_rule(gl(12)), nm::rotate(C, tilt())), nm::rotate(reference, tilt())), 1e-7);
 }
 
 // spheroids tilted against the fibre medium: the error falls with the order (the medium's anisotropy limits the rate)
 TEST(Polarisation, ConvergesWithTheQuadratureOrderInAnAnisotropicMedium) {
   tensor4 const C{fibre_medium()};
-  for (T ar : {0.1, 1.0, 20.0}) {
+  for (T ar : {0.1, 2.0, 20.0}) {
     SCOPED_TRACE(ar);
     auto const shape{make_shape("spheroid", with_direction(with_aspect_ratio(ar), {1, 1, 0}))};
     tensor4 const reference{hill(shape->polarisation_rule(gl(48)), C)};
@@ -178,6 +252,21 @@ TEST(Polarisation, LebedevAndLegendreAgreeInAnAnisotropicMedium) {
   EXPECT_LT(e41, e23);
   EXPECT_LT(e77, e41);
   EXPECT_LT(e77, 1e-7);
+}
+
+// an infinite axis under Lebedev: the line rule has enough points at every degree
+TEST(Polarisation, LebedevOnACylinderIsTheClosedForm) {
+  T const nu{0.3};
+  tensor4 const C{nm::isotropic_stiffness<T, 3>(nm::bulk_modulus(T{1}, nu), nm::shear_modulus(T{1}, nu))};
+  tensor1 e1;
+  e1(0) = 1;
+  for (auto const d : nm::lebedev::precisions()) {
+    SCOPED_TRACE(d);
+    EXPECT_LT(relative(tensor4{tmech::dcontract(hill(pol::lebedev<T>({inf, 1, 1}, identity(), d), C), C)}, nm::eshelby::cylinder(nu, e1)), 1e-10);
+    EXPECT_LT(relative(tensor4{tmech::dcontract(hill(pol::lebedev<T>({inf, 2, 0.5}, identity(), d), C), C)},
+                       nm::eshelby::ellipsoid(nu, inf, T{2}, T{0.5})),
+              1e-10);
+  }
 }
 
 TEST(Polarisation, LebedevRejectsADegreeWithoutATable) {

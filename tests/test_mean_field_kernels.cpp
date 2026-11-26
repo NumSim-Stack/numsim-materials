@@ -3,6 +3,7 @@
 #include <any>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <map>
 #include <memory>
 #include <stdexcept>
@@ -256,6 +257,44 @@ TEST(MeanFieldKernels, SelfConsistentAlignedSpheroidsAreSymmetricAndBounded) {
   }
 }
 
+// the rotated microstructure has the rotated effective stiffness: no axis of the quadrature leaks into C
+TEST(MeanFieldKernels, SelfConsistentIsRotationCovariant) {
+  aligned_fibres ph;
+  tmech::tensor<T, 3, 1> axis;
+  axis(0) = 1;
+  axis(1) = 2;
+  axis(2) = 3;
+  tmech::tensor<T, 3, 2> const Q{nm::rotation(tmech::tensor<T, 3, 1>{axis / tmech::norm(axis)}, T{0.8})};
+  auto const along = [&](tmech::tensor<T, 3, 1> const &d) {
+    PH fibre;
+    fibre.insert<T>("aspect_ratio", 20);
+    fibre.insert<std::vector<T>>("direction", {d(0), d(1), d(2)});
+    PH p;
+    p.insert<std::map<std::string, spec>>("shapes", {{"matrix", spec{"sphere", {}}}, {"fibres", spec{"spheroid", fibre}}});
+    p.insert<T>("tolerance", 1e-12);
+    p.insert<T>("relaxation", 0.8);
+    auto k{mf::kernel_registry<policy>::instance().make(spec{"self_consistent", p})};
+    return effective_of(*k, ph);
+  };
+  tmech::tensor<T, 3, 1> e1;
+  e1(0) = 1;
+  EXPECT_LT(relative(along(tmech::tensor<T, 3, 1>{Q * e1}), nm::rotate(along(e1), Q)), 1e-10);
+}
+
+// a non-finite residual stops the iteration at once
+TEST(MeanFieldKernels, SelfConsistentStopsOnANonFiniteResidual) {
+  two_phases ph;
+  ph.Ci(0, 0, 0, 0) = std::numeric_limits<T>::quiet_NaN();
+  auto k{make("self_consistent", self_consistent_parameters())};
+  try {
+    (void)concentrations(*k, ph);
+    FAIL() << "a NaN tangent converged";
+  } catch (nm::umat::cutback_error const &e) {
+    std::string const what{e.what()};
+    EXPECT_NE(what.find("non-finite residual in iteration 1"), std::string::npos) << what;
+  }
+}
+
 TEST(MeanFieldKernels, SelfConsistentReferenceIsValidated) {
   PH p{self_consistent_parameters()};
   p.insert<std::string>("reference", "isotropic");
@@ -272,11 +311,14 @@ TEST(MeanFieldKernels, SelfConsistentReferenceIsValidated) {
   EXPECT_THROW(make("self_consistent", q), std::invalid_argument);
 }
 
-// spheres in the fibre phases: the two quadratures give the same effective stiffness
+// near-spherical phases (spheroids of aspect ratio 2) in the fibre medium: both quadratures give the same stiffness
 TEST(MeanFieldKernels, SelfConsistentLebedevAndLegendreAgree) {
   aligned_fibres ph;
+  PH spheroid;
+  spheroid.insert<T>("aspect_ratio", 2);
   auto const with = [&](std::string const &quadrature) {
-    PH p{fibre_parameters(spec{"sphere", {}}, "anisotropic")};
+    PH p{fibre_parameters(spec{"spheroid", spheroid}, "anisotropic")};
+    p.insert<T>("relaxation", 0.8);
     if (!quadrature.empty()) {
       p.insert<std::string>("quadrature", quadrature);
       p.insert<int>("lebedev_degree", 59);
@@ -284,8 +326,9 @@ TEST(MeanFieldKernels, SelfConsistentLebedevAndLegendreAgree) {
     auto k{mf::kernel_registry<policy>::instance().make(spec{"self_consistent", p})};
     return effective_of(*k, ph);
   };
-  EXPECT_LT(relative(with("lebedev"), with("")), 1e-8);
-  EXPECT_LT(relative(with("lebedev"), with("legendre")), 1e-8);
+  tensor4 const lebedev{with("lebedev")};
+  EXPECT_LT(relative(lebedev, with("")), 1e-8);
+  EXPECT_LT(relative(lebedev, with("legendre")), 1e-8);
 }
 
 TEST(MeanFieldKernels, SelfConsistentQuadratureIsValidated) {
@@ -307,6 +350,22 @@ TEST(MeanFieldKernels, SelfConsistentQuadratureIsValidated) {
     FAIL() << "a degree without a Lebedev table was accepted";
   } catch (std::invalid_argument const &e) {
     EXPECT_NE(std::string{e.what()}.find("77"), std::string::npos) << e.what();
+  }
+  // only the setting of the chosen quadrature is checked
+  PH unused_degree{self_consistent_parameters()};
+  unused_degree.insert<int>("lebedev_degree", 12);
+  EXPECT_NO_THROW(make("self_consistent", unused_degree));
+  PH unused_order{self_consistent_parameters()};
+  unused_order.insert<std::string>("quadrature", "lebedev");
+  unused_order.insert<int>("quadrature_order", 1);
+  EXPECT_NO_THROW(make("self_consistent", unused_order));
+  PH huge{self_consistent_parameters()};
+  huge.insert<int>("quadrature_order", 65);
+  try {
+    make("self_consistent", huge);
+    FAIL() << "quadrature_order 65 was accepted";
+  } catch (std::invalid_argument const &e) {
+    EXPECT_NE(std::string{e.what()}.find("64"), std::string::npos) << e.what();
   }
 }
 

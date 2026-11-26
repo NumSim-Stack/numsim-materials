@@ -1,6 +1,7 @@
 #ifndef NUMSIM_MATERIALS_MEAN_FIELD_KERNELS_H
 #define NUMSIM_MATERIALS_MEAN_FIELD_KERNELS_H
 
+#include <cmath>
 #include <ranges>
 #include <map>
 #include <memory>
@@ -147,9 +148,9 @@ public:
 /// the shape in C itself; "isotropised": T_r = (I + S_r(nu0) : C0^-1 : (C_r - C0))^-1 in C0 = iso(C).
 ///
 /// Parameters: "shapes" {phase: {"type": sphere | cylinder | spheroid | ellipsoid, ...}} for every phase,
-/// "reference", "quadrature": "legendre" (default, "quadrature_order" 12 points per panel) or "lebedev" ("lebedev_degree"
-/// 41, a tabled degree), "relaxation" (0.5, in
-/// (0, 1]), "tolerance" (1e-10), "max_iterations" (100).
+/// "reference", "quadrature": "legendre" (default, "quadrature_order" 12 points per panel, at most 64; a sphere takes
+/// Lebedev 77) or "lebedev" ("lebedev_degree" 41, a tabled degree), "relaxation" (0.5, in (0, 1]), "tolerance" (1e-10),
+/// "max_iterations" (100).
 template <typename Traits>
 class self_consistent final : public kernel_base<self_consistent<Traits>, Traits> {
 public:
@@ -170,12 +171,14 @@ public:
       throw std::invalid_argument("self_consistent: tolerance must be positive");
     if (m_max_iterations < 1)
       throw std::invalid_argument("self_consistent: max_iterations must be at least one");
-    if (m_order < 2)
-      throw std::invalid_argument("self_consistent: quadrature_order must be at least two");
-    try {
-      (void)lebedev::rule(static_cast<std::size_t>(m_degree));
-    } catch (std::invalid_argument const &e) {
-      throw std::invalid_argument(std::string{"self_consistent: lebedev_degree: "} + e.what());
+    if (m_quadrature == polarisation::quadrature::legendre && (m_order < 2 || m_order > max_order))
+      throw std::invalid_argument(std::format("self_consistent: quadrature_order must lie in [2, {}], got {}", max_order, m_order));
+    if (m_quadrature == polarisation::quadrature::lebedev) {
+      try {
+        (void)lebedev::rule(static_cast<std::size_t>(m_degree));
+      } catch (std::invalid_argument const &e) {
+        throw std::invalid_argument(std::string{"self_consistent: lebedev_degree: "} + e.what());
+      }
     }
   }
 
@@ -230,6 +233,8 @@ public:
         C_new += phase.fraction * tmech::dcontract(*phase.tangent, a);
       }
       residual = tmech::norm(tensor4{C_new - C}) / tmech::norm(C_new);
+      if (!std::isfinite(residual))
+        throw cutback_error(std::format("self_consistent: no convergence, non-finite residual in iteration {}", it + 1));
       if (residual <= m_tolerance) {
         m_C = C_new;
         return;
@@ -270,6 +275,8 @@ private:
       return polarisation::quadrature::lebedev;
     throw std::invalid_argument("self_consistent: unknown quadrature '" + s + "' (legendre, lebedev)");
   }
+
+  static constexpr int max_order{64}; ///< ~1.8e5 directions per phase at aspect ratio 1000
 
   reference_medium m_reference;
   value_type m_relaxation, m_tolerance;

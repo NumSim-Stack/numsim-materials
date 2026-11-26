@@ -215,8 +215,9 @@ json kernel_of(std::string const &type) {
   json const eshelby = {{"type", "eshelby_spheroid"}, {"aspect_ratio", 15.0}, {"nu_source", "moduli"}, {"nu_property", "poisson_ratio"}};
   if (type == "dilute" || type == "mori_tanaka")
     return {{"type", type}, {"eshelby", eshelby}};
-  if (type == "self_consistent")
-    return {{"type", type}, {"shape", {{"type", "spheroid"}, {"aspect_ratio", 15.0}}}, {"relaxation", 0.8}};
+  if (type == "self_consistent") // a coarse rule: the same kernel on both sides, so its accuracy does not matter here
+    return {{"type", type}, {"shape", {{"type", "spheroid"}, {"aspect_ratio", 15.0}}}, {"relaxation", 0.8},
+            {"quadrature", "lebedev"}, {"lebedev_degree", 11}};
   return {{"type", type}};
 }
 

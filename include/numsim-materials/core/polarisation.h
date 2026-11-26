@@ -144,13 +144,13 @@ template <typename T>
 }
 
 /// Ellipsoid as above by Lebedev nodes u mapped to xi = R A^-1 u / |A^-1 u|, which absorbs the weight
-/// a1 a2 a3 / |A xi|^3 exactly; one node per antipodal pair. An infinite axis uses the line rule, degree + 1 points.
+/// a1 a2 a3 / |A xi|^3 exactly; one node per antipodal pair. An infinite axis uses the line rule, at least 48 points.
 template <typename T>
 [[nodiscard]] std::vector<node<T>> lebedev(std::array<T, 3> const &a, tmech::tensor<T, 3, 2> const &R, std::size_t degree) {
   auto const nodes{numsim::materials::lebedev::rule(degree)};
   auto const [e, idx]{frame(a, R)};
   if (std::isinf(a[idx[0]]))
-    return cylinder(a[idx[1]], a[idx[2]], e[idx[1]], e[idx[2]], degree + 1);
+    return cylinder(a[idx[1]], a[idx[2]], e[idx[1]], e[idx[2]], std::max<std::size_t>(degree + 1, 48));
   constexpr T zero{1e-12};
   std::vector<node<T>> rule;
   for (auto const &q : nodes) {
@@ -171,9 +171,14 @@ struct scheme {
   std::size_t order{12};
 };
 
+/// The largest Lebedev table: the sphere's rule under legendre, whose pole would single out an axis.
+inline constexpr std::size_t sphere_degree{77};
+
 template <typename T>
 [[nodiscard]] std::vector<node<T>> rule(std::array<T, 3> const &a, tmech::tensor<T, 3, 2> const &R, scheme const &s) {
-  return s.kind == quadrature::lebedev ? lebedev<T>(a, R, s.order) : legendre<T>(a, R, s.order);
+  if (s.kind == quadrature::lebedev)
+    return lebedev<T>(a, R, s.order);
+  return a[0] == a[1] && a[1] == a[2] ? lebedev<T>(a, R, sphere_degree) : legendre<T>(a, R, s.order);
 }
 
 } // namespace numsim::materials::polarisation
