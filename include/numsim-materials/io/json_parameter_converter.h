@@ -151,10 +151,18 @@ json_reader_registry<JsonType> make_default_json_registry() {
 
   // vector<size_t>: element-wise conversion
   reg.template add<std::vector<std::size_t>>(
-      [](const JsonType& j, const std::string&) -> std::any {
+      [](const JsonType& j, const std::string& key) -> std::any {
+        // nlohmann iterates null as empty, a scalar as itself and an object over its values
+        if (!adapter::is_array(j))
+          throw std::invalid_argument("'" + key + "' is a list of integers, got " + adapter::dump(j));
         std::vector<std::size_t> result;
-        for (const auto& elem : j)
-          result.push_back(read_integer<std::size_t>(elem));
+        for (const auto& elem : j) {
+          try {
+            result.push_back(read_integer<std::size_t>(elem));
+          } catch (const std::invalid_argument& e) {
+            throw std::invalid_argument("element " + std::to_string(result.size()) + ": " + e.what());
+          }
+        }
         return result;
       });
 

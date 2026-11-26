@@ -1,6 +1,7 @@
 /// Errors about a deck name what is wrong and where: the parameter, its type, the material and the entry.
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
+#include <limits>
 
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/default_materials.h"
@@ -253,8 +254,8 @@ template <typename I> std::string integer_error(const json &value) {
 }
 
 TEST(ParameterDiagnostics, ANonIntegralValueForAnIntegerIsRejected) {
-  for (auto const &msg : {integer_error<int>(7.9), integer_error<std::size_t>(7.9), integer_error<int>(7.0),
-                          integer_error<std::vector<std::size_t>>(json::array({1, 2.5}))}) {
+  for (auto const &msg : {integer_error<int>(7.9), integer_error<std::size_t>(7.9), integer_error<int>(3.0),
+                          integer_error<std::size_t>(1e3), integer_error<std::vector<std::size_t>>(json::array({1, 2.5}))}) {
     ASSERT_FALSE(msg.empty()) << "a non-integral value was truncated";
     EXPECT_NE(msg.find("'n'"), std::string::npos) << msg;
     EXPECT_NE(msg.find("integer"), std::string::npos) << msg;
@@ -265,7 +266,23 @@ TEST(ParameterDiagnostics, AnIntegerOutOfRangeIsRejected) {
   EXPECT_NE(integer_error<std::size_t>(-1), "") << "-1 wrapped to a huge size_t";
   EXPECT_NE(integer_error<std::vector<std::size_t>>(json::array({0, -1})), "");
   EXPECT_NE(integer_error<int>(std::int64_t{1} << 40), "") << "2^40 was narrowed to an int";
-  EXPECT_NE(integer_error<int>("7"), "");
+  EXPECT_NE(integer_error<int>(std::int64_t{std::numeric_limits<int>::max()} + 1), "") << "INT_MAX + 1 was narrowed";
+  EXPECT_NE(integer_error<int>("7"), ""); // rejected before #151 as well
+}
+
+TEST(ParameterDiagnostics, AnIndexListMustBeAList) {
+  // nlohmann iterates null as empty, a number as itself and an object over its values
+  for (json const &value : {json(nullptr), json(2), json::object({{"a", 1}})}) {
+    auto const msg{integer_error<std::vector<std::size_t>>(value)};
+    ASSERT_FALSE(msg.empty()) << value.dump() << " was read as a list";
+    EXPECT_NE(msg.find("'n'"), std::string::npos) << msg;
+    EXPECT_NE(msg.find("list"), std::string::npos) << msg;
+  }
+}
+
+TEST(ParameterDiagnostics, AWrongListElementNamesItsPosition) {
+  auto const msg{integer_error<std::vector<std::size_t>>(json::array({0, 2.5}))};
+  EXPECT_NE(msg.find("element 1"), std::string::npos) << msg;
 }
 
 TEST(ParameterDiagnostics, IntegerValuesAreStillRead) {

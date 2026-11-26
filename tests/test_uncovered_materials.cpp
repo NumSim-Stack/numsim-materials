@@ -321,6 +321,28 @@ TEST(VectorStrainStateFunction, PicksOneComponentAndIsSignSymmetric) {
   EXPECT_NEAR(dp(0, 1), 0.0, 1e-12);
 }
 
+/// An index past the vector was written out of bounds; checked once at construction.
+TEST(VectorStrainStateFunction, ADirectionIsOneAxisIndex) {
+  auto error = [](std::vector<std::size_t> m, std::vector<std::size_t> n) -> std::string {
+    ctx_type ctx;
+    add<nm::tensor_component_stepper<2, policy>>(ctx, "stepper", {{"increment", 0.01}, {"indices", std::vector<std::size_t>{0, 0}}});
+    try {
+      add<nm::vector_strain_state_function<policy>>(ctx, "state",
+          {{"strain_source", "stepper"}, {"m_direction", std::move(m)}, {"n_direction", std::move(n)}});
+      return "";
+    } catch (const std::invalid_argument &e) {
+      return e.what();
+    }
+  };
+  EXPECT_EQ(error({0}, {2}), "");
+  for (auto const &[msg, key] : {std::pair{error({5}, {0}), "m_direction"}, std::pair{error({0}, {3}), "n_direction"},
+                                 std::pair{error({}, {0}), "m_direction"}, std::pair{error({0}, {0, 1}), "n_direction"}}) {
+    ASSERT_FALSE(msg.empty()) << key << " was accepted";
+    EXPECT_NE(msg.find(key), std::string::npos) << msg;
+    EXPECT_NE(msg.find("0..2"), std::string::npos) << msg;
+  }
+}
+
 // ---------------------------------------------------------------------------
 
 /// The equivalent strain accumulated from the declared partial is the hand-written d_equivalent_strain.
