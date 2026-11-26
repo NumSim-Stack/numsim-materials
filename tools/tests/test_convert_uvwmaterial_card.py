@@ -78,6 +78,14 @@ class ConvertTest(unittest.TestCase):
         self.assertAlmostEqual(sum(top["orientation"][:3]), 1.0)
         self.assertAlmostEqual(by_name(doc, matrix["fraction_source"])["value"], 0.5)
 
+    def test_short_fibre_precision_is_an_integer(self):
+        # numsim-core rejects 7.0 for an integer parameter (#269)
+        top = by_name(convert({**SHORT_FIBRE, "integration_precision": 7.0}, "sf"), "sf_tangent")
+        self.assertIs(type(top["precision"]), int)
+        self.assertEqual(top["precision"], 7)
+        with self.assertRaisesRegex(ValueError, "integration_precision"):
+            convert({**SHORT_FIBRE, "integration_precision": 7.5}, "sf")
+
     def test_linear_rule_of_mixture_is_a_tangent_and_a_stress(self):
         doc = convert(LINEAR_ROM, "rom")
         self.assertEqual(by_name(doc, "rom")["type"], "linear_stress")

@@ -2,6 +2,9 @@
 #define VECTOR_STRAIN_STATE_FUNCTION_H
 
 #include <cmath>
+#include <stdexcept>
+#include <string>
+#include <vector>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_base.h"
 #include "numsim-materials/core/parameter_helpers.h"
@@ -15,6 +18,8 @@ namespace numsim::materials {
 ///
 ///   eps_eq = |dot(m, eps * n)|
 ///   d(eps_eq)/d(eps) = sym(m ⊗ n) * sign(dot(m, eps * n))
+///
+/// "m_direction", "n_direction": the axis of m and n as a one-index list, e.g. [0].
 template <typename Traits>
 class vector_strain_state_function final
     : public material_base<vector_strain_state_function<Traits>, Traits> {
@@ -35,18 +40,11 @@ public:
         m_strain(base::template add_input<tensor2>(
             m_strain_source, base::template get_parameter<std::string>("strain_property"), EdgeKind::Global))
   {
-    // Initialize direction vectors from parameters
-    const auto& m_indices = base::template get_parameter<std::vector<std::size_t>>("m_direction");
-    const auto& n_indices = base::template get_parameter<std::vector<std::size_t>>("n_direction");
-    for (std::size_t i = 0; i < std::min(m_indices.size(), static_cast<std::size_t>(Dim)); ++i)
-      m_m(i) = (i < m_indices.size()) ? value_type{1} : value_type{0};
-    for (std::size_t i = 0; i < std::min(n_indices.size(), static_cast<std::size_t>(Dim)); ++i)
-      m_n(i) = (i < n_indices.size()) ? value_type{1} : value_type{0};
-    // Simple: use unit vectors along specified axes
+    // unit vectors along the given axes
     m_m = tensor1{};
     m_n = tensor1{};
-    if (!m_indices.empty()) m_m(m_indices[0]) = value_type{1};
-    if (!n_indices.empty()) m_n(n_indices[0]) = value_type{1};
+    m_m(axis("m_direction")) = value_type{1};
+    m_n(axis("n_direction")) = value_type{1};
     base::add_callback(&vector_strain_state_function::compute, m_eps_eq, m_deps_eq).reads(m_strain).partials(m_eps_eq, m_strain);
   }
 
@@ -71,6 +69,19 @@ public:
   }
 
 private:
+  /// The single axis index of a direction parameter, checked once: tmech does not bound-check m_m(i).
+  std::size_t axis(const std::string& key) {
+    const auto& indices = base::template get_parameter<std::vector<std::size_t>>(key);
+    if (indices.size() != 1 || indices[0] >= Dim) {
+      std::string got;
+      for (const auto i : indices)
+        got += (got.empty() ? "" : ", ") + std::to_string(i);
+      throw std::invalid_argument("vector_strain_state_function ('" + base::name() + "'): \"" + key +
+                                  "\" is one axis index from 0.." + std::to_string(Dim - 1) + ", got [" + got + "]");
+    }
+    return indices[0];
+  }
+
   value_type& m_eps_eq;
   tensor2& m_deps_eq;
   const std::string& m_strain_source;

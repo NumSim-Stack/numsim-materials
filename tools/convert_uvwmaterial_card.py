@@ -264,7 +264,7 @@ class Converter:
         a = card["fibre_orientation_tensor"]  # 9 components row-major
         orientation = [a[0], a[4], a[8], a[1], a[2], a[5]]
         tangent = self.add({"type": "short_fibre_composite", "name": f"{name}_tangent", "matrix": matrix_phase, "fibre": phase,
-                            "orientation": orientation, "precision": card.get("integration_precision", 23),
+                            "orientation": orientation, "precision": self.integer(card.get("integration_precision", 23), "integration_precision"),
                             "averaging": "stiffness"})  # uvwmaterial: Voigt over the unidirectional composites
         return self.stress_of(tangent, name)
 
@@ -285,6 +285,13 @@ class Converter:
             return self.add({"type": "peerlings_damage_law", "name": name, "yield_source": yield_name,
                              "kappa_0": p["kappa0"], "alpha": p["alpha"], "beta": p["beta"]})
         raise ValueError(f"propagation law {kind}: not supported (damage_exponential1 was not carried over, #119)")
+
+    @staticmethod
+    def integer(x, what: str) -> int:
+        """An integral number as an int: an integer parameter rejects 7.0 (#269)."""
+        if isinstance(x, bool) or not isinstance(x, (int, float)) or x != int(x):
+            raise ValueError(f"{what} must be an integer, got {x!r}")
+        return int(x)
 
     @staticmethod
     def axis_index(v: list, what: str) -> list:
