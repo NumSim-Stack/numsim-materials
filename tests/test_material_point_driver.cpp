@@ -400,4 +400,14 @@ TEST(MaterialPointDriver, AThrowInTheTangentCheckLeavesTheAcceptedState) {
   EXPECT_EQ(d.accepted_strain(), axial(0.5 * yield));
 }
 
+// Two drivers on one context share its history: accept() of one moves the start of the other.
+TEST(MaterialPointDriver, DriversOnOneContextShareTheHistory) {
+  ctx_type ctx;
+  build_j2(ctx);
+  driver a(ctx, parameters_for("j2")), b(ctx, parameters_for("j2"));
+  auto const res{a.step(axial(5e-3), tensor2{}, control::uniaxial_stress(), 0, 1)};
+  a.accept();
+  EXPECT_EQ(b.accepted_strain(), res.strain);
+}
+
 } // namespace

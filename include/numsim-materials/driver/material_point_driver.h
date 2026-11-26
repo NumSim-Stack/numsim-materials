@@ -20,7 +20,8 @@
 /// The history lives in the graph (engine-owned, see material_point): step() leaves the converged trial,
 /// accept() makes it the start of the next step and reject() returns to the accepted state. The accepted
 /// strain is the old value of the strain source. A throw from step() or tangent_error() returns to the accepted
-/// state first, as reject() does.
+/// state first, as reject() does. Drivers on one context share its history: each evaluation rebinds the sources,
+/// but accept() or reject() of one moves the others too.
 namespace numsim::materials {
 
 template <typename Traits>

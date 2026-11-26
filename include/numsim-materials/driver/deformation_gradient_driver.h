@@ -20,7 +20,7 @@
 /// The history lives in the graph, as for material_point_driver: step() leaves the converged trial, accept()
 /// makes it the start of the next step, reject() returns to the accepted state. The accepted F is the old
 /// value of the deformation gradient source. A throw from step() or tangent_error() returns to the accepted
-/// state first, as reject() does.
+/// state first, as reject() does. Drivers on one context share its history, as for material_point_driver.
 namespace numsim::materials {
 
 template <typename Traits>
