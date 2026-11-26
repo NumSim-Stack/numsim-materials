@@ -2,6 +2,7 @@
 #define NUMSIM_MATERIALS_DRIVER_MATERIAL_POINT_DRIVER_H
 
 #include <algorithm>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -18,7 +19,9 @@
 ///
 /// The history lives in the graph (engine-owned, see material_point): step() leaves the converged trial,
 /// accept() makes it the start of the next step and reject() returns to the accepted state. The accepted
-/// strain is the old value of the strain source.
+/// strain is the old value of the strain source. A throw from step() leaves the point failed: accept() throws,
+/// reject() recovers. Drivers on one context share its history: each evaluation rebinds the sources, but accept() or
+/// reject() of one moves the others too.
 namespace numsim::materials {
 
 template <typename Traits>
@@ -109,18 +112,29 @@ public:
   /// Back to the accepted state.
   void reject() { m_point.reset(); }
 
-  /// Relative error of the tangent of the trial `res` against central differences, before accept(). The trial
-  /// is evaluated again afterwards, so accepting it is unaffected.
-  value_type tangent_error(step_result const &res) {
+  /// Error of the tangent of the trial `res` against central differences, relative to the differences, before accept().
+  /// The trial is evaluated again afterwards, also after a throw, so accepting it is unaffected.
+  value_type tangent_error(step_result const &res) try {
     tensor4 fd;
-    for (auto const &E : materials::symmetric_basis<value_type>()) {
+    auto const &basis{materials::symmetric_basis<value_type>()};
+    for (auto const &E : basis) {
       evaluate(tensor2{res.strain + m_fd_step * E}, res.time, res.dt);
       tensor2 const plus{m_stress};
       evaluate(tensor2{res.strain - m_fd_step * E}, res.time, res.dt);
       fd += tmech::otimes(tensor2{(plus - m_stress) / (2 * m_fd_step)}, E);
     }
     evaluate(res.strain, res.time, res.dt);
-    return tmech::norm(tensor4{fd - res.tangent}) / tmech::norm(res.tangent);
+    // floor: the roundoff of the differences, about eps |stress| / fd_step per direction
+    auto const noise{static_cast<value_type>(basis.size()) * std::numeric_limits<value_type>::epsilon() *
+                     tmech::norm(res.stress) / m_fd_step};
+    auto const scale{std::max(tmech::norm(fd) + noise, std::numeric_limits<value_type>::min())};
+    return tmech::norm(tensor4{fd - res.tangent}) / scale;
+  } catch (...) {
+    try {
+      evaluate(res.strain, res.time, res.dt);
+    } catch (...) { // the trial throws again: the point stays failed
+    }
+    throw;
   }
 
   [[nodiscard]] tensor2 const &accepted_strain() const noexcept { return m_strain.strain().old_value(); }

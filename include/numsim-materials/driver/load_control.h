@@ -1,15 +1,20 @@
 #ifndef NUMSIM_MATERIALS_DRIVER_LOAD_CONTROL_H
 #define NUMSIM_MATERIALS_DRIVER_LOAD_CONTROL_H
 
+#include <array>
 #include <initializer_list>
+#include <span>
+#include <stdexcept>
+#include <string>
 #include <string_view>
+#include <utility>
 
 #include <tmech/tmech.h>
 #include "numsim-materials/core/tensor_identities.h"
 
 namespace numsim::materials {
 
-/// Which symmetric components are stress controlled; the rest are strain controlled.
+/// Which symmetric components are stress controlled; the rest are strain controlled. mixed() names each once.
 template <typename T>
 class load_control {
 public:
@@ -22,8 +27,12 @@ public:
   }
   static load_control mixed(std::span<std::string_view const> stress_components) {
     load_control c;
+    std::array<bool, 6> given{};
     for (auto const name : stress_components) {
-      auto const &E{materials::symmetric_basis<T>()[materials::component_index(name)]};
+      auto const a{materials::component_index(name)};
+      if (std::exchange(given[a], true))
+        throw std::invalid_argument("load_control: component '" + std::string{name} + "' is given twice");
+      auto const &E{materials::symmetric_basis<T>()[a]};
       c.m_P += tmech::otimes(E, E);
     }
     return c;
@@ -40,21 +49,27 @@ private:
   tensor4 m_P;
 };
 
-/// Which of the nine components of F are stress (P) controlled; the rest are prescribed.
+/// Which of the nine components of F are stress (P) controlled; the rest are prescribed. mixed() names each once.
 template <typename T>
 class deformation_control {
 public:
   using tensor4 = tmech::tensor<T, 3, 4>;
 
   static deformation_control deformation() { return deformation_control{}; }
-  static deformation_control uniaxial_stress() { return mixed({"22", "33", "12", "13", "23", "21", "31", "32"}); }
+  /// F11 and F21 = F31 = F32 = 0 prescribed, P12, P13, P22, P23, P33 controlled: P is uniaxial for any material.
+  /// The zero lower part fixes the rotation of F = R U; a prescribed F with a rotation in it is not meaningful.
+  static deformation_control uniaxial_stress() { return mixed({"12", "13", "22", "23", "33"}); }
   static deformation_control mixed(std::initializer_list<std::string_view> stress_components) {
     return mixed(std::span{stress_components.begin(), stress_components.size()});
   }
   static deformation_control mixed(std::span<std::string_view const> stress_components) {
     deformation_control c;
+    std::array<bool, 9> given{};
     for (auto const name : stress_components) {
-      auto const &E{materials::full_basis<T>()[materials::full_component_index(name)]};
+      auto const a{materials::full_component_index(name)};
+      if (std::exchange(given[a], true))
+        throw std::invalid_argument("deformation_control: component '" + std::string{name} + "' is given twice");
+      auto const &E{materials::full_basis<T>()[a]};
       c.m_M += tmech::otimes(E, E);
     }
     return c;
