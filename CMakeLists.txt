@@ -44,8 +44,8 @@ include(cmake/numsim_bootstrap.cmake)
 include(NumSimDependency)
 include(NumSimWarnings)
 
-set(NUMSIM_MATERIALS_NUMSIM_CORE_TAG "v1.0.0" CACHE STRING
-    "numsim-core version (tag or commit) to fetch")
+set(NUMSIM_MATERIALS_NUMSIM_CORE_TAG "v1.2.1" CACHE STRING
+    "numsim-core version (tag or commit) to fetch; v1.1.0+ names the missing parameters in accept()'s exception")
 set(NUMSIM_MATERIALS_TMECH_TAG "f8c8000d21d7f01d05c91b7562bc1b2fa29c34d8" CACHE STRING
     "tmech version (tag or commit) to fetch; tmech master after #43 (isotropic tensor functions of a functor object)")
 
@@ -57,6 +57,16 @@ numsim_dependency(numsim-core
   FIND_PACKAGE_ARGS CONFIG
   OPTIONS NUMSIM_CORE_BUILD_TESTS=OFF NUMSIM_CORE_BUILD_EXAMPLES=OFF
           NUMSIM_CORE_INSTALL=${NUMSIM_MATERIALS_INSTALL})
+# The tag is cached: a build dir configured before a bump keeps fetching the old core.
+set(_nm_core_version "${numsim-core_VERSION}")
+if(NOT _nm_core_version AND EXISTS "${numsim-core_SOURCE_DIR}/project-meta-info.in")
+  file(STRINGS "${numsim-core_SOURCE_DIR}/project-meta-info.in" _nm_core_version REGEX "project_version")
+  string(REGEX MATCH "[0-9]+\\.[0-9]+\\.[0-9]+" _nm_core_version "${_nm_core_version}")
+endif()
+if(_nm_core_version AND _nm_core_version VERSION_LESS 1.1.0)
+  message(WARNING "numsim-core ${_nm_core_version} predates v1.1.0: the JSON path's exception does not name the "
+                  "missing parameters. Reconfigure with -DNUMSIM_MATERIALS_NUMSIM_CORE_TAG=v1.2.1 (the pin).")
+endif()
 
 numsim_dependency(tmech
   TARGET tmech::tmech

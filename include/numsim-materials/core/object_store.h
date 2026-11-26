@@ -91,6 +91,8 @@ private:
   /// time adopt() sees it the collision has already happened in the property
   /// registry.
   void check_name_available(const parameter_handler& params) const {
+    if (!params.contains("name"))
+      return; // the material's parameter check names it with the other missing ones
     const auto& name = params.template get<std::string>("name");
     if (m_by_name.contains(name))
       throw std::invalid_argument(

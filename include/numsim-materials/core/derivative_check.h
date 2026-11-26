@@ -200,7 +200,7 @@ template <class Traits, class Context, class Engine>
 derivative_check<typename Traits::value_type> run(Context& ctx, Engine& engine, typename Traits::ParameterHandler parameters) {
   using T = typename Traits::value_type;
   static auto const controller{derivative_check_parameters<Traits>()};
-  controller.check_parameter(parameters);
+  check_parameters(controller, parameters);
   auto const& output_key{parameters.template get<std::string>("output")};
   auto const& input_key{parameters.template get<std::string>("input")};
   auto const& analytical_key{parameters.template get<std::string>("analytical")};
