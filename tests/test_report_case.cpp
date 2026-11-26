@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include <initializer_list>
+#include <locale>
 #include <limits>
 #include <stdexcept>
 #include <string_view>
@@ -810,8 +811,47 @@ TEST(CsvSink, WritesHeaderRowsAndResiduals) {
   rec.columns = {1e-3, 2.0};
   rec.tangent_error = 1e-9;
   sink.record(rec);
-  EXPECT_EQ(csv.str(), "step,time,load,iterations,converged,tangent_error,strain_11,kappa\n1,1,0.5,1,1,1.0000000000000001e-09,0.001,2\n");
+  EXPECT_EQ(csv.str(), "step,time,load,iterations,converged,tangent_error,strain_11,kappa\n1,1,0.5,1,1,1e-09,0.001,2\n");
   EXPECT_EQ(its.str(), "step,iteration,residual\n1,0,1\n1,1,1e-12\n");
+}
+
+/// A locale writing 1.234,5 for 1234.5.
+struct comma_decimal : std::numpunct<char> {
+  char do_decimal_point() const override { return ','; }
+  char do_thousands_sep() const override { return '.'; }
+  std::string do_grouping() const override { return "\3"; }
+};
+
+TEST(CsvSink, KeepsTheStreamsPrecisionAndIgnoresItsLocale) {
+  std::ostringstream csv, its;
+  csv.precision(3);
+  its.precision(3);
+  csv.imbue(std::locale(std::locale::classic(), new comma_decimal));
+  its.imbue(std::locale(std::locale::classic(), new comma_decimal));
+  {
+    r::csv_sink<policy> sink{csv, its};
+    sink.begin({"x"});
+    r::step_record<policy> rec;
+    rec.step = {1000, 0, 1, 1234.5};
+    rec.result.residuals = {0.123456789, 1e-12};
+    rec.columns = {0.1 + 0.2};
+    rec.tangent_error = 1e-9;
+    sink.record(rec);
+  }
+  EXPECT_EQ(csv.str(), "step,time,load,iterations,converged,tangent_error,x\n1000,1,1234.5,1,0,1e-09,0.30000000000000004\n");
+  EXPECT_EQ(its.str(), "step,iteration,residual\n1000,0,0.123457\n1000,1,1e-12\n");
+  EXPECT_EQ(csv.precision(), 3);
+  EXPECT_EQ(its.precision(), 3);
+}
+
+TEST(CsvSink, WritesNanAndInfinity) {
+  std::ostringstream csv, its;
+  r::csv_sink<policy> sink{csv, its};
+  sink.begin({"a", "b", "c"});
+  r::step_record<policy> rec;
+  rec.columns = {std::numeric_limits<T>::infinity(), -std::numeric_limits<T>::infinity(), std::numeric_limits<T>::quiet_NaN()};
+  sink.record(rec);
+  EXPECT_EQ(csv.str(), "step,time,load,iterations,converged,tangent_error,a,b,c\n0,0,0,0,0,nan,inf,-inf,nan\n");
 }
 
 TEST(GraphDescription, ListsMaterialsParametersAndWiring) {

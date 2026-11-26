@@ -32,8 +32,9 @@ report.json
                finest run is fitted with a power of the load increment
 
 Expressions are Python over numpy (np), the parameters, the derived values and the columns of the
-case: step, time, load, iterations, converged, tangent_error, strain_11..23 and stress_11..23
-(tensor components), p (pressure), q (von Mises stress) and the recorded columns.
+case: step, time (at the end of the step), load, iterations, converged (1 or 0), tangent_error,
+strain_11..23 and stress_11..23 (tensor components), p (pressure), q (von Mises stress) and the
+recorded columns.
 """
 from __future__ import annotations
 
