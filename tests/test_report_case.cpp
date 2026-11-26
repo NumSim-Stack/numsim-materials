@@ -271,6 +271,15 @@ TEST(ReportJson, ParsesRefinementStudies) {
                std::invalid_argument);
 }
 
+TEST(ReportJson, StudyErrorsNameTheStudy) {
+  auto const error = [](std::string const &doc) { return error_of([&] { return r::parse_studies(json::parse(doc)); }); };
+  EXPECT_TRUE(names(error(R"({"cases": [{"direction": [1, 0, 0, 0, 0, 0]}, {"name": "u"}], "studies": [{"name": "s", "case": "u", "steps": [1]}]})"),
+                    {"case without a \"name\""}));
+  EXPECT_TRUE(names(error(R"({"cases": [{"name": "u"}], "studies": [{"case": "u", "steps": [1]}]})"), {"study", "name"}));
+  EXPECT_TRUE(names(error(R"({"cases": [{"name": "u"}], "studies": [{"name": "s", "steps": [1]}]})"), {"study 's'", "case"}));
+  EXPECT_TRUE(names(error(R"({"cases": [{"name": "u"}], "studies": [{"name": "s", "case": "u", "steps": 4}]})"), {"study 's'", "steps"}));
+}
+
 TEST(ReportJson, ParsesALoadCase) {
   auto const c{r::parse_case<T>(json::parse(R"({"name": "u", "control": "mixed", "stress_components": ["22", "33"],
     "direction": [1, 0, 0, 0.5, 0, 0], "path": [0, 1], "steps": 4, "scale": 0.01})"))};
@@ -852,6 +861,12 @@ TEST(CsvSink, WritesNanAndInfinity) {
   rec.columns = {std::numeric_limits<T>::infinity(), -std::numeric_limits<T>::infinity(), std::numeric_limits<T>::quiet_NaN()};
   sink.record(rec);
   EXPECT_EQ(csv.str(), "step,time,load,iterations,converged,tangent_error,a,b,c\n0,0,0,0,0,nan,inf,-inf,nan\n");
+}
+
+TEST(GraphDescription, ErrorsNameTheModel) {
+  auto doc = elastic_report();
+  doc.erase("model");
+  EXPECT_TRUE(names(error_of([&] { return r::describe_graph<policy>(doc); }), {"\"model\""}));
 }
 
 TEST(GraphDescription, ListsMaterialsParametersAndWiring) {

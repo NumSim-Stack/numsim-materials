@@ -17,13 +17,16 @@ nlohmann::json describe_graph(nlohmann::json const &doc) {
   auto &factory{object_store<Traits>::factory_type::instance()};
   auto out = json::array();
   for (auto const &d : materials::describe_graph(model.context())) {
+    // a material the document does not list keeps an empty type
     auto const *spec{[&]() -> json const * {
       for (auto const &m : doc.at("model").at("materials"))
-        if (m.at("name") == d.name)
+        if (m.is_object() && m.contains("name") && m["name"] == d.name)
           return &m;
       return nullptr;
     }()};
-    std::string const type = spec != nullptr ? std::string(spec->at("type")) : std::string{};
+    std::string const type = spec != nullptr && spec->contains("type") && (*spec)["type"].is_string()
+                                 ? (*spec)["type"].template get<std::string>()
+                                 : std::string{};
     auto entry = json::object();
     entry["name"] = d.name;
     entry["type"] = type;

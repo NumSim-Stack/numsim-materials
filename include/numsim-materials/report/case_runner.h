@@ -21,7 +21,10 @@ namespace numsim::materials::report {
 template <typename Traits>
 class case_model {
 public:
-  explicit case_model(nlohmann::json const &doc) { umat::make_json_builder<Traits>(doc.at("model").dump())(m_ctx, {}); }
+  explicit case_model(nlohmann::json const &doc) {
+    auto const model = detail::in_context("report", [&] { return detail::get<nlohmann::json>(doc, "model"); });
+    umat::make_json_builder<Traits>(model.dump())(m_ctx, {});
+  }
 
   [[nodiscard]] material_context<Traits> &context() noexcept { return m_ctx; }
 

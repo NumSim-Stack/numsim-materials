@@ -237,18 +237,34 @@ inline nlohmann::json with_steps(nlohmann::json spec, int steps) {
   return spec;
 }
 
+/// The document's "studies"; errors are invalid_arguments naming the study.
 inline std::vector<refinement_study> parse_studies(nlohmann::json const &doc) {
   std::vector<refinement_study> out;
-  for (auto const &s : doc.value("studies", nlohmann::json::array())) {
-    auto const case_name = s.at("case").get<std::string>();
-    auto const &cases{doc.at("cases")};
-    auto const it{std::find_if(cases.begin(), cases.end(), [&](auto const &c) { return c.at("name") == case_name; })};
-    if (it == cases.end())
-      throw std::invalid_argument("study '" + s.at("name").get<std::string>() + "': no case '" + case_name + "'");
-    std::vector<int> steps;
-    for (auto const &n : s.at("steps"))
-      steps.push_back(detail::as_count(n, "study '" + s.at("name").get<std::string>() + "': steps", 1));
-    out.push_back({s.at("name").get<std::string>(), *it, std::move(steps)});
+  auto const studies = detail::in_context("report", [&] { return detail::get(doc, "studies", nlohmann::json::array()); });
+  if (!studies.is_array())
+    throw std::invalid_argument("report: \"studies\": expected an array, got " + studies.dump());
+  for (auto const &s : studies) {
+    auto const label{s.is_object() && s.contains("name") && s["name"].is_string()
+                         ? "study '" + s["name"].get<std::string>() + "'"
+                         : std::string{"a study without a \"name\""}};
+    out.push_back(detail::in_context(label, [&] {
+      auto const name{detail::get<std::string>(s, "name")};
+      auto const case_name{detail::get<std::string>(s, "case")};
+      auto const &cases{doc.at("cases")};
+      for (auto const &c : cases)
+        if (!c.is_object() || !c.contains("name") || !c["name"].is_string())
+          throw std::invalid_argument(detail::case_label(c) + " in \"cases\"");
+      auto const it{std::find_if(cases.begin(), cases.end(), [&](auto const &c) { return c["name"] == case_name; })};
+      if (it == cases.end())
+        throw std::invalid_argument("no case '" + case_name + "'");
+      auto const &list{s.at("steps")};
+      if (!list.is_array())
+        throw std::invalid_argument("\"steps\": expected an array of step counts, got " + list.dump());
+      std::vector<int> steps;
+      for (auto const &n : list)
+        steps.push_back(detail::as_count(n, "\"steps\"", 1));
+      return refinement_study{name, *it, std::move(steps)};
+    }));
   }
   return out;
 }
