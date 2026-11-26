@@ -93,8 +93,9 @@ private:
     std::size_t pos{0};
     while (pos < list.size()) {
       auto const end{std::min(list.find(',', pos), list.size())};
-      auto const item{list.substr(pos, end - pos)};
-      require(name, item.find_first_not_of(" 0123456789") == std::string::npos && item.find_first_of("0123456789") != std::string::npos,
+      auto const first{list.find_first_not_of(' ', pos)}, last{list.find_last_not_of(' ', end - 1)};
+      auto const item{first < end && last != std::string::npos ? list.substr(first, last - first + 1) : std::string{}};
+      require(name, !item.empty() && item.find_first_not_of("0123456789") == std::string::npos,
               "indices are comma-separated numbers");
       auto const i{std::stoul(item)};
       require(name, i >= 1 && i <= 3, "indices run from 1 to 3");

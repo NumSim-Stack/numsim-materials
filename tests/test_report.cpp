@@ -113,6 +113,13 @@ TEST(PropertyColumns, RejectsUnknownAndUnsupported) {
   EXPECT_THROW(columns(p.ctx, {{"x", "j2::stress[1]"}}), std::invalid_argument);
 }
 
+TEST(PropertyColumns, ComponentsAreCommaSeparatedNumbers) {
+  j2_point p;
+  EXPECT_THROW(columns(p.ctx, {{"x", "j2::stress[1 2,1]"}}), std::invalid_argument);
+  EXPECT_THROW(columns(p.ctx, {{"x", "j2::stress[1,,2]"}}), std::invalid_argument);
+  EXPECT_EQ(columns(p.ctx, {{"x", "j2::stress[ 1, 2 ]"}}).names().size(), 1u);
+}
+
 TEST(ReportSpec, SubstitutesParameters) {
   auto const spec = json::parse(R"({"parameters": {"K": 2.5, "name": "j2"},
     "model": {"materials": [{"type": "x", "K": "$K", "list": [1, "$K"], "src": "$name"}]}})");

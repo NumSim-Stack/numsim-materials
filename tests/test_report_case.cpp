@@ -350,6 +350,37 @@ TEST(ReportJson, OutputNamesStayInTheOutputDirectoryAndAreUnique) {
             (std::vector<std::string>{"u-1.a", "a study_2", "a study_4"}));
 }
 
+TEST(ReportJson, RecordIsAnObjectOfCsvSafeNames) {
+  auto doc = elastic_report();
+  doc["record"] = json::array({"elastic::stress"});
+  EXPECT_TRUE(names(error_of([&] { return r::parse_columns(doc); }), {"record", "object"}));
+  for (auto const *bad : {"a,b", "a\"b", "a\nb", ""}) {
+    doc["record"] = json::object({{bad, "elastic::stress[1,1]"}});
+    EXPECT_TRUE(names(error_of([&] { return r::parse_columns(doc); }), {"record"})) << bad;
+  }
+  doc["record"] = json::object({{"a b-c.d", "elastic::stress[1,1]"}});
+  EXPECT_EQ(r::parse_columns(doc).size(), 3u);
+}
+
+TEST(CaseRunner, ColumnNamesAreUnique) {
+  auto const c{r::parse_case<T>(json::parse(R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], "steps": 1})"))};
+  for (auto const &[record, duplicate] : std::vector<std::pair<json, std::string_view>>{
+           {json::object({{"strain_11", "elastic::stress[1,1]"}}), "strain_11"},
+           {json::object({{"stress", "elastic::stress"}}), "stress_11"},
+           {json::object({{"time", "elastic::stress[1,1]"}}), "time"},
+           {json::object({{"converged", "elastic::stress[1,1]"}}), "converged"}}) {
+    auto doc = elastic_report();
+    doc["record"] = record;
+    recording_sink sink;
+    EXPECT_TRUE(names(error_of([&] { return r::run_case<policy>(doc, c, sink); }), {duplicate})) << record.dump();
+  }
+  auto doc = neo_hooke_report();
+  doc["record"] = json::object({{"J", "model::stress[1,1]"}});
+  recording_sink sink;
+  auto const finite{r::parse_case<T>(json::parse(R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], "steps": 1})"), true)};
+  EXPECT_TRUE(names(error_of([&] { return r::run_case<policy>(doc, finite, sink); }), {"'J'"}));
+}
+
 TEST(CaseRunner, FiniteStrainRecordsFPCauchyAndJ) {
   auto const doc = neo_hooke_report();
   auto const spec = json::parse(R"({"name": "u", "control": "uniaxial_stress",

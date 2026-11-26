@@ -1,13 +1,31 @@
 #ifndef NUMSIM_MATERIALS_REPORT_STEP_RECORD_H
 #define NUMSIM_MATERIALS_REPORT_STEP_RECORD_H
 
+#include <algorithm>
+#include <array>
 #include <limits>
+#include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "numsim-materials/report/load_path.h"
 
 namespace numsim::materials::report {
+
+/// The columns of a step before the property columns, as csv_sink writes them.
+inline constexpr std::array<std::string_view, 6> step_columns{"step", "time", "load", "iterations", "converged",
+                                                              "tangent_error"};
+
+/// `names` with step_columns: all distinct, or an invalid_argument naming the repeated one.
+inline void require_unique_columns(std::vector<std::string> const &names) {
+  std::vector<std::string_view> seen(step_columns.begin(), step_columns.end());
+  for (auto const &n : names) {
+    if (std::ranges::contains(seen, std::string_view{n}))
+      throw std::invalid_argument("report: two columns are named '" + n + "'");
+    seen.push_back(n);
+  }
+}
 
 /// What a sink needs of a driver's step: its Newton history.
 template <typename T>

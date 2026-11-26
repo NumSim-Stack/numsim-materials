@@ -14,7 +14,8 @@ report.json
                stress_property, tangent_property ("damaged_stress"), time_source
   record       extra columns wired to graph properties: "kappa": "j2::equivalent_plastic_strain";
                a rank-2 tensor gives six columns name_11 ... name_23, a component is selected with
-               "j2::plastic_strain[1,1]" (1-based); columns are ordered by name
+               "j2::plastic_strain[1,1]" (1-based); columns are ordered by name, names have no comma,
+               quote or control character and no two columns share one
   cases        name; control: strain | uniaxial_stress | mixed with stress_components ["22", "33"];
                proportional: direction (strain per unit load) and path (load factors from 0); non-proportional:
                points (strain states in order from zero, the load factor counts segments); stress (target per

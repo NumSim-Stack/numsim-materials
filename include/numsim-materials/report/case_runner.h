@@ -105,6 +105,7 @@ bool run_small_strain(nlohmann::json const &doc, load_case<typename Traits::valu
   case_model<Traits> model(doc);
   material_point_driver<Traits> driver{model.context(), detail::point_for<Traits>(doc, c)};
   property_columns<Traits> const columns{model.context(), parse_columns(doc)};
+  require_unique_columns(columns.names());
   sink.begin(columns.names());
   auto const values = [&](auto const &) { return columns.values(); };
 
@@ -143,6 +144,7 @@ bool run_finite_strain(nlohmann::json const &doc, load_case<typename Traits::val
   for (auto const &comp : symmetric_components)
     names.push_back("stress_" + std::string{comp});
   names.push_back("J");
+  require_unique_columns(names);
   sink.begin(names);
   auto const values = [&](auto const &res) {
     auto out{columns.values()};

@@ -290,7 +290,8 @@ struct column_spec {
 };
 
 /// The point's kinematics and stress first (strain/stress, or F/P with nine components), then
-/// "record" (nlohmann::json orders those by column name; a value may be {"source", "full"}).
+/// "record" (nlohmann::json orders those by column name; a value may be {"source", "full"}). Names
+/// are CSV fields: no comma, quote or control character.
 inline std::vector<column_spec> parse_columns(nlohmann::json const &doc) {
   std::vector<column_spec> out;
   detail::in_context("report: \"point\"", [&] {
@@ -305,8 +306,12 @@ inline std::vector<column_spec> parse_columns(nlohmann::json const &doc) {
   });
   detail::in_context("report: \"record\"", [&] {
     auto const record = doc.value("record", nlohmann::json::object());
+    if (!record.is_object())
+      throw std::invalid_argument("expected an object {\"column\": \"material::property\"}, got " + record.dump());
     for (auto const &[name, value] : record.items())
       detail::in_context("\"" + name + "\"", [&] {
+        if (name.empty() || std::ranges::any_of(name, [](unsigned char ch) { return ch == ',' || ch == '"' || std::iscntrl(ch); }))
+          throw std::invalid_argument("a column name is not empty and has no comma, quote or control character");
         if (value.is_string())
           out.push_back({name, value.get<std::string>()});
         else

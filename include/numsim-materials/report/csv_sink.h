@@ -20,7 +20,8 @@ public:
   }
 
   void begin(std::vector<std::string> const &names) {
-    m_steps << "step,time,load,iterations,converged,tangent_error";
+    for (auto const &n : step_columns)
+      m_steps << n << (&n == &step_columns.back() ? "" : ",");
     for (auto const &n : names)
       m_steps << "," << n;
     m_steps << "\n";
