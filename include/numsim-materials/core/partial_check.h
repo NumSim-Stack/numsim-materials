@@ -2,9 +2,11 @@
 #define NUMSIM_MATERIALS_CORE_PARTIAL_CHECK_H
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <format>
 #include <limits>
+#include <optional>
 #include <ranges>
 #include <stdexcept>
 #include <string>
@@ -28,12 +30,34 @@ struct on_exit {
 };
 template <typename F>
 on_exit(F) -> on_exit<F>;
+
+/// |v - sym(v)| / |v| of the rank-2 or rank-4 value `prop` holds, minor symmetry for rank 4; nothing for other values.
+template <typename T, std::size_t Dim>
+std::optional<T> asymmetry(property_base& prop) {
+  auto const of{[&]<std::size_t R>() {
+    using V = tmech::tensor<T, Dim, R>;
+    auto const& v{derivatives::value_in<V>(prop)};
+    std::array<T, derivatives::width<Dim>(R)> packed{};
+    derivatives::pack<Dim, R>(v, packed.data());
+    V symmetric;
+    derivatives::unpack<Dim, R>(packed.data(), symmetric);
+    T const size{tmech::norm(v)};
+    return size > T{0} ? T{tmech::norm(V{v - symmetric}) / size} : T{0};
+  }};
+  switch (derivatives::property_rank<T, Dim>(prop).value_or(0)) {
+  case 2: return of.template operator()<2>();
+  case 4: return of.template operator()<4>();
+  default: return std::nullopt;
+  }
+}
 } // namespace partial_check_detail
 
 /// Compares every partial `material` declares with central differences of its own callback, one Mandel component
 /// of the read at a time (each entry of a read declared unsymmetric_output()), at the state the context holds (after
 /// an update()), and perturbs every read declared independent_of() to see that no output of the callback moves.
 /// Returns one line per wrong declaration; the outputs and reads are restored, also when a perturbed callback throws.
+/// Also reports every rank-2 or rank-4 output and read whose value is not (minor-)symmetric and not declared
+/// unsymmetric_output() by its producer.
 template <typename Traits>
 std::vector<std::string> check_partials(material_context<Traits>& ctx, std::string const& material,
                                         typename Traits::value_type tolerance = 1e-6) {
@@ -69,6 +93,28 @@ std::vector<std::string> check_partials(material_context<Traits>& ctx, std::stri
   }};
 
   std::vector<std::string> mismatches;
+  auto const undeclared{[&](property_base& value, bool declared) -> std::optional<std::string> {
+    auto const distance{partial_check_detail::asymmetry<T, Traits::Dim>(value)};
+    if (declared || !distance || !(*distance > tolerance))
+      return std::nullopt;
+    bool const rank2{derivatives::property_rank<T, Traits::Dim>(value) == 2};
+    return std::format("is not {} (relative distance {:g} to its symmetric part) and not declared unsymmetric_output()",
+                       rank2 ? "symmetric" : "minor-symmetric", *distance);
+  }};
+  if (auto const own{ctx.properties().data().find(material)}; own != ctx.properties().data().end()) {
+    std::vector<std::pair<std::string, property_base*>> outputs;
+    for (auto const& [name, prop] : own->second)
+      outputs.emplace_back(name, prop.get());
+    std::ranges::sort(outputs);
+    for (auto const& [name, prop] : outputs)
+      if (auto const what{undeclared(*prop, mat->is_unsymmetric(prop))})
+        mismatches.push_back(std::format("'{}::{}' {}", material, name, *what));
+  }
+  for (auto const& input : mat->typed_inputs())
+    if (auto* source{ctx.find_property(input->source_owner(), input->source_name())})
+      if (auto const what{undeclared(*source, unsymmetric(source))})
+        mismatches.push_back(std::format("'{}' reads '{}', which {} by its producer", material, key_of(source), *what));
+
   auto const& partials{mat->partials()};
   std::vector<property_base const*> callbacks;
   for (auto const& p : partials)

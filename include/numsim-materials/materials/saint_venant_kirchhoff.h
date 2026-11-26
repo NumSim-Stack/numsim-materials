@@ -9,7 +9,7 @@
 namespace numsim::materials {
 
 /// Saint Venant-Kirchhoff: S = C : E, E = (F^T F - I) / 2.
-/// "stress": P = F S, "tangent": dP/dF.
+/// "stress": P = F S, "tangent": dP/dF; both unsymmetric.
 template <typename Traits>
 class saint_venant_kirchhoff
     : public material_base<saint_venant_kirchhoff<Traits>, Traits> {
@@ -32,6 +32,8 @@ public:
         m_F(base::template add_input<tensor2>(m_F_name, "deformation_gradient", EdgeKind::Global)) {
     m_C = 3 * m_K * vol_projector<value_type, Dim>() + 2 * m_G * dev_projector<value_type, Dim>();
     base::add_callback(&saint_venant_kirchhoff::update, m_P, m_A).reads(m_F);
+    base::unsymmetric_output(m_P);
+    base::unsymmetric_output(m_A);
   }
 
   static input_parameter_controller parameters() {

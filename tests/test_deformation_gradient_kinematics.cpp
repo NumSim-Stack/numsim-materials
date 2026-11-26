@@ -92,11 +92,14 @@ TEST(DeformationGradientKinematics, TheDerivativesByFAreTheInverseAndTheCofactor
   auto const &d_inverse{k.ctx.derivative<tmech::tensor<T, 3, 4>>("kinematics", "inverse", "F", "deformation_gradient")};
   auto const &d_determinant{k.ctx.derivative<tensor2>("kinematics", "determinant", "F", "deformation_gradient")};
   tensor2 const F{deformation()};
-  k.F->bind(tmech::eye<T, 3, 2>(), F);
-  k.ctx.update();
-  tensor2 const Finv{tmech::inv(F)};
-  EXPECT_LT(tmech::norm(tmech::tensor<T, 3, 4>{d_inverse + tmech::otimesu(Finv, tmech::trans(Finv))}), 1e-14);
-  EXPECT_LT(tmech::norm(tensor2{d_determinant - tmech::det(F) * tmech::trans(Finv)}), 1e-14);
+  auto const load{[&](tensor2 const &Fh) {
+    k.F->bind(tmech::eye<T, 3, 2>(), Fh);
+    k.ctx.update();
+  }};
+  auto const fd_inverse{nm::test::central_differences_by_F(F, load, [&] { return k.inverse(); })};
+  auto const fd_determinant{nm::test::central_differences_by_F(F, load, [&] { return k.determinant(); })};
+  EXPECT_LT(nm::test::relative(d_inverse, fd_inverse), 1e-8);
+  EXPECT_LT(nm::test::relative(d_determinant, fd_determinant), 1e-8);
   auto const mismatches{nm::check_partials(k.ctx, "kinematics")};
   EXPECT_TRUE(mismatches.empty()) << mismatches.front();
 }

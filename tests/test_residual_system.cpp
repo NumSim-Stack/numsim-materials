@@ -1376,7 +1376,10 @@ private:
   nm::system_report m_report;
 };
 
-/// R_g = g + tr(B) - 2 - N : F, R_B = B - g P with F from F::F, declared unsymmetric: strain_rows with an F seed.
+tensor2 const M{0.4, -0.7, 0.2, 0.3, 0.1, 0.9, -0.6, 0.5, 0.2}; // not symmetric
+
+/// R_g = g + tr(B) - 2 - N : F + g^2 / 10, R_B = B - g P - sym(F M) + tr(B) B / 20 with F from F::F, declared
+/// unsymmetric: strain_rows with an F seed in both rows.
 class deformation_rows final : public nm::material_base<deformation_rows, policy> {
 public:
   using base = nm::material_base<deformation_rows, policy>;
@@ -1397,16 +1400,20 @@ public:
 
   void compute() {
     auto const I{tmech::eye<T, 3, 2>()};
-    m_rg = m_g.get() + tmech::trace(m_B.get()) - 2 - tmech::dcontract(N, m_F.get());
-    m_rB = m_B.get() - m_g.get() * strain_rows::P();
+    auto const &B{m_B.get()};
+    T const g{m_g.get()};
+    tensor2 const FM{m_F.get() * M};
+    m_rg = g + tmech::trace(B) - 2 - tmech::dcontract(N, m_F.get()) + 0.1 * g * g;
+    m_rB = B - g * strain_rows::P() - 0.5 * (FM + tmech::trans(FM)) + 0.05 * tmech::trace(B) * B;
     if (!base::want_partials())
       return;
-    base::partial(m_rg, m_g) = T{1};
+    tensor2 const Mt{tmech::trans(M)};
+    base::partial(m_rg, m_g) = T{1} + 0.2 * g;
     base::partial(m_rg, m_B) = tensor2{I};
     base::partial(m_rg, m_F) = tensor2{-N};
     base::partial(m_rB, m_g) = tensor2{-strain_rows::P()};
-    base::partial(m_rB, m_B) = nm::sym_identity<T, 3>();
-    base::partial(m_rB, m_F) = tensor4{};
+    base::partial(m_rB, m_B) = tensor4{(1 + 0.05 * tmech::trace(B)) * nm::sym_identity<T, 3>() + 0.05 * tmech::otimes(B, I)};
+    base::partial(m_rB, m_F) = tensor4{-0.5 * (tmech::otimesu(I, Mt) + tmech::otimesl(Mt, I))};
   }
 
 private:
@@ -1435,17 +1442,24 @@ TEST(ResidualSystemValidation, AnUnsymmetricUnknownIsRejectedAtFinalizeWithItsNa
 
 TEST(ResidualSystemTangent, AnUnsymmetricSeedFoldsWithAllItsEntries) {
   ctx_type ctx;
-  add<nm::test::unsymmetric_source<policy>>(ctx, "F");
-  make_system(ctx, {{"g", nm::unknown_kind::scalar}, {"B", nm::unknown_kind::sym_tensor}}, {{"sys::rg", "g"}, {"sys::rB", "B"}});
+  auto &F{add<nm::test::unsymmetric_source<policy>>(ctx, "F")};
+  make_system(ctx, {{"g", nm::unknown_kind::scalar}, {"B", nm::unknown_kind::sym_tensor}}, {{"sys::rg", "g"}, {"sys::rB", "B"}},
+              "newton", 50, 1e-13);
   add<deformation_rows>(ctx, "sys");
   ctx.finalize();
   auto const &dg{ctx.derivative<tensor2>("solver", "g", "F", "F")};
   auto const &dB{ctx.derivative<tensor4>("solver", "B", "F", "F")};
-  dynamic_cast<nm::test::unsymmetric_source<policy> *>(ctx.find("F"))->bind(tensor2{tmech::eye<T, 3, 2>() + 0.1 * N});
-  ctx.update();
-  T const denom{1 + tmech::trace(strain_rows::P())};
-  EXPECT_TRUE(tmech::almost_equal(dg, tensor2{N / denom}, 1e-12)) << "N, not its symmetric part";
-  EXPECT_TRUE(tmech::almost_equal(dB, tensor4{tmech::otimes(strain_rows::P(), N) / denom}, 1e-12));
+  tensor2 const F0{tmech::eye<T, 3, 2>() + 0.1 * N};
+  auto const load{[&](tensor2 const &Fh) {
+    F.bind(Fh);
+    ctx.update();
+  }};
+  auto const fd_g{nm::test::central_differences_by_F(F0, load, [&] { return ctx.get<T>("solver", "g"); })};
+  auto const fd_B{nm::test::central_differences_by_F(F0, load, [&] { return ctx.get<tensor2>("solver", "B"); })};
+  ASSERT_GT(tmech::norm(tensor4{fd_B - tmech::basis_change<tmech::sequence<1, 2, 4, 3>>(fd_B)}), 0.1)
+      << "dB/dF has a skew part in F";
+  EXPECT_LT(nm::test::relative(dg, fd_g), 1e-8) << "all entries of F, not its symmetric part";
+  EXPECT_LT(nm::test::relative(dB, fd_B), 1e-8);
   auto const mismatches{nm::check_partials(ctx, "sys")};
   EXPECT_TRUE(mismatches.empty()) << mismatches.front();
 }

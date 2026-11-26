@@ -7,6 +7,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 #include <Eigen/Core>
@@ -1369,6 +1370,44 @@ TEST(UnsymmetricDerivatives, AWrongIndependentOfOnTheSkewPartOfFFailsTheFiniteDi
   auto const mismatches{nm::check_partials(c.ctx, "w")};
   ASSERT_FALSE(mismatches.empty());
   EXPECT_TRUE(mismatches.front().contains("independent_of")) << mismatches.front();
+}
+
+/// Whether one of `mismatches` contains all of `parts`.
+bool reports(std::vector<std::string> const &mismatches, std::initializer_list<std::string_view> parts) {
+  return std::ranges::any_of(mismatches, [&](auto const &m) { return std::ranges::all_of(parts, [&](auto p) { return m.contains(p); }); });
+}
+
+TEST(UnsymmetricDerivatives, AnUndeclaredUnsymmetricOutputFailsTheFiniteDifferenceCheck) {
+  f_chain c;
+  c.node<inverse_law>("inverse", "F::F", "none"); // F^-1 without unsymmetric_output() nor partials
+  c.ctx.finalize();
+  c.load_F(F0);
+  auto const mismatches{nm::check_partials(c.ctx, "inverse")};
+  EXPECT_TRUE(reports(mismatches, {"'inverse::y'", "not symmetric", "unsymmetric_output()"}))
+      << (mismatches.empty() ? std::string{"no mismatch"} : mismatches.front());
+}
+
+TEST(UnsymmetricDerivatives, AnUndeclaredUnsymmetricReadFailsTheFiniteDifferenceCheck) {
+  f_chain c;
+  c.node<inverse_law>("inverse", "F::F", "none");
+  c.node<skew_square>("w", "inverse::y", "none");
+  c.ctx.finalize();
+  c.load_F(F0);
+  auto const mismatches{nm::check_partials(c.ctx, "w")};
+  EXPECT_TRUE(reports(mismatches, {"'w' reads 'inverse::y'", "not symmetric", "unsymmetric_output()"}))
+      << (mismatches.empty() ? std::string{"no mismatch"} : mismatches.front());
+}
+
+TEST(UnsymmetricDerivatives, DeclaredUnsymmetricValuesPassTheSymmetryCheck) {
+  f_chain c;
+  c.unsymmetric_node<inverse_law>("inverse", "F::F");
+  c.node<skew_square>("w", "inverse::y");
+  c.ctx.finalize();
+  c.load_F(F0);
+  for (auto const *name : {"F", "inverse", "w"}) {
+    auto const mismatches{nm::check_partials(c.ctx, name)};
+    EXPECT_TRUE(mismatches.empty()) << name << ": " << mismatches.front();
+  }
 }
 
 TEST(UnsymmetricDerivatives, PackLayoutKeepsTheEntriesOfAFullPairAndInvertsOnTheMandelOnes) {

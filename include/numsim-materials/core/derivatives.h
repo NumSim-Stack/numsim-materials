@@ -141,7 +141,8 @@ constexpr std::size_t width(std::size_t rank, bool full) {
 
 /// pack_data() of a tensor of rank `rank` split at `out_rank`, but the output's index pairs (`full_out`) or the
 /// read's (`full_in`) keep their entries, (i, j) at i Dim + j: the layout of a partial of an unsymmetric value.
-/// Not table driven, for the partial check.
+/// Not table driven: used by the partial check and, on the update path, by the fold of an unsymmetric seed through a
+/// residual system (property_engine pack_seed_block / unpack_seed_columns).
 template <std::size_t Dim, typename T>
 void pack_layout(T const* data, std::size_t rank, std::size_t out_rank, bool full_out, bool full_in, T* block) {
   constexpr auto pair{detail::pairs<Dim>()};
