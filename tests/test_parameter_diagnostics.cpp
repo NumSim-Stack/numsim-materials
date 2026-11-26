@@ -182,6 +182,20 @@ TEST(ParameterDiagnostics, EveryMissingRequiredParameterIsNamedFromCpp) {
   }
 }
 
+// a missing name is one of the missing parameters, not a "Key name not found" before the others are checked
+TEST(ParameterDiagnostics, AMissingNameIsNamedWithTheOtherMissingParameters) {
+  ctx_type ctx;
+  param_type p;
+  p.insert<std::string>("strain_producer_name", "s");
+  try {
+    ctx.create<nm::linear_elasticity<policy>>(p);
+    FAIL() << "a material without a name was created";
+  } catch (const std::invalid_argument &e) {
+    const std::string msg{e.what()};
+    EXPECT_NE(msg.find("missing 3 required parameter(s): 'G' 'K' 'name'"), std::string::npos) << msg;
+  }
+}
+
 TEST(ParameterDiagnostics, ANonStringNameIsReportedAsSuch) {
   const json entry = {{"type", "linear_elasticity"}, {"name", 3}, {"strain_producer_name", "s"}, {"K", 1.0}, {"G", 1.0}};
   const auto msg = error_from(entry);
