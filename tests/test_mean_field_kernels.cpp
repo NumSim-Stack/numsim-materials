@@ -272,6 +272,44 @@ TEST(MeanFieldKernels, SelfConsistentReferenceIsValidated) {
   EXPECT_THROW(make("self_consistent", q), std::invalid_argument);
 }
 
+// spheres in the fibre phases: the two quadratures give the same effective stiffness
+TEST(MeanFieldKernels, SelfConsistentLebedevAndLegendreAgree) {
+  aligned_fibres ph;
+  auto const with = [&](std::string const &quadrature) {
+    PH p{fibre_parameters(spec{"sphere", {}}, "anisotropic")};
+    if (!quadrature.empty()) {
+      p.insert<std::string>("quadrature", quadrature);
+      p.insert<int>("lebedev_degree", 59);
+    }
+    auto k{mf::kernel_registry<policy>::instance().make(spec{"self_consistent", p})};
+    return effective_of(*k, ph);
+  };
+  EXPECT_LT(relative(with("lebedev"), with("")), 1e-8);
+  EXPECT_LT(relative(with("lebedev"), with("legendre")), 1e-8);
+}
+
+TEST(MeanFieldKernels, SelfConsistentQuadratureIsValidated) {
+  PH p{self_consistent_parameters()};
+  p.insert<std::string>("quadrature", "simpson");
+  try {
+    make("self_consistent", p);
+    FAIL() << "an unknown quadrature was accepted";
+  } catch (std::invalid_argument const &e) {
+    std::string const what{e.what()};
+    EXPECT_NE(what.find("legendre"), std::string::npos) << what;
+    EXPECT_NE(what.find("lebedev"), std::string::npos) << what;
+  }
+  PH q{self_consistent_parameters()};
+  q.insert<std::string>("quadrature", "lebedev");
+  q.insert<int>("lebedev_degree", 12);
+  try {
+    make("self_consistent", q);
+    FAIL() << "a degree without a Lebedev table was accepted";
+  } catch (std::invalid_argument const &e) {
+    EXPECT_NE(std::string{e.what()}.find("77"), std::string::npos) << e.what();
+  }
+}
+
 TEST(MeanFieldKernels, SelfConsistentThrowsWhenItDoesNotConverge) {
   two_phases ph;
   PH p{self_consistent_parameters()};

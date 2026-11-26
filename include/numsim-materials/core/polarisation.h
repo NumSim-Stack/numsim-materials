@@ -13,6 +13,7 @@
 #include <vector>
 
 #include <tmech/tmech.h>
+#include "numsim-materials/core/lebedev.h"
 #include "numsim-materials/core/tensor_identities.h"
 
 /// Hill's polarisation tensor P of an ellipsoid in an anisotropic medium C (S = P : C):
@@ -74,39 +75,49 @@ template <typename T>
   return tmech::tensor<T, 3, 4>{tmech::dcontract(Is, tmech::tensor<T, 3, 4>{tmech::dcontract(X, Is)})};
 }
 
-/// Ellipsoid with semi-axes a in its frame, R taking the frame to the global one; one semi-axis may be infinite.
-/// Gauss-Legendre in the polar angle on panels graded towards the weight's peak, trapezoid in the azimuth.
+/// The frame axes R e_i and the semi-axes by size, largest first; at most one may be infinite.
 template <typename T>
-[[nodiscard]] std::vector<node<T>> ellipsoid(std::array<T, 3> const &a, tmech::tensor<T, 3, 2> const &R, std::size_t order) {
-  constexpr T pi{std::numbers::pi_v<T>};
-  if (order < 2)
-    throw std::invalid_argument("polarisation: the quadrature order must be at least two");
+std::pair<std::array<tmech::tensor<T, 3, 1>, 3>, std::array<std::size_t, 3>> frame(std::array<T, 3> const &a, tmech::tensor<T, 3, 2> const &R) {
+  for (auto const x : a)
+    if (!(x > 0))
+      throw std::invalid_argument("polarisation: semi-axes must be positive");
   std::array<tmech::tensor<T, 3, 1>, 3> e;
   for (std::size_t i{0}; i < 3; ++i) {
     tmech::tensor<T, 3, 1> ei;
     ei(i) = 1;
     e[i] = R * ei;
   }
-  std::size_t const azimuth{4 * order};
-  std::vector<node<T>> rule;
-
   std::array<std::size_t, 3> idx{0, 1, 2};
   std::ranges::sort(idx, [&](std::size_t i, std::size_t j) { return a[i] > a[j]; });
-  for (auto const x : a)
-    if (!(x > 0))
-      throw std::invalid_argument("polarisation: semi-axes must be positive");
   if (std::isinf(a[idx[1]]))
     throw std::invalid_argument("polarisation: at most one semi-axis may be infinite");
+  return {e, idx};
+}
 
-  if (std::isinf(a[idx[0]])) { // cylinder: (1 / 2 pi) int a_q a_r / (a_q^2 cos^2 + a_r^2 sin^2) Gamma dphi across the axis
-    T const aq{a[idx[1]]}, ar{a[idx[2]]}, stretch{std::sqrt(aq / ar)};
-    for (std::size_t m{0}; m < azimuth; ++m) {
-      auto const [cp, sp, dphi]{azimuth_point(m, azimuth, stretch)};
-      rule.push_back({tmech::tensor<T, 3, 1>{cp * e[idx[1]] + sp * e[idx[2]]}, aq * ar / (aq * aq * cp * cp + ar * ar * sp * sp) * dphi / (2 * pi)});
-    }
-    return rule;
+/// Infinite cylinder: (1 / 2 pi) int a_q a_r / (a_q^2 cos^2 + a_r^2 sin^2) Gamma dphi across the axis, n points.
+template <typename T>
+std::vector<node<T>> cylinder(T aq, T ar, tmech::tensor<T, 3, 1> const &eq, tmech::tensor<T, 3, 1> const &er, std::size_t n) {
+  T const stretch{std::sqrt(aq / ar)};
+  std::vector<node<T>> rule;
+  for (std::size_t m{0}; m < n; ++m) {
+    auto const [cp, sp, dphi]{azimuth_point(m, n, stretch)};
+    rule.push_back({tmech::tensor<T, 3, 1>{cp * eq + sp * er}, aq * ar / (aq * aq * cp * cp + ar * ar * sp * sp) * dphi / (2 * std::numbers::pi_v<T>)});
   }
+  return rule;
+}
 
+/// Ellipsoid with semi-axes a in its frame, R taking the frame to the global one; one semi-axis may be infinite.
+/// Gauss-Legendre in the polar angle on panels graded towards the weight's peak, trapezoid in the azimuth.
+template <typename T>
+[[nodiscard]] std::vector<node<T>> legendre(std::array<T, 3> const &a, tmech::tensor<T, 3, 2> const &R, std::size_t order) {
+  constexpr T pi{std::numbers::pi_v<T>};
+  if (order < 2)
+    throw std::invalid_argument("polarisation: the quadrature order must be at least two");
+  auto const [e, idx]{frame(a, R)};
+  std::size_t const azimuth{4 * order};
+  if (std::isinf(a[idx[0]]))
+    return cylinder(a[idx[1]], a[idx[2]], e[idx[1]], e[idx[2]], azimuth);
+  std::vector<node<T>> rule;
   T const a_max{a[idx[0]]}, a_mid{a[idx[1]]}, a_min{a[idx[2]]};
   bool const prolate{a_mid / a_min <= a_max / a_mid}; // peak on the equator of the longest axis, else at the shortest pole
   std::size_t const p{prolate ? idx[0] : idx[2]}, q{prolate ? idx[1] : idx[0]}, r{prolate ? idx[2] : idx[1]};
@@ -130,6 +141,39 @@ template <typename T>
       }
     }
   return rule;
+}
+
+/// Ellipsoid as above by Lebedev nodes u mapped to xi = R A^-1 u / |A^-1 u|, which absorbs the weight
+/// a1 a2 a3 / |A xi|^3 exactly; one node per antipodal pair. An infinite axis uses the line rule, degree + 1 points.
+template <typename T>
+[[nodiscard]] std::vector<node<T>> lebedev(std::array<T, 3> const &a, tmech::tensor<T, 3, 2> const &R, std::size_t degree) {
+  auto const nodes{numsim::materials::lebedev::rule(degree)};
+  auto const [e, idx]{frame(a, R)};
+  if (std::isinf(a[idx[0]]))
+    return cylinder(a[idx[1]], a[idx[2]], e[idx[1]], e[idx[2]], degree + 1);
+  constexpr T zero{1e-12};
+  std::vector<node<T>> rule;
+  for (auto const &q : nodes) {
+    T const u[3]{T(q.x), T(q.y), T(q.z)};
+    if (!(u[2] > zero || (u[2] > -zero && (u[1] > zero || (u[1] > -zero && u[0] > 0)))))
+      continue; // the partner -u carries the same weight
+    tmech::tensor<T, 3, 1> xi{u[0] / a[0] * e[0] + u[1] / a[1] * e[1] + u[2] / a[2] * e[2]};
+    rule.push_back({tmech::tensor<T, 3, 1>{xi / tmech::norm(xi)}, 2 * T(q.w)});
+  }
+  return rule;
+}
+
+enum class quadrature { legendre, lebedev };
+
+/// The scheme and its order: Gauss points per panel (legendre) or the Lebedev degree.
+struct scheme {
+  quadrature kind{quadrature::legendre};
+  std::size_t order{12};
+};
+
+template <typename T>
+[[nodiscard]] std::vector<node<T>> rule(std::array<T, 3> const &a, tmech::tensor<T, 3, 2> const &R, scheme const &s) {
+  return s.kind == quadrature::lebedev ? lebedev<T>(a, R, s.order) : legendre<T>(a, R, s.order);
 }
 
 } // namespace numsim::materials::polarisation

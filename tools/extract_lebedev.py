@@ -11,7 +11,7 @@ import pathlib
 import re
 import sys
 
-PRECISIONS = [3, 5, 7, 9, 11, 13, 15, 23]
+PRECISIONS = [3, 5, 7, 9, 11, 13, 15, 23, 25, 41, 59, 77]
 
 
 def table(src: str, name: str) -> list[float]:

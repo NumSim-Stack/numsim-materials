@@ -30,6 +30,8 @@ TEST(Lebedev, WeightsSumToOneAndNodesAreUnit) {
   }
   EXPECT_EQ(nm::lebedev::rule(3).size(), 6u);
   EXPECT_EQ(nm::lebedev::rule(23).size(), 194u);
+  EXPECT_EQ(nm::lebedev::rule(41).size(), 590u);
+  EXPECT_EQ(nm::lebedev::rule(77).size(), 2030u);
   EXPECT_THROW((void)nm::lebedev::rule(4), std::invalid_argument);
 }
 

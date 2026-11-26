@@ -147,7 +147,8 @@ public:
 /// the shape in C itself; "isotropised": T_r = (I + S_r(nu0) : C0^-1 : (C_r - C0))^-1 in C0 = iso(C).
 ///
 /// Parameters: "shapes" {phase: {"type": sphere | cylinder | spheroid | ellipsoid, ...}} for every phase,
-/// "reference", "quadrature_order" (12, points per panel of polarisation::ellipsoid), "relaxation" (0.5, in
+/// "reference", "quadrature": "legendre" (default, "quadrature_order" 12 points per panel) or "lebedev" ("lebedev_degree"
+/// 41, a tabled degree), "relaxation" (0.5, in
 /// (0, 1]), "tolerance" (1e-10), "max_iterations" (100).
 template <typename Traits>
 class self_consistent final : public kernel_base<self_consistent<Traits>, Traits> {
@@ -161,7 +162,8 @@ public:
   explicit self_consistent(typename base::parameter_handler p)
       : base(std::move(p)), m_reference(parse_reference(base::template get<std::string>("reference"))),
         m_relaxation(base::template get<value_type>("relaxation")), m_tolerance(base::template get<value_type>("tolerance")),
-        m_max_iterations(base::template get<int>("max_iterations")), m_order(base::template get<int>("quadrature_order")) {
+        m_max_iterations(base::template get<int>("max_iterations")), m_order(base::template get<int>("quadrature_order")),
+        m_degree(base::template get<int>("lebedev_degree")), m_quadrature(parse_quadrature(base::template get<std::string>("quadrature"))) {
     if (!(m_relaxation > 0 && m_relaxation <= 1))
       throw std::invalid_argument("self_consistent: relaxation must lie in (0, 1]");
     if (!(m_tolerance > 0))
@@ -170,13 +172,20 @@ public:
       throw std::invalid_argument("self_consistent: max_iterations must be at least one");
     if (m_order < 2)
       throw std::invalid_argument("self_consistent: quadrature_order must be at least two");
+    try {
+      (void)lebedev::rule(static_cast<std::size_t>(m_degree));
+    } catch (std::invalid_argument const &e) {
+      throw std::invalid_argument(std::string{"self_consistent: lebedev_degree: "} + e.what());
+    }
   }
 
   static typename base::input_parameter_controller parameters() {
     typename base::input_parameter_controller para;
     required<std::map<std::string, spec>>(para, "shapes");
     optional<std::string>(para, "reference", std::string{"anisotropic"});
+    optional<std::string>(para, "quadrature", std::string{"legendre"});
     optional<int>(para, "quadrature_order", 12);
+    optional<int>(para, "lebedev_degree", 41);
     optional<value_type>(para, "relaxation", value_type{0.5});
     optional<value_type>(para, "tolerance", value_type{1e-10});
     optional<int>(para, "max_iterations", 100);
@@ -195,7 +204,8 @@ public:
         throw std::invalid_argument("self_consistent: no shape for phase '" + n + "'");
       m_shapes.push_back(shape_registry<Traits>().make(it->second));
       if (m_reference == reference_medium::anisotropic)
-        m_rules.push_back(m_shapes.back()->polarisation_rule(static_cast<std::size_t>(m_order)));
+        m_rules.push_back(m_shapes.back()->polarisation_rule(
+            {m_quadrature, static_cast<std::size_t>(m_quadrature == polarisation::quadrature::lebedev ? m_degree : m_order)}));
     }
   }
 
@@ -253,9 +263,18 @@ private:
     throw std::invalid_argument("self_consistent: unknown reference '" + s + "' (anisotropic, isotropised)");
   }
 
+  static polarisation::quadrature parse_quadrature(std::string const &s) {
+    if (s == "legendre")
+      return polarisation::quadrature::legendre;
+    if (s == "lebedev")
+      return polarisation::quadrature::lebedev;
+    throw std::invalid_argument("self_consistent: unknown quadrature '" + s + "' (legendre, lebedev)");
+  }
+
   reference_medium m_reference;
   value_type m_relaxation, m_tolerance;
-  int m_max_iterations, m_order;
+  int m_max_iterations, m_order, m_degree;
+  polarisation::quadrature m_quadrature;
   std::vector<std::unique_ptr<shape<Traits>>> m_shapes;
   std::vector<typename shape<Traits>::rule> m_rules; ///< polarisation rules of the anisotropic reference
   std::optional<tensor4> m_C; ///< the last converged medium: a warm start, not history

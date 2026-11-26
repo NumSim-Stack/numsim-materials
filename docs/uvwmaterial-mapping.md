@@ -45,7 +45,7 @@ is a `*_source` parameter. `tools/convert_uvwmaterial_card.py` converts the old 
 | `polymer_matrix_conductivity_material`, `gamm2022` | — | | #123 |
 | `plastic_material_*`, `propagation_law_viscous_regularization` | `j2_plasticity`, `drucker_prager_plasticity` exist; Hill and the regularisation | | #120 |
 | `tensor_isotropization_general` | `isotropize` (core) | | #129 |
-| `sphere_lebedev_rule` | `lebedev` (core, precisions 3–23) | | #129 |
+| `sphere_lebedev_rule` | `lebedev` (core, precisions 3–77) | | #129 |
 | `uvwmat_functions` (K/E/ν conversions, rotations) | `core/elastic_constants.h` | | #127 |
 | Boost `ellint_*` | `core/elliptic_integrals.h` | | #127 |
 

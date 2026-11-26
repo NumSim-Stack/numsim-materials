@@ -107,7 +107,7 @@ until ‖ℂ_new − ℂ‖ / ‖ℂ_new‖ ≤ `tolerance` — and evaluates th
 
 ```json
 {"type": "mean_field_composite_global", "name": "sc", "phases": ["matrix", "spheres"],
- "kernel": {"type": "self_consistent", "reference": "anisotropic", "quadrature_order": 12,
+ "kernel": {"type": "self_consistent", "reference": "anisotropic", "quadrature": "legendre", "quadrature_order": 12,
             "relaxation": 0.5, "tolerance": 1e-10, "max_iterations": 100,
             "shapes": {"matrix": {"type": "sphere"}, "spheres": {"type": "spheroid", "aspect_ratio": 3, "direction": [1, 0, 0]}}}}
 ```
@@ -129,6 +129,12 @@ graph** (§5).
   azimuth). In an isotropic medium the default reproduces the closed-form Eshelby tensors to 1e-10 for spheres,
   cylinders, spheroids of aspect ratio 0.01 to 1000 and moderately triaxial ellipsoids; strongly triaxial
   ellipsoids and strongly anisotropic media converge more slowly and may need a higher order.
+  `"quadrature": "lebedev"` switches to Lebedev nodes u mapped to ξ = A⁻¹u / |A⁻¹u|, which absorbs the weight
+  a₁a₂a₃ / |Aξ|³ exactly (the mapping of the fibre orientation average), at a tabled `lebedev_degree`
+  (3 … 77, default 41). It pays for spheres and near-spherical shapes: in a fibre-like medium degree 41 matches
+  the default `legendre` rule's accuracy for a sphere in half the time, degree 59 or 77 goes further. For
+  elongated and flat shapes the nodes miss the weight's peak region and it converges slowly (at degree 77 an
+  aspect ratio of 100 is at 4e-4 in ℙ, one of 0.1 at 2e-3); keep `legendre` there.
 - `isotropised`: one isotropic comparison medium ℂ₀ = iso(ℂ) for both the closed-form Sᵣ(ν₀) and the reference
   stiffness, Tᵣ = (I + Sᵣ : ℂ₀⁻¹ : (ℂᵣ − ℂ₀))⁻¹. Cheaper, exact for spheres in an isotropic composite and an
   approximation otherwise.

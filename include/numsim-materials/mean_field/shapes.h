@@ -29,7 +29,7 @@ public:
   using rule = std::vector<polarisation::node<value_type>>;
   virtual ~shape() = default;
   [[nodiscard]] virtual tensor4 eshelby(value_type nu) const = 0;
-  [[nodiscard]] virtual rule polarisation_rule(std::size_t order) const = 0;
+  [[nodiscard]] virtual rule polarisation_rule(polarisation::scheme const &quadrature) const = 0;
 };
 
 template <typename Derived, typename Traits>
@@ -63,8 +63,8 @@ public:
   using typename shape<Traits>::tensor4;
   explicit sphere(typename base::parameter_handler p) : base(std::move(p)) {}
   [[nodiscard]] tensor4 eshelby(value_type nu) const override { return eshelby::sphere(nu); }
-  [[nodiscard]] typename shape<Traits>::rule polarisation_rule(std::size_t order) const override {
-    return polarisation::ellipsoid<value_type>({1, 1, 1}, tmech::tensor<value_type, 3, 2>{tmech::eye<value_type, 3, 2>()}, order);
+  [[nodiscard]] typename shape<Traits>::rule polarisation_rule(polarisation::scheme const &quadrature) const override {
+    return polarisation::rule<value_type>({1, 1, 1}, tmech::tensor<value_type, 3, 2>{tmech::eye<value_type, 3, 2>()}, quadrature);
   }
 };
 
@@ -83,8 +83,8 @@ public:
     return para;
   }
   [[nodiscard]] tensor4 eshelby(value_type nu) const override { return eshelby::cylinder(nu, m_direction); }
-  [[nodiscard]] typename shape<Traits>::rule polarisation_rule(std::size_t order) const override {
-    return polarisation::ellipsoid<value_type>({std::numeric_limits<value_type>::infinity(), 1, 1}, rotation_to(m_direction), order);
+  [[nodiscard]] typename shape<Traits>::rule polarisation_rule(polarisation::scheme const &quadrature) const override {
+    return polarisation::rule<value_type>({std::numeric_limits<value_type>::infinity(), 1, 1}, rotation_to(m_direction), quadrature);
   }
 
 private:
@@ -113,8 +113,8 @@ public:
   [[nodiscard]] tensor4 eshelby(value_type nu) const override {
     return rotate(eshelby::ellipsoid(nu, m_aspect_ratio, value_type{1}, value_type{1}), m_rotation);
   }
-  [[nodiscard]] typename shape<Traits>::rule polarisation_rule(std::size_t order) const override {
-    return polarisation::ellipsoid<value_type>({m_aspect_ratio, 1, 1}, m_rotation, order);
+  [[nodiscard]] typename shape<Traits>::rule polarisation_rule(polarisation::scheme const &quadrature) const override {
+    return polarisation::rule<value_type>({m_aspect_ratio, 1, 1}, m_rotation, quadrature);
   }
 
 private:
@@ -139,8 +139,8 @@ public:
     return para;
   }
   [[nodiscard]] tensor4 eshelby(value_type nu) const override { return eshelby::ellipsoid(nu, m_a[0], m_a[1], m_a[2]); }
-  [[nodiscard]] typename shape<Traits>::rule polarisation_rule(std::size_t order) const override {
-    return polarisation::ellipsoid<value_type>({m_a[0], m_a[1], m_a[2]}, tmech::tensor<value_type, 3, 2>{tmech::eye<value_type, 3, 2>()}, order);
+  [[nodiscard]] typename shape<Traits>::rule polarisation_rule(polarisation::scheme const &quadrature) const override {
+    return polarisation::rule<value_type>({m_a[0], m_a[1], m_a[2]}, tmech::tensor<value_type, 3, 2>{tmech::eye<value_type, 3, 2>()}, quadrature);
   }
 
 private:
