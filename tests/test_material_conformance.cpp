@@ -164,7 +164,7 @@ const std::set<std::string> kPartialsChecked = {
     "deformation_gradient_kinematics", "elastic_strain", "exponential_damage_law",
     "incremental_linear_elasticity", "isotropic_damage", "isotropic_moduli", "isotropic_tangent",
     "kirchhoff_to_first_piola", "linear_damage_law", "linear_elasticity", "linear_stress", "log_strain",
-    "neo_hooke", "peerlings_damage_law", "power_damage_law", "saturation_damage_law",
+    "neo_hooke", "peerlings_damage_law", "power_damage_law", "saturation_damage_law", "seth_hill_strain",
     "strain_energy_state_function", "strain_threshold_yield", "thermal_eigenstrain",
     "vector_strain_state_function", "von_mises_state_function"};
 
@@ -220,6 +220,7 @@ std::unique_ptr<nm::material_context<policy>> partials_model(std::string const& 
            R"({"type": "constant_scalar", "name": "alpha", "value": 1.2e-5})",
            R"({"type": "deformation_gradient_kinematics", "name": "deformation_gradient_kinematics", "deformation_gradient_source": "F"})",
            R"({"type": "log_strain", "name": "log_strain", "deformation_gradient_source": "F"})",
+           R"({"type": "seth_hill_strain", "name": "seth_hill_strain", "deformation_gradient_source": "F", "m": 0.5})",
            R"({"type": "neo_hooke", "name": "neo_hooke", "deformation_gradient_source": "F", "kinematics_source": "deformation_gradient_kinematics", "K": 150.0, "G": 70.0})",
            R"({"type": "constant_scalar", "name": "K", "value": 150.0})",
            R"({"type": "constant_scalar", "name": "G", "value": 70.0})",

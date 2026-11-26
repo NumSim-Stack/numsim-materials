@@ -22,8 +22,9 @@ struct seth_hill_function {
 } // namespace detail
 
 /// Lagrangian strain of the Seth-Hill family E = (C^(m/2) - I)/m, C = F^T F ("deformation_gradient_source"): m = 0
-/// Hencky (ln C / 2), 1 Biot, 2 Green-Lagrange, -2 Almansi-type. Outputs "strain", "d_strain_d_right_cauchy_green"
-/// (dE/dC) and, on demand, "d2_strain_d_right_cauchy_green2" (d2E/dC2). For anisotropic laws (docs/finite-strain.md).
+/// Hencky (ln C / 2), 1 Biot, 2 Green-Lagrange, -2 Almansi-type. Outputs "strain" with its partial dE/dF,
+/// "d_strain_d_right_cauchy_green" (dE/dC) and, on demand, "d2_strain_d_right_cauchy_green2" (d2E/dC2). For anisotropic
+/// laws (docs/finite-strain.md).
 template <typename Traits>
 class seth_hill_strain final : public material_base<seth_hill_strain<Traits>, Traits> {
 public:
@@ -44,8 +45,7 @@ public:
         m_m(base::template get_parameter<value_type>("m")),
         m_F(base::template add_input<tensor2>(base::template get_parameter<std::string>("deformation_gradient_source"),
                                               "deformation_gradient", EdgeKind::Global)) {
-    // no partials(): F is not symmetric and the declared derivatives cover symmetric tensors only
-    base::add_callback(&seth_hill_strain::compute, m_E, m_dE, m_d2E).reads(m_F).on_demand(m_d2E);
+    base::add_callback(&seth_hill_strain::compute, m_E, m_dE, m_d2E).reads(m_F).on_demand(m_d2E).partials(m_E, m_F);
   }
 
   static input_parameter_controller parameters() {
@@ -64,13 +64,17 @@ public:
       m_dE = value_type{0.25} * (tmech::otimesu(I, I) + tmech::otimesl(I, I));
       if (base::is_read(m_d2E))
         m_d2E.fill(0);
-      return;
+    } else {
+      auto E{tmech::isotropic_tensor_function(C, detail::seth_hill_function<value_type>{m_m})};
+      m_E = E;
+      m_dE = E.derivative();
+      if (base::is_read(m_d2E))
+        m_d2E = E.second_derivative();
     }
-    auto E{tmech::isotropic_tensor_function(C, detail::seth_hill_function<value_type>{m_m})};
-    m_E = E;
-    m_dE = E.derivative();
-    if (base::is_read(m_d2E))
-      m_d2E = E.second_derivative();
+    if (base::want_partials()) {
+      tensor2 const Ft{tmech::trans(F)};
+      base::partial(m_E, m_F) = tmech::dcontract(m_dE, tensor4{tmech::otimesu(Ft, I) + tmech::otimesl(I, Ft)}); // dE/dC : dC/dF
+    }
   }
 
 private:

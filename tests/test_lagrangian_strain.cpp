@@ -6,6 +6,7 @@
 #include <tmech/tmech.h>
 #include "numsim-materials/core/elastic_constants.h"
 #include "numsim-materials/core/material_context.h"
+#include "numsim-materials/core/partial_check.h"
 #include "numsim-materials/driver/deformation_gradient_driver.h"
 #include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/materials/constant_scalar.h"
@@ -216,6 +217,20 @@ TEST(LagrangianStrain, StrainDerivativesMatchFiniteDifferences) {
       EXPECT_LT(err1, 1e-8) << m << " " << h;
       EXPECT_LT(err2, 1e-6 * std::max(scale2, T{1})) << m << " " << h;
     }
+  }
+}
+
+TEST(LagrangianStrain, TheDerivativeOfTheStrainByFIsDEdCThroughDCdF) {
+  tensor2 const F{general_F()}, Ft{tmech::trans(F)}, I{tmech::eye<T, 3, 2>()};
+  for (T const m : measures) {
+    auto ctx{chain(m, pull_back::none)};
+    auto const &dE_dF{ctx->derivative<tensor4>("strain", "strain", "F", "deformation_gradient")};
+    bind(*ctx, F);
+    tensor4 const expected{tmech::dcontract(ctx->get<tensor4>("strain", "d_strain_d_right_cauchy_green"),
+                                            tensor4{tmech::otimesu(Ft, I) + tmech::otimesl(I, Ft)})};
+    EXPECT_LE(relative(dE_dF, expected), 1e-14) << m;
+    auto const mismatches{nm::check_partials(*ctx, "strain")};
+    EXPECT_TRUE(mismatches.empty()) << m << ": " << mismatches.front();
   }
 }
 
