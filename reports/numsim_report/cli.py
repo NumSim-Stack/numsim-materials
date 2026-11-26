@@ -5,7 +5,8 @@ Writes <directory>/<material>.html, self-contained (figures embedded), and an in
 
 report.json
   include      files merged first (arrays appended, local keys win)
-  parameters   values; every string "$name" in the document is replaced by parameters.name
+  parameters   values; every string "$name" in the document is replaced by parameters.name (name: letters,
+               digits, _; other strings starting with $, such as "$\\sigma$", stay text)
   derived      expressions of the parameters ("E": "9 * K * G / (3 * K + G)")
   model        the material graph, a json_model document {"materials": [...]}
   point        strain_source (or deformation_gradient_source), stress_source; optional tangent_source,

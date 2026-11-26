@@ -147,6 +147,20 @@ TEST(ReportSpec, AnIncludedFileThatIsNoJsonIsNamed) {
   }
 }
 
+TEST(ReportSpec, OnlyADollarAndANameIsAParameter) {
+  auto const spec = json::parse(R"({"parameters": {"K": 2.5, "_k2": 1},
+    "figures": [{"ylabel": "$\\sigma_{11}$", "a": "$", "b": "$1", "c": "$K", "d": "$_k2", "e": "$K x", "f": "$K$"}]})");
+  auto const out = r::resolve_report(spec, ".");
+  auto const &f{out["figures"][0]};
+  EXPECT_EQ(f["ylabel"], "$\\sigma_{11}$");
+  EXPECT_EQ(f["a"], "$");
+  EXPECT_EQ(f["b"], "$1");
+  EXPECT_EQ(f["c"], 2.5);
+  EXPECT_EQ(f["d"], 1);
+  EXPECT_EQ(f["e"], "$K x");
+  EXPECT_EQ(f["f"], "$K$");
+}
+
 TEST(ReportSpec, UnknownParameterThrows) {
   auto const spec = json::parse(R"({"parameters": {}, "model": {"K": "$K"}})");
   EXPECT_THROW(r::resolve_report(spec, "."), std::invalid_argument);

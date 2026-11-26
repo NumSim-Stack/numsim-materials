@@ -10,7 +10,8 @@
 #include <nlohmann/json.hpp>
 
 /// Report documents: "include" files are merged first (arrays appended, named entries replaced
-/// by name, local keys win), then every string "$name" is replaced by parameters.name.
+/// by name, local keys win), then every string "$name" is replaced by parameters.name (name: letters,
+/// digits and '_', not starting with a digit; other strings starting with '$' stay text).
 namespace numsim::materials::report {
 
 namespace detail {
@@ -40,12 +41,19 @@ inline void merge_into(nlohmann::json &base, nlohmann::json const &local) {
   }
 }
 
+/// "$name", name an ASCII identifier; anything else ("$\sigma_{11}$") is text.
+inline bool is_parameter_reference(std::string const &s) {
+  auto const letter = [](char ch) { return (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || ch == '_'; };
+  return s.size() > 1 && s.front() == '$' && letter(s[1]) &&
+         std::all_of(s.begin() + 2, s.end(), [&](char ch) { return letter(ch) || (ch >= '0' && ch <= '9'); });
+}
+
 /// Replaces "$name" strings; `usage[name]` collects the paths where each parameter went.
 inline void substitute(nlohmann::json &j, nlohmann::json const &parameters, std::string const &where,
                        nlohmann::json &usage) {
   if (j.is_string()) {
     auto const s = j.get<std::string>();
-    if (s.size() > 1 && s.front() == '$') {
+    if (is_parameter_reference(s)) {
       auto const key{s.substr(1)};
       if (!parameters.contains(key))
         throw std::invalid_argument(where + ": unknown parameter '" + s + "'");
