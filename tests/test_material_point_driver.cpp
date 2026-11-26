@@ -5,10 +5,12 @@
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/materials/constant_scalar.h"
+#include "numsim-materials/materials/elastic_strain.h"
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/materials/linear_isotropic_hardening.h"
 #include "numsim-materials/materials/exponential_isotropic_hardening.h"
 #include "numsim-materials/materials/j2_plasticity.h"
+#include "numsim-materials/materials/thermal_eigenstrain.h"
 #include "numsim-materials/solvers/local_newton.h"
 #include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/driver/material_point_driver.h"
@@ -35,6 +37,7 @@ constexpr T E{9 * K * G / (3 * K + G)};
 constexpr T nu{(3 * K - 2 * G) / (2 * (3 * K + G))};
 constexpr T sigma_0{0.5}; // yields at about 2.5e-3
 constexpr T H{1000.0};
+constexpr T alpha{1e-4};
 
 /// `stuck`: a constant_scalar "stuck::value" of 1, a residual that never falls.
 void build_elastic(ctx_type& ctx, bool stuck = false) {
@@ -81,6 +84,18 @@ void build_three(ctx_type& ctx) {
   add<nm::linear_elasticity<policy>>(ctx, "stiff",
       {{"strain_producer_name", "strain"}, {"K", 1.25 * K}, {"G", 1.25 * G}});
   add<nm::linear_elasticity<policy>>(ctx, "void", {{"strain_producer_name", "strain"}, {"K", 0.0}, {"G", 0.0}});
+  ctx.finalize();
+}
+
+/// "strain" -> "elastic_strain" (less the thermal eigenstrain of the scalar source "clock") -> "elastic".
+void build_thermal(ctx_type& ctx) {
+  add<nm::external_strain_source<policy>>(ctx, "strain");
+  add<nm::external_scalar_source<policy>>(ctx, "clock");
+  numsim::materials::test::constant(ctx, "alpha", alpha);
+  add<nm::thermal_eigenstrain<policy>>(ctx, "thermal", {{"alpha_source", "alpha::value"}, {"temperature_source", "clock"}});
+  add<nm::elastic_strain<policy>>(ctx, "elastic_strain",
+      {{"strain_source", "strain"}, {"eigenstrain_sources", std::vector<std::string>{"thermal"}}});
+  add<nm::linear_elasticity<policy>>(ctx, "elastic", {{"strain_producer_name", "elastic_strain"}, {"K", K}, {"G", G}});
   ctx.finalize();
 }
 
@@ -408,6 +423,49 @@ TEST(MaterialPointDriver, DriversOnOneContextShareTheHistory) {
   auto const res{a.step(axial(5e-3), tensor2{}, control::uniaxial_stress(), 0, 1)};
   a.accept();
   EXPECT_EQ(b.accepted_strain(), res.strain);
+}
+
+// time_source: the driver binds (time, time + dt); the eigenstrain reads the new value.
+TEST(MaterialPointDriver, TheTimeSourceIsBoundToTheStep) {
+  ctx_type ctx;
+  build_thermal(ctx);
+  auto p{parameters_for("elastic")};
+  p.insert<std::string>("time_source", "clock");
+  driver d(ctx, p);
+  auto const res{d.step(tensor2{}, tensor2{}, control::strain(), 2, 0.5)};
+  auto const &clock{d.point().history<T>("clock", "state")};
+  EXPECT_EQ(clock.old_value(), 2);
+  EXPECT_EQ(clock.new_value(), 2.5);
+  EXPECT_NEAR(res.stress(0, 0), -3 * K * alpha * 2.5, 1e-12);
+  EXPECT_NEAR(res.stress(0, 1), 0, 1e-14);
+}
+
+// Without time_source the clock is no input of the point and stays where it is.
+TEST(MaterialPointDriver, WithoutATimeSourceTheClockIsNotBound) {
+  ctx_type ctx;
+  build_thermal(ctx);
+  driver d(ctx, parameters_for("elastic"));
+  auto const res{d.step(tensor2{}, tensor2{}, control::strain(), 2, 0.5)};
+  EXPECT_EQ(d.point().history<T>("clock", "state").new_value(), 0);
+  EXPECT_EQ(res.stress, tensor2{});
+  EXPECT_THROW(static_cast<void>(d.point().input<nm::external_scalar_source<policy>>("clock")), u::fatal_error);
+}
+
+// All six components stress controlled, with a shear target: one correction to sigma*.
+TEST(MaterialPointDriver, FullStressControlReachesAShearTarget) {
+  ctx_type ctx;
+  build_elastic(ctx);
+  driver d(ctx, parameters_for("elastic"));
+  tensor2 target{axial(0.2)};
+  target(0, 1) = target(1, 0) = 0.1;
+  auto const res{d.step(tensor2{}, target, control::mixed({"11", "22", "33", "12", "13", "23"}), 0, 1)};
+  ASSERT_TRUE(res.converged);
+  EXPECT_EQ(res.residuals.size(), 2u);
+  EXPECT_NEAR(tmech::norm(tensor2{res.stress - target}), 0, 1e-12);
+  EXPECT_NEAR(res.strain(0, 0), 0.2 / E, 1e-14);
+  EXPECT_NEAR(res.strain(1, 1), -nu * 0.2 / E, 1e-14);
+  EXPECT_NEAR(res.strain(0, 1), 0.1 / (2 * G), 1e-14);
+  EXPECT_NEAR(res.strain(1, 0), res.strain(0, 1), 1e-16);
 }
 
 } // namespace

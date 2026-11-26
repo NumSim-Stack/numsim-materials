@@ -7,8 +7,13 @@
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/materials/constant_scalar.h"
 #include "numsim-materials/materials/deformation_gradient_kinematics.h"
+#include "numsim-materials/materials/j2_plasticity.h"
+#include "numsim-materials/materials/lagrangian_stress_to_first_piola.h"
+#include "numsim-materials/materials/linear_isotropic_hardening.h"
 #include "numsim-materials/materials/neo_hooke.h"
 #include "numsim-materials/materials/saint_venant_kirchhoff.h"
+#include "numsim-materials/materials/seth_hill_strain.h"
+#include "numsim-materials/solvers/local_newton.h"
 #include "numsim-materials/driver/deformation_gradient_driver.h"
 #include "numsim-materials/driver/external_state_source.h"
 #include "test_support.h"
@@ -277,6 +282,38 @@ TEST(DeformationGradientDriver, TinyStretchesConverge) {
     EXPECT_NEAR(res.stress(0, 0), E * e, 1e-3 * E * std::abs(e)) << e;
     EXPECT_LE(res.residuals.size(), 4u) << e;
   }
+}
+
+/// F -> Green-Lagrange strain -> J2 plasticity on it -> P: a history material at finite strain.
+void build_plastic(ctx_type &ctx) {
+  add<nm::external_deformation_gradient_source<policy>>(ctx, "F");
+  add<nm::seth_hill_strain<policy>>(ctx, "strain", {{"m", 2.0}, {"deformation_gradient_source", "F"}});
+  add<nm::local_newton<policy>>(ctx, "solver");
+  add<nm::linear_isotropic_hardening<policy>>(ctx, "hardening", {{"source", "j2"}, {"K", 1000.0}});
+  add<nm::j2_plasticity<policy>>(ctx, "j2",
+      {{"K", K}, {"G", G}, {"sigma_0", 0.5}, {"hardening_source", "hardening"}, {"strain_source", "strain"},
+       {"solver_source", "solver"}});
+  add<nm::lagrangian_stress_to_first_piola<policy>>(ctx, "model",
+      {{"stress_source", "j2"}, {"tangent_source", "j2"}, {"strain_source", "strain"},
+       {"deformation_gradient_source", "F"}});
+  ctx.finalize();
+}
+
+// The check perturbs F around a plastic trial with accepted plastic strain: the algorithmic tangent matches.
+TEST(DeformationGradientDriver, TangentErrorOfAHistoryMaterial) {
+  ctx_type ctx;
+  build_plastic(ctx);
+  driver d(ctx, parameters());
+  ASSERT_TRUE(d.step(stretch(1.005), tensor2{}, control::uniaxial_stress(), 0, 1).converged);
+  d.accept();
+  auto const &plastic{d.point().history<tensor2>("j2", "plastic_strain")};
+  EXPECT_GT(tmech::norm(plastic.old_value()), 0) << "accepted plastic strain";
+  tensor2 F{stretch(1.01, 0.997, 0.997)};
+  F(0, 1) = 0.02;
+  auto const res{d.step(F, tensor2{}, control::deformation(), 1, 1)};
+  ASSERT_TRUE(res.converged);
+  EXPECT_GT(tmech::norm(tensor2{plastic.new_value() - plastic.old_value()}), 0) << "a plastic step";
+  EXPECT_LT(d.tangent_error(res), 1e-5);
 }
 
 } // namespace
