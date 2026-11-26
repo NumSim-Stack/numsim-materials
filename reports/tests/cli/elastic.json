@@ -1,0 +1,7 @@
+{
+  "model": {"materials": [
+    {"type": "external_strain_source", "name": "strain"},
+    {"type": "linear_elasticity", "name": "elastic", "strain_producer_name": "strain", "K": 100.0, "G": 50.0}]},
+  "point": {"strain_source": "strain", "stress_source": "elastic"},
+  "cases": [{"name": "u", "control": "uniaxial_stress", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], "steps": 2, "scale": 0.001}]
+}

@@ -1,0 +1,4 @@
+{
+  "include": ["elastic.json"],
+  "point": {"max_iter": 0}
+}
