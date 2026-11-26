@@ -12,7 +12,7 @@ namespace numsim::materials {
 /// Push-forward of a Kirchhoff stress tau of the logarithmic strain to the first Piola-Kirchhoff stress
 /// P = tau F^-T and its consistent dP/dF. Reads tau ("stress_source"), d tau / d eps_e ("tangent_source"),
 /// d ln V / dF ("strain_source": a log_strain) and F^-1 ("kinematics_source": a deformation_gradient_kinematics).
-/// Outputs "stress", "tangent".
+/// Outputs "stress" with its partials by tau and F^-1, and "tangent"; both unsymmetric.
 /// Valid for an isotropic stress law only; this is not checked (docs/finite-strain.md).
 template <typename Traits>
 class kirchhoff_to_first_piola final : public material_base<kirchhoff_to_first_piola<Traits>, Traits> {
@@ -37,7 +37,10 @@ public:
                                                  "d_strain_d_deformation_gradient", EdgeKind::Global)),
         m_F_inv(base::template add_input<tensor2>(base::template get_parameter<std::string>("kinematics_source"),
                                                   "inverse", EdgeKind::Global)) {
-    base::add_callback(&kirchhoff_to_first_piola::compute, m_P, m_A).reads(m_tau, m_C, m_dlog, m_F_inv);
+    base::add_callback(&kirchhoff_to_first_piola::compute_stress, m_P).reads(m_tau, m_F_inv).partials(m_P, m_tau, m_F_inv);
+    base::add_callback(&kirchhoff_to_first_piola::compute_tangent, m_A).reads(m_C, m_dlog, m_F_inv, m_P);
+    base::unsymmetric_output(m_P);
+    base::unsymmetric_output(m_A);
   }
 
   static input_parameter_controller parameters() {
@@ -51,10 +54,20 @@ public:
     return para;
   }
 
-  void compute() noexcept {
+  void compute_stress() noexcept {
+    auto const &Finv{m_F_inv.get()};
+    m_P = m_tau.get() * tmech::trans(Finv);
+    if (base::want_partials()) {
+      auto const I{tmech::eye<value_type, Dim, 2>()};
+      // P_ij = tau_ik F^-1_jk; tau is symmetric, so is its partial
+      base::partial(m_P, m_tau) = value_type{0.5} * (tmech::otimesu(I, Finv) + tmech::otimesl(I, Finv));
+      base::partial(m_P, m_F_inv) = tmech::otimesl(m_tau.get(), I);
+    }
+  }
+
+  void compute_tangent() noexcept {
     auto const &Finv{m_F_inv.get()};
     auto const I{tmech::eye<value_type, Dim, 2>()};
-    m_P = m_tau.get() * tmech::trans(Finv);
     // d eps_e / d ln V is the identity: a strain-independent eigenstrain does not enter the tangent
     tensor4 const dtau{tmech::dcontract(m_C.get(), m_dlog.get())};
     m_A = tmech::dcontract(tmech::otimesu(I, Finv), dtau) - tmech::otimesl(m_P, Finv);

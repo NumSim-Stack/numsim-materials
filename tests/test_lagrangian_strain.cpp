@@ -6,6 +6,7 @@
 #include <tmech/tmech.h>
 #include "numsim-materials/core/elastic_constants.h"
 #include "numsim-materials/core/material_context.h"
+#include "numsim-materials/core/partial_check.h"
 #include "numsim-materials/driver/deformation_gradient_driver.h"
 #include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/materials/constant_scalar.h"
@@ -217,6 +218,32 @@ TEST(LagrangianStrain, StrainDerivativesMatchFiniteDifferences) {
       EXPECT_LT(err2, 1e-6 * std::max(scale2, T{1})) << m << " " << h;
     }
   }
+}
+
+TEST(LagrangianStrain, TheDerivativeOfTheStrainByFMatchesCentralDifferences) {
+  tensor2 const F{general_F()};
+  for (T const m : measures) {
+    auto ctx{chain(m, pull_back::none)};
+    auto const &dE_dF{ctx->derivative<tensor4>("strain", "strain", "F", "deformation_gradient")};
+    auto const fd{nm::test::central_differences_by_F(F, [&](tensor2 const &Fh) { bind(*ctx, Fh); },
+                                                     [&] { return ctx->get<tensor2>("strain", "strain"); })};
+    EXPECT_LE(relative(dE_dF, fd), 1e-8) << m;
+    auto const mismatches{nm::check_partials(*ctx, "strain")};
+    EXPECT_TRUE(mismatches.empty()) << m << ": " << mismatches.front();
+  }
+}
+
+// P = F S and dP/dF have no minor symmetry: a seed at them is d_ik d_jl, not its symmetric part
+TEST(LagrangianStrain, ThePulledBackStressAndTangentSeedTheirFullIdentity) {
+  auto ctx{chain(2.0, pull_back::lagrangian)};
+  auto const &dP{ctx->derivative<tensor4>("P", "stress", "P", "stress")};
+  auto const &dA{ctx->derivative<tmech::tensor<T, 3, 8>>("P", "tangent", "P", "tangent")};
+  bind(*ctx, general_F());
+  tensor2 const I{tmech::eye<T, 3, 2>()};
+  EXPECT_LT(tmech::norm(tensor4{dP - tmech::otimesu(I, I)}), 1e-15);
+  tensor4 X;
+  X.randn();
+  EXPECT_LT(relative(tensor4{tmech::ddcontract(dA, X)}, X), 1e-15);
 }
 
 TEST(LagrangianStrain, SecondDerivativeOnlyWhenRead) {

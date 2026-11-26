@@ -119,11 +119,11 @@ std::unique_ptr<value_holder<T>> make_value(std::size_t rank) {
 }
 
 /// d x / d x for x of rank 0, 2 or 4 into `out` (rank 2 rank): 1, the symmetric identity on tensor2, or its
-/// counterpart on minor-symmetric tensor4.
+/// counterpart on minor-symmetric tensor4; for an unsymmetric x (`full`) the identity d_ik d_jl (rank 8: d_im d_jn d_ko d_lp).
 template <typename T, std::size_t Dim>
-void identity(std::size_t rank, void* out) {
+void identity(std::size_t rank, void* out, bool full = false) {
   auto const I{tmech::eye<T, Dim, 2>()};
-  value_t<T, Dim, 4> const Is{T{0.5} * (tmech::otimesu(I, I) + tmech::otimesl(I, I))};
+  value_t<T, Dim, 4> const Is{full ? value_t<T, Dim, 4>{tmech::otimesu(I, I)} : value_t<T, Dim, 4>{T{0.5} * (tmech::otimesu(I, I) + tmech::otimesl(I, I))}};
   switch (rank) {
   case 0: *static_cast<T*>(out) = T{1}; return;
   case 2: *static_cast<value_t<T, Dim, 4>*>(out) = Is; return;

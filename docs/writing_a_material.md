@@ -63,6 +63,20 @@ private:
 
 Outputs created with `add_output` and `add_history_output` have no callback yet.
 
+A rank-2 or rank-4 output without minor symmetry, such as F, F⁻¹, P or dP/dF, must be declared in the constructor:
+
+```cpp
+base::unsymmetric_output(m_P);
+```
+
+A tensor type cannot carry the kind: F and a strain are both `tmech::tensor<T, Dim, 2>`. Every material that produces
+such a value calls it, whether or not it declares partials:
+- a derivative with respect to it keeps all its entries: the seed is δik δjl, not ½(I ⊠ I + I ⊠̲ I);
+- the partials of its readers are checked in all its entries;
+- a residual system rejects it as an unknown or a residual.
+
+`check_partials()` reports every rank-2 or rank-4 output and read that is not (minor-)symmetric but not declared.
+
 ## 2. One callback per computation, with its reads
 
 ```cpp

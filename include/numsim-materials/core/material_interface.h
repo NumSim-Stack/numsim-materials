@@ -247,6 +247,10 @@ public:
   };
   const std::vector<constant_declaration>& constant_outputs() const noexcept { return m_constant_outputs; }
 
+  /// The outputs declared unsymmetric_output(): tensors such as F, whose derivatives keep all their entries.
+  const std::vector<property_base_type const*>& unsymmetric_outputs() const noexcept { return m_unsymmetric; }
+  bool is_unsymmetric(property_base_type const* output) const noexcept { return std::ranges::contains(m_unsymmetric, output); }
+
   /// A callback with declared reads: the inputs it reads and the outputs it fills (its own first).
   struct read_declaration {
     property_base_type const* callback;
@@ -509,7 +513,7 @@ protected:
   void declare_partial(void const* callback, Out const& output, In const& read) {
     static_assert(derivatives::node_value<derivatives::value_of_t<Out>, value_type, Traits::Dim> &&
                       derivatives::node_value<derivatives::value_of_t<In>, value_type, Traits::Dim>,
-                  "partials(): outputs and reads are scalars or symmetric tensors of rank 2 or 4");
+                  "partials(): outputs and reads are scalars or tensors of rank 2 or 4, symmetric or declared unsymmetric_output()");
     auto const& [d, entry]{declared_read_of("partials", callback)};
     auto const& out{output_entry_of("partials", &output)};
     if (!std::ranges::contains(d->outputs, out.property))
@@ -664,6 +668,14 @@ protected:
     m_constant_outputs.push_back({entry.property, std::move(reads), {}, entry.take});
   }
 
+  /// `output` (a value add_property() or add_history() returned) is a tensor without minor symmetry.
+  void declare_unsymmetric(void const* output) {
+    auto const& entry{output_entry_of("unsymmetric_output", output)};
+    if (is_unsymmetric(entry.property))
+      throw std::logic_error("unsymmetric_output(): '" + key_of(entry) + "' is declared twice");
+    m_unsymmetric.push_back(entry.property);
+  }
+
   /// The callback filling `outputs` reads the parameters, `inputs` and the outputs `own` of this material only:
   /// it runs after their writers, and its outputs are constant once all reads are (when they can be constant).
   void declare_reads(std::vector<void const*> const& outputs, std::vector<input_wire_base const*> inputs,
@@ -798,6 +810,7 @@ private:
   };
   std::unordered_map<void const*, output_entry> m_outputs; ///< value address -> property
   std::vector<constant_declaration> m_constant_outputs;
+  std::vector<property_base_type const*> m_unsymmetric;    ///< outputs declared unsymmetric_output()
   std::vector<property_base_type const*> m_read_declared; ///< callbacks with declared reads
   std::vector<read_declaration> m_declared_reads;
   std::vector<property_base_type const*> m_stateful;      ///< outputs never constant

@@ -9,8 +9,8 @@
 namespace numsim::materials {
 
 /// Compressible neo-Hooke: W = G/2 (tr(F^T F) - 3) - G ln J + lambda/2 (ln J)^2.
-/// "stress": P, "tangent": dP/dF. F from "deformation_gradient_source", F^-1 and det F from "kinematics_source"
-/// (a deformation_gradient_kinematics).
+/// "stress": P with its partials by F, F^-1 and det F, "tangent": dP/dF; both unsymmetric. F from
+/// "deformation_gradient_source", F^-1 and det F from "kinematics_source" (a deformation_gradient_kinematics).
 template <typename Traits>
 class neo_hooke : public material_base<neo_hooke<Traits>, Traits> {
 public:
@@ -33,7 +33,9 @@ public:
         m_kinematics(base::template get_parameter<std::string>("kinematics_source")),
         m_F_inv(base::template add_input<tensor2>(m_kinematics, "inverse", EdgeKind::Global)),
         m_J(base::template add_input<value_type>(m_kinematics, "determinant", EdgeKind::Global)) {
-    base::add_callback(&neo_hooke::update, m_P, m_A).reads(m_F, m_F_inv, m_J);
+    base::add_callback(&neo_hooke::update, m_P, m_A).reads(m_F, m_F_inv, m_J).partials(m_P, m_F, m_F_inv, m_J);
+    base::unsymmetric_output(m_P);
+    base::unsymmetric_output(m_A);
   }
 
   static input_parameter_controller parameters() {
@@ -58,6 +60,11 @@ public:
     m_P = m_G * (F - FinvT) + lambda * lnJ * FinvT;
     m_A = m_G * tmech::otimesu(I, I) + (m_G - lambda * lnJ) * tmech::otimesl(FinvT, Finv) +
           lambda * tmech::otimes(FinvT, FinvT);
+    if (base::want_partials()) {
+      base::partial(m_P, m_F) = m_G * tmech::otimesu(I, I);
+      base::partial(m_P, m_F_inv) = (lambda * lnJ - m_G) * tmech::otimesl(I, I); // P reads F^-T
+      base::partial(m_P, m_J) = lambda / J * FinvT;
+    }
   }
 
 private:

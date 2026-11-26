@@ -11,7 +11,8 @@ namespace numsim::materials {
 
 /// First Piola-Kirchhoff stress P = F S, S = 2 T : dE/dC, and its consistent dP/dF from the stress T work-conjugate
 /// to a Lagrangian strain E(C). Reads T ("stress_source"), dT/dE ("tangent_source"), dE/dC and d2E/dC2
-/// ("strain_source": a seth_hill_strain) and F ("deformation_gradient_source"). Outputs "stress", "tangent".
+/// ("strain_source": a seth_hill_strain) and F ("deformation_gradient_source"). Outputs "stress", "tangent"; both
+/// unsymmetric.
 /// Objective for any (also anisotropic) stress law; no eigendecomposition of its own.
 template <typename Traits>
 class lagrangian_stress_to_first_piola final : public material_base<lagrangian_stress_to_first_piola<Traits>, Traits> {
@@ -40,6 +41,8 @@ public:
         m_F(base::template add_input<tensor2>(base::template get_parameter<std::string>("deformation_gradient_source"),
                                               "deformation_gradient", EdgeKind::Global)) {
     base::add_callback(&lagrangian_stress_to_first_piola::compute, m_P, m_A).reads(m_T, m_C, m_dE, m_d2E, m_F);
+    base::unsymmetric_output(m_P);
+    base::unsymmetric_output(m_A);
   }
 
   static input_parameter_controller parameters() {

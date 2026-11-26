@@ -24,6 +24,26 @@ For fixed K and G, `linear_elasticity` replaces `linear_stress` and the
 `linear_elasticity`. A complete JSON deck is in `tests/test_hencky_chain.cpp`
 (`deck()`).
 
+## Derivatives through the graph
+
+F, F⁻¹, P and dP/dF have no minor symmetry, and their producers declare them
+`unsymmetric_output()`: the F sources, `deformation_gradient_kinematics`
+(F⁻¹), `log_strain` (`d_strain_d_deformation_gradient`), `kirchhoff_to_first_piola`,
+`neo_hooke`, `lagrangian_stress_to_first_piola` and `saint_venant_kirchhoff`
+(P and the tangent). A derivative with respect to F therefore keeps all nine
+entries of dF.
+
+The nodes of the Hencky chain and `neo_hooke` also declare their partials, so the
+engine gives dP/dF and, with a thermal eigenstrain, dP/dT:
+
+```cpp
+auto const& dP_dF{ctx.derivative<tensor4>("P", "stress", "F", "deformation_gradient")}; // = "P::tangent"
+auto const& dP_dT{ctx.derivative<tensor2>("P", "stress", "temperature", "state")};
+```
+
+Both references are filled by every `update()`. The Lagrangian chain and
+`saint_venant_kirchhoff` declare no partials yet; their dP/dF is the `tangent` output.
+
 ## What the user is responsible for
 
 **The stress law must be isotropic.** τ = C : ln V is objective only if

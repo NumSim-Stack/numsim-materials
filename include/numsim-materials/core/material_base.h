@@ -127,6 +127,16 @@ protected:
     base::declare_constant(&output, std::move(reads));
   }
 
+  /// `output` (as add_output or add_history_output returned it), a tensor of rank 2 or 4, has no minor symmetry, as F:
+  /// a derivative with respect to it keeps all its entries, and the partials of its readers are checked in all of them.
+  template <typename V>
+  void unsymmetric_output(V const& output) {
+    using value = derivatives::value_of_t<V>;
+    static_assert(std::is_same_v<value, tmech::tensor<value_type, Dim, 2>> || std::is_same_v<value, tmech::tensor<value_type, Dim, 4>>,
+                  "unsymmetric_output(): a tensor of rank 2 or 4");
+    base::declare_unsymmetric(&output);
+  }
+
   /// A callback bound by add_callback() and the outputs it fills; their constness follows from its reads.
   /// Used in the constructor: the declarations it makes live in the material.
   template <bool Verifiable>

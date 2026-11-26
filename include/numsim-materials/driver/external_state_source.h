@@ -67,8 +67,8 @@ private:
   history_property<tensor2>& m_strain;
 };
 
-/// Host-driven deformation gradient: "deformation_gradient" (history). Its inverse
-/// and determinant come from a deformation_gradient_kinematics reading it.
+/// Host-driven deformation gradient: "deformation_gradient" (history), declared
+/// unsymmetric. Its inverse and determinant come from a deformation_gradient_kinematics reading it.
 template <typename Traits>
 class external_deformation_gradient_source final
     : public material_base<external_deformation_gradient_source<Traits>, Traits> {
@@ -87,6 +87,7 @@ public:
         m_F(base::template add_history_output<tensor2>("deformation_gradient", codecs::two_point{})) {
     m_F.old_value() = tmech::eye<value_type, Dim, 2>();
     m_F.new_value() = tmech::eye<value_type, Dim, 2>();
+    base::unsymmetric_output(m_F);
   }
 
   static input_parameter_controller parameters() { return base::parameters(); }

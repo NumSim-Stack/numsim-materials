@@ -81,6 +81,32 @@ template <std::floating_point T> tmech::tensor<T, 3, 2> stretch(T l1, T l2 = T{1
   return F;
 }
 
+/// d value / dF at F by central differences, one entry of F at a time: `load(F)` sets F and updates the context,
+/// `value()` reads a scalar or a tensor2. F is loaded back afterwards.
+template <std::floating_point T, typename Load, typename Value>
+auto central_differences_by_F(tmech::tensor<T, 3, 2> const &F, Load &&load, Value &&value, T h = T{1e-6}) {
+  using V = std::remove_cvref_t<std::invoke_result_t<Value &>>;
+  std::conditional_t<std::is_arithmetic_v<V>, tmech::tensor<T, 3, 2>, tmech::tensor<T, 3, 4>> d{};
+  for (std::size_t k{0}; k < 3; ++k)
+    for (std::size_t l{0}; l < 3; ++l) {
+      tmech::tensor<T, 3, 2> Fp{F}, Fm{F};
+      Fp(k, l) += h;
+      Fm(k, l) -= h;
+      load(Fp);
+      V const plus{value()};
+      load(Fm);
+      V const minus{value()};
+      if constexpr (std::is_arithmetic_v<V>)
+        d(k, l) = (plus - minus) / (2 * h);
+      else
+        for (std::size_t i{0}; i < 3; ++i)
+          for (std::size_t j{0}; j < 3; ++j)
+            d(i, j, k, l) = (plus(i, j) - minus(i, j)) / (2 * h);
+    }
+  load(F);
+  return d;
+}
+
 /// A blank-padded Fortran CHARACTER*80, as the UMAT entry points receive the material name.
 struct fortran_name {
   char buf[80];

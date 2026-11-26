@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "numsim-materials/core/material_context.h"
+#include "numsim-materials/core/partial_check.h"
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/materials/deformation_gradient_kinematics.h"
 #include "numsim-materials/materials/neo_hooke.h"
@@ -106,6 +107,21 @@ TEST(SaintVenantKirchhoff, TangentMatchesFiniteDifferences) {
   expect_tangent_matches_finite_differences<nm::saint_venant_kirchhoff<policy>>(ctx, src);
 }
 
+// P and dP/dF have no minor symmetry: a seed at them is d_ik d_jl, not its symmetric part
+TEST(SaintVenantKirchhoff, TheStressAndTheTangentSeedTheirFullIdentity) {
+  ctx_type ctx;
+  auto& src = add_model<nm::saint_venant_kirchhoff<policy>>(ctx);
+  const auto& dP = ctx.derivative<tensor4>("model", "stress", "model", "stress");
+  const auto& dA = ctx.derivative<tmech::tensor<T, 3, 8>>("model", "tangent", "model", "tangent");
+  src.bind(test_deformation(), test_deformation());
+  ctx.update();
+  const tensor2 I{tmech::eye<T, 3, 2>()};
+  EXPECT_LT(tmech::norm(tensor4{dP - tmech::otimesu(I, I)}), 1e-15);
+  tensor4 X;
+  X.randn();
+  EXPECT_LT(nm::test::relative(tensor4{tmech::ddcontract(dA, X)}, X), 1e-15);
+}
+
 // An inverted element is the classic reason for a smaller step.
 TEST(NeoHooke, ANonPositiveDeterminantAsksForASmallerStep) {
   ctx_type ctx;
@@ -120,6 +136,19 @@ TEST(NeoHooke, TangentMatchesFiniteDifferences) {
   ctx_type ctx;
   auto& src = add_model<nm::neo_hooke<policy>>(ctx);
   expect_tangent_matches_finite_differences<nm::neo_hooke<policy>>(ctx, src);
+}
+
+TEST(NeoHooke, TheDerivativeOfPByFIsThePublishedTangent) {
+  ctx_type ctx;
+  auto& src = add_model<nm::neo_hooke<policy>>(ctx);
+  const auto& dP = ctx.derivative<tensor4>("model", "stress", "F", "deformation_gradient");
+  src.bind(test_deformation(), test_deformation());
+  ctx.update();
+  EXPECT_LT(nm::test::relative(dP, ctx.get<tensor4>("model", "tangent")), 1e-12);
+  for (const auto* name : {"kinematics", "model"}) {
+    const auto mismatches{nm::check_partials(ctx, name)};
+    EXPECT_TRUE(mismatches.empty()) << name << ": " << mismatches.front();
+  }
 }
 
 TEST(NeoHooke, IsStressFreeAtIdentityAndLinearElasticAtSmallStrain) {

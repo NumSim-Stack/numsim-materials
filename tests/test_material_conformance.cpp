@@ -161,10 +161,12 @@ TEST(MaterialConformance, MissingRequiredParametersThrow) {
 
 /// Materials whose callbacks declare partials or independence (.partials(), .independent_of()), checked by finite differences below.
 const std::set<std::string> kPartialsChecked = {
-    "elastic_strain", "exponential_damage_law", "incremental_linear_elasticity", "isotropic_damage",
-    "isotropic_moduli", "isotropic_tangent", "linear_damage_law", "linear_elasticity", "linear_stress",
-    "peerlings_damage_law", "power_damage_law", "saturation_damage_law", "strain_energy_state_function",
-    "strain_threshold_yield", "thermal_eigenstrain", "vector_strain_state_function", "von_mises_state_function"};
+    "deformation_gradient_kinematics", "elastic_strain", "exponential_damage_law",
+    "incremental_linear_elasticity", "isotropic_damage", "isotropic_moduli", "isotropic_tangent",
+    "kirchhoff_to_first_piola", "linear_damage_law", "linear_elasticity", "linear_stress", "log_strain",
+    "neo_hooke", "peerlings_damage_law", "power_damage_law", "saturation_damage_law", "seth_hill_strain",
+    "strain_energy_state_function", "strain_threshold_yield", "thermal_eigenstrain",
+    "vector_strain_state_function", "von_mises_state_function"};
 
 /// Header stems under materials/ and solvers/ that declare partials or independent reads, themselves or through a
 /// detail/ base they include.
@@ -197,16 +199,19 @@ TEST(MaterialConformance, EveryMaterialDeclaringPartialsIsChecked) {
       << "a material declaring partials or independent reads joins kPartialsChecked and the model of DeclaredPartialsMatchFiniteDifferences";
 }
 
-/// The model of every material declaring partials; isotropic_damage runs over `damage_law`, which names one of the laws.
+/// The model of every material declaring partials, and of the finite-strain ones that declare unsymmetric outputs;
+/// isotropic_damage runs over `damage_law`, which names one of the laws.
 /// `kappa_f` is the end of the linear law.
 std::unique_ptr<nm::material_context<policy>> partials_model(std::string const& damage_law, double kappa_f = 0.5) {
   auto owner{std::make_unique<nm::material_context<policy>>()};
   auto& ctx{*owner};
-  for (const auto* source : {"strain", "temperature"}) {
+  for (const auto* source : {"strain", "temperature", "F"}) {
     policy::ParameterHandler p;
     p.insert<std::string>("name", source);
     if (std::string{source} == "strain")
       ctx.create<nm::external_strain_source<policy>>(p);
+    else if (std::string{source} == "F")
+      ctx.create<nm::external_deformation_gradient_source<policy>>(p);
     else
       ctx.create<nm::external_scalar_source<policy>>(p);
   }
@@ -214,6 +219,11 @@ std::unique_ptr<nm::material_context<policy>> partials_model(std::string const& 
   // check, which a perturbed tangent fails
   for (const std::string& document : std::vector<std::string>{
            R"({"type": "constant_scalar", "name": "alpha", "value": 1.2e-5})",
+           R"({"type": "deformation_gradient_kinematics", "name": "deformation_gradient_kinematics", "deformation_gradient_source": "F"})",
+           R"({"type": "log_strain", "name": "log_strain", "deformation_gradient_source": "F"})",
+           R"({"type": "seth_hill_strain", "name": "seth_hill_strain", "deformation_gradient_source": "F", "m": 0.5})",
+           R"({"type": "neo_hooke", "name": "neo_hooke", "deformation_gradient_source": "F", "kinematics_source": "deformation_gradient_kinematics", "K": 150.0, "G": 70.0})",
+           R"({"type": "saint_venant_kirchhoff", "name": "saint_venant_kirchhoff", "deformation_gradient_source": "F", "K": 150.0, "G": 70.0})",
            R"({"type": "constant_scalar", "name": "K", "value": 150.0})",
            R"({"type": "constant_scalar", "name": "G", "value": 70.0})",
            R"({"type": "thermal_eigenstrain", "name": "thermal_eigenstrain", "alpha_source": "alpha::value", "reference_temperature": 20.0})",
@@ -222,6 +232,8 @@ std::unique_ptr<nm::material_context<policy>> partials_model(std::string const& 
            R"({"type": "isotropic_tangent", "name": "isotropic_tangent", "K_source": "K", "G_source": "G"})",
            R"({"type": "isotropic_moduli", "name": "isotropic_moduli", "tangent_source": "isotropic_tangent", "tolerance": 0.0})",
            R"({"type": "linear_stress", "name": "linear_stress", "tangent_source": "isotropic_tangent", "strain_source": "strain"})",
+           R"({"type": "lagrangian_stress_to_first_piola", "name": "lagrangian_stress_to_first_piola", "stress_source": "linear_stress", "tangent_source": "isotropic_tangent", "strain_source": "seth_hill_strain", "deformation_gradient_source": "F"})",
+           R"({"type": "kirchhoff_to_first_piola", "name": "kirchhoff_to_first_piola", "stress_source": "linear_stress", "tangent_source": "isotropic_tangent", "strain_source": "log_strain", "kinematics_source": "deformation_gradient_kinematics"})",
            R"({"type": "incremental_linear_elasticity", "name": "incremental_linear_elasticity", "strain_source": "strain", "tangent_source": "isotropic_tangent"})",
            R"({"type": "von_mises_state_function", "name": "von_mises_state_function", "strain_source": "strain"})",
            R"({"type": "strain_energy_state_function", "name": "strain_energy_state_function", "strain_source": "strain", "tangent_source": "isotropic_tangent", "youngs_modulus": 180.0})",
@@ -242,22 +254,27 @@ std::unique_ptr<nm::material_context<policy>> partials_model(std::string const& 
   return owner;
 }
 
+/// A general deformation gradient, det F > 0.
+tmech::tensor<double, 3, 2> const general_F{1.1, 0.2, -0.1, 0.05, 0.9, 0.3, -0.2, 0.15, 1.2};
+
 void bind_state(nm::material_context<policy>& ctx, tmech::tensor<double, 3, 2> const& previous,
                 tmech::tensor<double, 3, 2> const& strain, double temperature) {
+  dynamic_cast<nm::external_deformation_gradient_source<policy>*>(ctx.find("F"))->bind(tmech::eye<double, 3, 2>(), general_F);
   dynamic_cast<nm::external_strain_source<policy>*>(ctx.find("strain"))->bind(previous, strain);
   dynamic_cast<nm::external_scalar_source<policy>*>(ctx.find("temperature"))->bind(20, temperature);
   ctx.update();
 }
 
-/// Every material with partials against central differences at the state the context holds.
+/// Every material with partials against central differences at the state the context holds; every material for
+/// unsymmetric values it does not declare (unsymmetric_output()).
 void expect_partials_match(nm::material_context<policy>& ctx) {
   std::set<std::string> checked;
-  for (const auto* material : ctx.materials())
-    if (!material->partials().empty()) {
+  for (const auto* material : ctx.materials()) {
+    if (!material->partials().empty())
       checked.insert(material->name());
-      for (const auto& mismatch : nm::check_partials(ctx, material->name()))
-        ADD_FAILURE() << mismatch;
-    }
+    for (const auto& mismatch : nm::check_partials(ctx, material->name()))
+      ADD_FAILURE() << mismatch;
+  }
   EXPECT_EQ(checked, kPartialsChecked);
 }
 
