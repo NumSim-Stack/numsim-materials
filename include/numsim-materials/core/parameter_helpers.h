@@ -30,7 +30,7 @@ std::string parameter_type_label() {
 template <typename... Ts>
 std::string parameter_type_label_of(std::type_index type) {
   std::string label{std::string{"of type "} + type.name()};
-  ((type == typeid(Ts) && (label = parameter_type_label<Ts>(), true)) || ...);
+  (void)((type == typeid(Ts) && (label = parameter_type_label<Ts>(), true)) || ...);
   return label;
 }
 
