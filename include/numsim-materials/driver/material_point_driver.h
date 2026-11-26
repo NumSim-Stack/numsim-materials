@@ -19,7 +19,8 @@
 ///
 /// The history lives in the graph (engine-owned, see material_point): step() leaves the converged trial,
 /// accept() makes it the start of the next step and reject() returns to the accepted state. The accepted
-/// strain is the old value of the strain source.
+/// strain is the old value of the strain source. A throw from step() or tangent_error() returns to the accepted
+/// state first, as reject() does.
 namespace numsim::materials {
 
 template <typename Traits>
@@ -77,7 +78,7 @@ public:
 
   /// Strain-controlled components from `strain`, stress-controlled ones from `stress`, from the accepted strain.
   /// Leaves the converged trial in the graph: accept() or reject() next.
-  step_result step(tensor2 const &strain, tensor2 const &stress, control const &c, value_type time, value_type dt) {
+  step_result step(tensor2 const &strain, tensor2 const &stress, control const &c, value_type time, value_type dt) try {
     auto const &P{c.stress_projector()};
     tensor4 const Q{c.strain_projector() + skew_identity<value_type, 3>()}; // Iskw: A regular on the full 9x9 space
     tensor2 const start{accepted_strain()};
@@ -102,6 +103,9 @@ public:
       res.strain = tmech::eval(res.strain - tmech::dcontract(tensor4{tmech::invf(A)}, r));
     }
     return res;
+  } catch (...) {
+    m_point.reset(); // nothing of the failed trial is left to accept()
+    throw;
   }
 
   /// The trial of step() becomes the start of the next step.
@@ -112,7 +116,7 @@ public:
 
   /// Error of the tangent of the trial `res` against central differences, relative to the larger of the two, before
   /// accept(). The trial is evaluated again afterwards, so accepting it is unaffected.
-  value_type tangent_error(step_result const &res) {
+  value_type tangent_error(step_result const &res) try {
     tensor4 fd;
     for (auto const &E : materials::symmetric_basis<value_type>()) {
       evaluate(tensor2{res.strain + m_fd_step * E}, res.time, res.dt);
@@ -124,6 +128,9 @@ public:
     // relative to the larger of the two: finite for a zero tangent
     auto const scale{std::max({tmech::norm(res.tangent), tmech::norm(fd), std::numeric_limits<value_type>::min()})};
     return tmech::norm(tensor4{fd - res.tangent}) / scale;
+  } catch (...) {
+    m_point.reset();
+    throw;
   }
 
   [[nodiscard]] tensor2 const &accepted_strain() const noexcept { return m_strain.strain().old_value(); }

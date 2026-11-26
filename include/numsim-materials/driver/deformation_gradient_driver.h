@@ -19,7 +19,8 @@
 ///
 /// The history lives in the graph, as for material_point_driver: step() leaves the converged trial, accept()
 /// makes it the start of the next step, reject() returns to the accepted state. The accepted F is the old
-/// value of the deformation gradient source.
+/// value of the deformation gradient source. A throw from step() or tangent_error() returns to the accepted
+/// state first, as reject() does.
 namespace numsim::materials {
 
 template <typename Traits>
@@ -77,7 +78,7 @@ public:
 
   /// Prescribed components of F from `F`, stress-controlled ones from `P`, from the accepted F.
   /// Leaves the converged trial in the graph: accept() or reject() next.
-  step_result step(tensor2 const &F, tensor2 const &P, control const &c, value_type time, value_type dt) {
+  step_result step(tensor2 const &F, tensor2 const &P, control const &c, value_type time, value_type dt) try {
     auto const &M{c.stress_projector()};
     tensor4 const N{c.deformation_projector()};
     tensor2 const start{accepted_F()};
@@ -101,6 +102,9 @@ public:
       res.F = tmech::eval(res.F - tmech::dcontract(tensor4{tmech::invf(A)}, r));
     }
     return res;
+  } catch (...) {
+    m_point.reset(); // nothing of the failed trial is left to accept()
+    throw;
   }
 
   /// The trial of step() becomes the start of the next step.
@@ -111,7 +115,7 @@ public:
 
   /// Error of dP/dF of the trial `res` against central differences, relative to the larger of the two, before
   /// accept(). The trial is evaluated again afterwards, so accepting it is unaffected.
-  value_type tangent_error(step_result const &res) {
+  value_type tangent_error(step_result const &res) try {
     tensor4 fd;
     for (auto const &E : materials::full_basis<value_type>()) {
       evaluate(tensor2{res.F + m_fd_step * E}, res.time, res.dt);
@@ -123,6 +127,9 @@ public:
     // relative to the larger of the two: finite for a zero tangent
     auto const scale{std::max({tmech::norm(res.tangent), tmech::norm(fd), std::numeric_limits<value_type>::min()})};
     return tmech::norm(tensor4{fd - res.tangent}) / scale;
+  } catch (...) {
+    m_point.reset();
+    throw;
   }
 
   [[nodiscard]] tensor2 const &accepted_F() const noexcept { return m_F.deformation_gradient().old_value(); }

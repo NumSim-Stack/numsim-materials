@@ -52,10 +52,11 @@ void build_elastic(ctx_type& ctx, bool stuck = false) {
   ctx.finalize();
 }
 
-void build_j2(ctx_type& ctx, bool exponential = false) {
+/// `solver_iterations` 0: every plastic step throws.
+void build_j2(ctx_type& ctx, bool exponential = false, int solver_iterations = 50) {
   param_type p;
   add<nm::external_strain_source<policy>>(ctx, "strain");
-  add<nm::local_newton<policy>>(ctx, "solver");
+  add<nm::local_newton<policy>>(ctx, "solver", {{"max_iter", solver_iterations}});
   p.insert<std::string>("name", "hardening");
   p.insert<std::string>("source", "j2");
   if (exponential) {
@@ -343,6 +344,60 @@ TEST(MaterialPointDriver, TheTangentCanComeFromAnotherSource) {
   EXPECT_NEAR(res.stress(0, 0), E * 1e-3, 1e-10);
   EXPECT_NEAR(res.strain(1, 1), -nu * 1e-3, 1e-12);
   EXPECT_NEAR(d.tangent_error(res), 0.2, 1e-6) << "|C - 5/4 C| / |5/4 C|";
+}
+
+// The residual check throws after the graph was updated: accept() must not commit that trial.
+TEST(MaterialPointDriver, AThrowingStepLeavesNothingToAccept) {
+  ctx_type ctx;
+  build_elastic(ctx, true);
+  auto p{parameters_for("elastic")};
+  p.insert<std::string>("residual_source", "stuck::value");
+  p.insert<int>("max_passes", 3);
+  driver d{ctx, p};
+  EXPECT_THROW(static_cast<void>(d.step(axial(1e-3), tensor2{}, control::strain(), 0, 1)), u::cutback_error);
+  d.accept();
+  EXPECT_EQ(d.accepted_strain(), tensor2{});
+}
+
+// The local return map fails on every plastic step (max_iter 0): throw, reject(), and the run goes on unchanged.
+TEST(MaterialPointDriver, ThrowRejectStepRecovers) {
+  ctx_type reference_ctx, failing_ctx;
+  build_j2(reference_ctx, true);
+  build_j2(failing_ctx, true, 0);
+  driver reference(reference_ctx, parameters_for("j2")), failing(failing_ctx, parameters_for("j2"));
+  for (auto *d : {&reference, &failing}) {
+    ASSERT_TRUE(d->step(axial(1e-3), tensor2{}, control::uniaxial_stress(), 0, 1).converged);
+    d->accept();
+  }
+  EXPECT_THROW(static_cast<void>(failing.step(axial(1e-2), tensor2{}, control::uniaxial_stress(), 1, 1)),
+               u::cutback_error);
+  failing.reject();
+  auto const a{failing.step(axial(2e-3), tensor2{}, control::uniaxial_stress(), 1, 1)};
+  auto const b{reference.step(axial(2e-3), tensor2{}, control::uniaxial_stress(), 1, 1)};
+  ASSERT_TRUE(a.converged);
+  EXPECT_EQ(a.stress, b.stress);
+  EXPECT_EQ(a.strain, b.strain);
+  failing.accept();
+  EXPECT_EQ(failing.accepted_strain(), a.strain);
+}
+
+// Just below yield, the +fd_step perturbation of the check yields and the return map throws: the point is back at
+// the accepted state, so accept() commits nothing and the next step runs.
+TEST(MaterialPointDriver, AThrowInTheTangentCheckLeavesTheAcceptedState) {
+  ctx_type ctx;
+  build_j2(ctx, true, 0);
+  auto p{parameters_for("j2")};
+  p.insert<T>("fd_step", 1e-4);
+  driver d(ctx, p);
+  T const yield{sigma_0 / (2 * G)}; // uniaxial strain
+  auto const res{d.step(axial(0.98 * yield), tensor2{}, control::strain(), 0, 1)};
+  ASSERT_TRUE(res.converged);
+  EXPECT_THROW(static_cast<void>(d.tangent_error(res)), u::cutback_error);
+  d.accept();
+  EXPECT_EQ(d.accepted_strain(), tensor2{});
+  ASSERT_TRUE(d.step(axial(0.5 * yield), tensor2{}, control::strain(), 0, 1).converged);
+  d.accept();
+  EXPECT_EQ(d.accepted_strain(), axial(0.5 * yield));
 }
 
 } // namespace

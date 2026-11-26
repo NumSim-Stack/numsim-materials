@@ -231,4 +231,17 @@ TEST(DeformationGradientDriver, TangentErrorOfAZeroTangentIsFinite) {
   EXPECT_EQ(d.tangent_error(res), 0);
 }
 
+// The residual check throws after the graph was updated: accept() must not commit that trial.
+TEST(DeformationGradientDriver, AThrowingStepLeavesNothingToAccept) {
+  ctx_type ctx;
+  build<nm::neo_hooke<policy>>(ctx, true);
+  auto p{parameters()};
+  p.insert<std::string>("residual_source", "stuck::value");
+  p.insert<int>("max_passes", 3);
+  driver d{ctx, p};
+  EXPECT_THROW(static_cast<void>(d.step(stretch(1.01), tensor2{}, control::deformation(), 0, 1)), u::cutback_error);
+  d.accept();
+  EXPECT_EQ(d.accepted_F(), stretch(1.0));
+}
+
 } // namespace
