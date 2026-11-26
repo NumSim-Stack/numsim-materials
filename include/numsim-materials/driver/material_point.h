@@ -182,7 +182,8 @@ public:
   // --- Evaluation ---
 
   /// One graph update; with the deprecated residual_source, repeated until that residual is converged (a graph
-  /// whose fixed point is declared with converges() is converged after the first).
+  /// whose fixed point is declared with converges() is converged after the first). A throw fails the context for
+  /// every point over it until reset() or restore(); a successful evaluate() clears an unconverged residual.
   void evaluate() {
     if (!m_props_readers.empty() && !m_props_bound)
       throw fatal_error("material_point: this model reads its material constants per call — call bind_props() "
@@ -190,7 +191,7 @@ public:
     try {
       update();
     } catch (...) {
-      m_failed = true;
+      m_ctx.mark_failed();
       throw;
     }
   }
@@ -198,10 +199,7 @@ public:
   // --- History ---
 
   /// History back to the start of the step; also clears a failed evaluation.
-  void reset() {
-    m_ctx.revert();
-    m_failed = false;
-  }
+  void reset() { m_ctx.revert(); }
 
   /// Engine-owned: the evaluated step becomes the start of the next one.
   void accept() {
@@ -216,10 +214,7 @@ public:
   }
 
   /// Back to checkpoint(), also after a failed evaluation.
-  void restore(typename context_type::checkpoint_type const &cp) {
-    m_ctx.restore(cp);
-    m_failed = false;
-  }
+  void restore(typename context_type::checkpoint_type const &cp) { m_ctx.restore(cp); }
 
   /// Host-owned: doubles the host stores per point.
   [[nodiscard]] std::size_t history_width() const { return host_map().nstatv(); }
@@ -240,8 +235,12 @@ public:
 
   [[nodiscard]] bool has_rotatable_history() const { return host_map().has_rotatable_history(); }
 
-  /// Engine-owned checkpoint: the accepted state, restored into a point over an identical context.
-  void save(std::ostream &out) const { m_ctx.save_state(out); }
+  /// Engine-owned checkpoint: the accepted state, restored into a point over an identical context. load() clears a
+  /// failed evaluation like restore().
+  void save(std::ostream &out) const {
+    check_not_failed("save");
+    m_ctx.save_state(out);
+  }
   void load(std::istream &in) { m_ctx.load_state(in); }
 
   [[nodiscard]] context_type &context() noexcept { return m_ctx; }
@@ -269,8 +268,8 @@ private:
   }
 
   void check_not_failed(char const *what) const {
-    if (m_failed)
-      throw fatal_error(std::format("material_point: {}() after a failed evaluate(); reset() first", what));
+    if (m_ctx.failed())
+      throw fatal_error(std::format("material_point: {}() after a failed evaluate() over this context; reset() first", what));
   }
 
   template <typename Source>
@@ -330,7 +329,6 @@ private:
   std::vector<bool> m_live_slots;
   std::size_t m_props_needed{0};
   bool m_props_bound{false};
-  bool m_failed{false}; ///< the last evaluate() threw
   std::optional<umat::statev_map<Traits>> m_host_map; ///< empty when some history has no STATEV layout
   std::string m_host_map_error;
 };

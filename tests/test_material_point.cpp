@@ -245,6 +245,59 @@ TEST(MaterialPoint, NoAcceptAfterAnUnconvergedResidual) {
   EXPECT_NO_THROW(point.accept());
 }
 
+TEST(MaterialPoint, AnUnconvergedResidualBlocksEveryPointOverTheContext) {
+  ctx_type ctx;
+  add<nm::external_strain_source<policy>>(ctx, "strain");
+  add<memory<policy>>(ctx, "mem");
+  add<relaxer<policy>>(ctx, "relax");
+  ctx.finalize();
+  auto parameters{residual("relax::residual")};
+  parameters.insert<std::vector<std::string>>("inputs", {"strain"});
+  parameters.insert<int>("max_passes", 3);
+  point_type iterating{ctx, parameters};
+  point_type other{ctx, strain_input()};
+  iterating.reset();
+  iterating.input<nm::external_strain_source<policy>>("strain").bind(strain_at(0), strain_at(1));
+  EXPECT_THROW(iterating.evaluate(), nm::umat::cutback_error);
+  EXPECT_THROW(other.accept(), nm::umat::fatal_error) << "the unconverged trial is the context's";
+  EXPECT_THROW(ctx.commit(), std::logic_error);
+  EXPECT_THROW(static_cast<void>(ctx.checkpoint()), std::logic_error);
+  std::stringstream out;
+  EXPECT_THROW(ctx.save_state(out), std::logic_error);
+  other.reset();
+  EXPECT_NO_THROW(iterating.accept()) << "reset() through any point clears it";
+  EXPECT_EQ(other.history<T>("mem", "count").old_value(), 0) << "the start state, after an explicit reset()";
+}
+
+TEST(MaterialPoint, ASuccessfulEvaluationClearsAnUnconvergedResidual) {
+  ctx_type ctx;
+  add<relaxer<policy>>(ctx, "relax");
+  ctx.finalize();
+  auto parameters{residual("relax::residual")};
+  parameters.insert<T>("residual_tolerance", 0.1);
+  parameters.insert<int>("max_passes", 3);
+  point_type point{ctx, parameters};
+  EXPECT_THROW(point.evaluate(), nm::umat::cutback_error) << "residual 0.25 after three passes";
+  EXPECT_NO_THROW(point.evaluate()) << "continues from the last value: 0.0625 after two more";
+  EXPECT_NO_THROW(point.accept());
+}
+
+TEST(MaterialPoint, NoSaveAfterAFailedEvaluationAndLoadClearsIt) {
+  setup s{1.5};
+  point_type point{s.ctx, strain_input()};
+  trial(point, 0, 1);
+  point.accept();
+  std::stringstream checkpoint;
+  point.save(checkpoint);
+  EXPECT_THROW(trial(point, 1, 2), std::runtime_error);
+  std::stringstream after;
+  EXPECT_THROW(point.save(after), nm::umat::fatal_error) << "the failed trial is no checkpoint";
+  EXPECT_THROW(s.ctx.save_state(after), std::logic_error);
+  point.load(checkpoint);
+  EXPECT_NO_THROW(point.accept()) << "load() restores a consistent state, as restore() does";
+  EXPECT_EQ(point.history<T>("mem", "count").old_value(), 1);
+}
+
 TEST(MaterialPoint, HostOwnedHistoryMatchesEngineOwned) {
   setup engine, host;
   point_type a{engine.ctx, strain_input()};
@@ -426,11 +479,10 @@ TEST(MaterialPoint, TwoPointsOverOneContextShareItsHistory) {
   EXPECT_EQ(host.history<T>("mem", "count").old_value(), 1) << "one history";
 
   EXPECT_THROW(trial(engine, 1, 2), std::runtime_error);
-  EXPECT_THROW(host.accept(), std::logic_error) << "the context's failed update blocks every point";
+  EXPECT_THROW(host.accept(), nm::umat::fatal_error) << "the context's failed update blocks every point";
+  EXPECT_THROW(s.ctx.commit(), std::logic_error);
   host.reset();
-  EXPECT_THROW(engine.accept(), nm::umat::fatal_error) << "the failed evaluate() is the engine point's own";
-  engine.reset();
-  EXPECT_NO_THROW(engine.accept());
+  EXPECT_NO_THROW(engine.accept()) << "one context, one failed state: reset() through either point clears it";
 }
 
 TEST(MaterialPoint, CheckpointsThroughStreams) {
