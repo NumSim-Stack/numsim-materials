@@ -50,7 +50,7 @@ public:
     optional<std::string>(para, "stress_property", std::string{"stress"});   // e.g. "damaged_stress"
     optional<std::string>(para, "tangent_property", std::string{"tangent"});
     optional<std::string>(para, "time_source", std::string{});     // external_scalar_source; empty: none
-    optional<value_type>(para, "tolerance", value_type{1e-10});    // on |M:(P - P*)| relative to |P|
+    optional<value_type>(para, "tolerance", value_type{1e-10});    // on |M:(P - P*)| relative to |P|, above roundoff
     optional<int>(para, "max_iter", 25);
     optional<value_type>(para, "fd_step", value_type{1e-7});       // perturbation of F in tangent_error()
     // passed to the material point (same defaults): a fixed point of the graph, e.g. "scs::residual"
@@ -92,7 +92,10 @@ public:
       // as for small strain: the step's own stress scale when P passes through zero
       auto const scale{std::max({tmech::norm(res.stress), tmech::norm(tensor2{tmech::dcontract(M, P)}),
                                  tmech::norm(res.tangent) * tmech::norm(tensor2{res.F - start})})};
-      if (res.residuals.back() <= m_tolerance * scale) {
+      // near F = I, P is a difference of O(|dP/dF| |F|) terms: the residual cannot fall below their roundoff
+      auto const roundoff{8 * std::numeric_limits<value_type>::epsilon() * tmech::norm(res.tangent) *
+                          tmech::norm(res.F)};
+      if (res.residuals.back() <= std::max(m_tolerance * scale, roundoff)) {
         res.converged = true;
         break;
       }

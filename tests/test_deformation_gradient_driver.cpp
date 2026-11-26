@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include <type_traits>
 #include <cmath>
+#include <utility>
 #include <stdexcept>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_context.h"
@@ -242,6 +243,40 @@ TEST(DeformationGradientDriver, AThrowingStepLeavesNothingToAccept) {
   EXPECT_THROW(static_cast<void>(d.step(stretch(1.01), tensor2{}, control::deformation(), 0, 1)), u::cutback_error);
   d.accept();
   EXPECT_EQ(d.accepted_F(), stretch(1.0));
+}
+
+// uniaxial_stress() prescribes the skew part of F: a rotation left by an earlier shear is taken out, and the rotations
+// that cost no stress at P = 0 are no unknowns.
+TEST(DeformationGradientDriver, UniaxialStressPrescribesTheRotation) {
+  for (auto const &[i, j] : {std::pair{0, 1}, std::pair{1, 0}, std::pair{1, 2}}) {
+    ctx_type ctx;
+    build<nm::neo_hooke<policy>>(ctx);
+    driver d(ctx, parameters());
+    tensor2 sheared{stretch(1.0)};
+    sheared(i, j) = 1e-3;
+    ASSERT_TRUE(d.step(sheared, tensor2{}, control::deformation(), 0, 1).converged);
+    d.accept();
+    auto const res{d.step(stretch(1.0 + 1e-6), tensor2{}, control::uniaxial_stress(), 1, 1)};
+    ASSERT_TRUE(res.converged) << i << j;
+    EXPECT_LE(tmech::norm(tensor2{res.F - tmech::trans(res.F)}), 1e-15) << i << j;
+    EXPECT_NEAR(res.F(i, j), 0, 1e-15) << i << j;
+    EXPECT_NEAR(res.F(1, 1) - 1, -nu * 1e-6, 1e-3 * nu * 1e-6) << i << j;
+    EXPECT_LE(res.residuals.size(), 4u) << i << j;
+  }
+}
+
+// Near F = I the stress is a difference of O(1) terms: it converges to its roundoff, not to tolerance * |P|.
+TEST(DeformationGradientDriver, TinyStretchesConverge) {
+  ctx_type ctx;
+  build<nm::neo_hooke<policy>>(ctx);
+  driver d(ctx, parameters());
+  for (T const e : {1e-6, 1e-8, 1e-10, -1e-8}) {
+    auto const res{d.step(stretch(1 + e), tensor2{}, control::uniaxial_stress(), 0, 1)};
+    ASSERT_TRUE(res.converged) << e;
+    EXPECT_NEAR(res.F(1, 1) - 1, -nu * e, 1e-3 * nu * std::abs(e)) << e;
+    EXPECT_NEAR(res.stress(0, 0), E * e, 1e-3 * E * std::abs(e)) << e;
+    EXPECT_LE(res.residuals.size(), 4u) << e;
+  }
 }
 
 } // namespace

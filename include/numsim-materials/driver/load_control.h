@@ -56,7 +56,16 @@ public:
   using tensor4 = tmech::tensor<T, 3, 4>;
 
   static deformation_control deformation() { return deformation_control{}; }
-  static deformation_control uniaxial_stress() { return mixed({"22", "33", "12", "13", "23", "21", "31", "32"}); }
+  /// F11 and the skew part of F prescribed; P22, P33 and the symmetric shear parts of P stress controlled. The
+  /// rotations, free at P = 0, are no unknowns; for an isotropic material P is uniaxial.
+  static deformation_control uniaxial_stress() {
+    auto c{mixed({"22", "33"})};
+    for (auto const name : {"12", "13", "23"}) {
+      auto const &E{materials::symmetric_basis<T>()[materials::component_index(name)]};
+      c.m_M += tmech::otimes(E, E);
+    }
+    return c;
+  }
   static deformation_control mixed(std::initializer_list<std::string_view> stress_components) {
     return mixed(std::span{stress_components.begin(), stress_components.size()});
   }
