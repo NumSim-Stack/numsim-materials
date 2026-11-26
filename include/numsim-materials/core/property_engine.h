@@ -126,6 +126,7 @@ public:
         s.system ? solve(*s.system, s.callbacks) : run(s.callbacks);
       retire([](property_base*) { return true; });
       m_evaluated = true;
+      m_rejected = false;
     });
   }
 
@@ -194,22 +195,28 @@ public:
   }
 
   void commit() {
-    if (m_failed)
-      throw std::logic_error("commit(): the last update threw, the context is partly updated: revert() first");
+    check_not_failed("commit");
     for (auto* hp : m_history_properties)
       hp->commit();
   }
 
+  /// The caller fails the last update (an unconverged residual): no commit() or checkpoint() until revert(),
+  /// restore() or a successful update().
+  void mark_failed() noexcept { m_rejected = true; }
+
+  /// The last update threw or was failed by its caller.
+  [[nodiscard]] bool failed() const noexcept { return m_failed || m_rejected; }
+
   /// Restores the history and clears a failed update.
   void revert() {
-    m_failed = false;
+    m_failed = m_rejected = false;
     for (auto* hp : m_history_properties)
       hp->revert();
   }
 
   /// revert() of the histories a callback fills: host-bound ones keep their new value.
   void revert_produced() {
-    m_failed = false;
+    m_failed = m_rejected = false;
     for (auto* hp : m_history_properties)
       if (!m_host_bound.contains(hp))
         hp->revert();
@@ -226,8 +233,7 @@ public:
   /// The history now, both values: restore() returns to it after any number of commits. Only history properties are
   /// saved; state a material keeps outside them across calls is not restored.
   history_checkpoint<Traits> checkpoint() const {
-    if (m_failed)
-      throw std::logic_error("checkpoint(): the last update threw, the context is partly updated: revert() first");
+    check_not_failed("checkpoint");
     history_checkpoint<Traits> cp;
     cp.m_owner = this;
     cp.m_bytes.reserve(m_history_properties.size());
@@ -245,12 +251,28 @@ public:
       throw std::logic_error("restore(): the checkpoint was taken from another context");
     if (cp.m_bytes.size() != m_history_properties.size())
       throw std::logic_error("restore(): the checkpoint holds a different number of history properties");
-    m_failed = true; // a throw while deserializing leaves the history partly restored
-    for (auto const& [hp, bytes] : std::views::zip(m_history_properties, cp.m_bytes)) {
-      std::istringstream in{bytes};
-      hp->deserialize(in);
-    }
-    m_failed = false;
+    reload([&] {
+      for (auto const& [hp, bytes] : std::views::zip(m_history_properties, cp.m_bytes)) {
+        std::istringstream in{bytes};
+        hp->deserialize(in);
+      }
+    });
+  }
+
+  /// Runs `load` over the history: a throw leaves it partly restored and failed, success clears a failure.
+  template <typename Load>
+  void reload(Load&& load) {
+    m_failed = true;
+    load();
+    m_failed = m_rejected = false;
+  }
+
+  /// Throws when failed(): the context holds no trial to accept.
+  void check_not_failed(char const* what) const {
+    if (m_failed)
+      throw std::logic_error(std::string{what} + "(): the last update threw, the context is partly updated: revert() first");
+    if (m_rejected)
+      throw std::logic_error(std::string{what} + "(): the last update did not converge: revert() first");
   }
 
   property_base* find_property(property_handler& properties,
@@ -1823,6 +1845,7 @@ private:
   bool m_running{false}; ///< an update is in progress
   bool m_evaluated{false}; ///< an update() ran to its end since the last failure
   bool m_failed{false};  ///< the last update threw
+  bool m_rejected{false};  ///< the caller failed the last update (mark_failed())
   std::unique_ptr<bool> m_check_reads{std::make_unique<bool>(true)}; ///< stable address for the wrapped callbacks
 };
 

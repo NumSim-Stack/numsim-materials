@@ -139,6 +139,13 @@ public:
     m_engine.revert();
   }
 
+  /// The caller fails the last update (an unconverged residual): commit(), checkpoint() and save_state() throw
+  /// until revert(), restore(), load_state() or a successful update().
+  void mark_failed() noexcept { m_engine.mark_failed(); }
+
+  /// The last update threw or was failed by mark_failed().
+  [[nodiscard]] bool failed() const noexcept { return m_engine.failed(); }
+
   /// d(output)/d(input) by finite differences along the host path: per perturbation the callbacks' histories
   /// reverted, the input set, update(). Parameters: derivative_check_parameters(). Returns evaluated at the input.
   derivative_check<value_type> check_derivative(parameter_handler parameters) {
@@ -152,7 +159,7 @@ public:
     return m_engine.checkpoint();
   }
 
-  /// Back to a checkpoint of this context; clears a failed update like revert().
+  /// Back to a checkpoint of this context; clears a failed update like revert(), as does load_state().
   void restore(checkpoint_type const& cp) {
     check_finalized("restore");
     m_engine.restore(cp);
@@ -172,6 +179,7 @@ public:
   /// save_state() into a binary stream.
   void save_state(std::ostream& out) const {
     check_finalized("save_state");
+    m_engine.check_not_failed("save_state");
     for (auto* prop : m_engine.property_execution_order())
       if (prop->is_history()) {
         std::ostringstream bytes;
@@ -217,12 +225,14 @@ public:
       throw std::runtime_error("load_state: '" + path + "' does not match this context; missing:" +
                                (missing.empty() ? " none" : missing) + ", unknown here:" + (unknown.empty() ? " none" : unknown));
     }
-    for (auto* prop : restored) {
-      std::istringstream bytes{saved.at(key_of(*prop))};
-      prop->deserialize(bytes);
-      if (!bytes || bytes.peek() != std::istringstream::traits_type::eof())
-        throw std::runtime_error("load_state: '" + key_of(*prop) + "' in '" + path + "' has another size");
-    }
+    m_engine.reload([&] {
+      for (auto* prop : restored) {
+        std::istringstream bytes{saved.at(key_of(*prop))};
+        prop->deserialize(bytes);
+        if (!bytes || bytes.peek() != std::istringstream::traits_type::eof())
+          throw std::runtime_error("load_state: '" + key_of(*prop) + "' in '" + path + "' has another size");
+      }
+    });
   }
 
   // --- Lookup ---

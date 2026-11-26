@@ -3,9 +3,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <concepts>
 #include <format>
 #include <istream>
-#include <memory>
+#include <optional>
 #include <ostream>
 #include <span>
 #include <stdexcept>
@@ -68,6 +69,10 @@ public:
     }
     for (auto const &source : m_parameters.template get<std::vector<std::string>>("host_owned")) {
       auto const src{connection_source::parse(source)};
+      if (!std::ranges::any_of(m_ctx.property_execution_order(), [&](auto const *prop) {
+            return prop->is_history() && prop->traits().id.owner == src.material && prop->traits().id.name == src.property;
+          }))
+        throw fatal_error("material_point: host_owned '" + source + "' is not a history property in this context");
       m_exclusions.emplace_back(src.material, src.property);
     }
     if (!(m_tolerance >= 0) || m_max_passes < 1)
@@ -82,22 +87,32 @@ public:
     m_live_slots.assign(m_props_needed, false);
     for (auto const *reader : m_props_readers)
       m_live_slots[reader->index()] = true;
+    // an engine-owned point may hold history no host buffer can: that only fails host-owned use
+    try {
+      m_host_map.emplace(m_ctx, m_exclusions);
+    } catch (fatal_error const &e) {
+      m_host_map_error = e.what();
+    }
   }
 
   // --- Inputs ---
 
-  /// The input source `name`, to bind its old and new values.
+  /// The input source `name`, to bind its old and new values. Searches and casts per call: resolve once, keep the
+  /// reference.
   template <typename Source>
-  Source &input(std::string const &name) const {
-    if (!std::ranges::contains(m_inputs, name))
-      throw fatal_error("material_point: '" + name + "' is not an input of this material point");
-    auto *source = dynamic_cast<Source *>(m_ctx.find(name));
-    if (!source)
-      throw fatal_error("material_point: input '" + name + "' is another kind of source");
-    return *source;
+    requires std::derived_from<Source, material_interface<Traits>>
+  Source &input(std::string const &name) {
+    return *find_input<Source>(name);
   }
 
-  /// Copy the host's material constants into the props_scalar readers; a no-op without any.
+  template <typename Source>
+    requires std::derived_from<Source, material_interface<Traits>>
+  Source const &input(std::string const &name) const {
+    return *find_input<Source>(name);
+  }
+
+  /// Copy the host's material constants into the props_scalar readers; a no-op without any. They stay bound across
+  /// reset() (the UMAT evaluator binds once per host call, then resets per iterate): rebind on every host call.
   void bind_props(std::span<value_type const> props) {
     if (m_props_readers.empty())
       return;
@@ -118,6 +133,7 @@ public:
 
   // --- Outputs ---
 
+  /// Searches per call: resolve once, keep the reference.
   template <typename T>
   T const &output(std::string const &material, std::string const &property) const {
     if (auto const *value = property_value<T>(find(material, property)))
@@ -166,22 +182,17 @@ public:
   // --- Evaluation ---
 
   /// One graph update; with the deprecated residual_source, repeated until that residual is converged (a graph
-  /// whose fixed point is declared with converges() is converged after the first).
+  /// whose fixed point is declared with converges() is converged after the first). A throw fails the context for
+  /// every point over it until reset() or restore(); a successful evaluate() clears an unconverged residual.
   void evaluate() {
     if (!m_props_readers.empty() && !m_props_bound)
       throw fatal_error("material_point: this model reads its material constants per call — call bind_props() "
                               "before evaluating");
-    m_ctx.update();
-    if (!m_residual)
-      return;
-    // the negated test also keeps a NaN residual unconverged
-    for (int pass{1}; !(std::abs(*m_residual) <= m_tolerance); ++pass) {
-      if (pass >= m_max_passes || std::isnan(*m_residual))
-        throw cutback_error(std::format("material_point: '{}' did not reach {:g} in {} passes (last {:g})",
-                                              m_parameters.template get<std::string>("residual_source"), m_tolerance,
-                                              m_max_passes,
-                                              *m_residual));
-      m_ctx.update();
+    try {
+      update();
+    } catch (...) {
+      m_ctx.mark_failed();
+      throw;
     }
   }
 
@@ -191,10 +202,16 @@ public:
   void reset() { m_ctx.revert(); }
 
   /// Engine-owned: the evaluated step becomes the start of the next one.
-  void accept() { m_ctx.commit(); }
+  void accept() {
+    check_not_failed("accept");
+    m_ctx.commit();
+  }
 
   /// Engine-owned: the history now, to restore() after accepted substeps (cutbacks).
-  [[nodiscard]] typename context_type::checkpoint_type checkpoint() const { return m_ctx.checkpoint(); }
+  [[nodiscard]] typename context_type::checkpoint_type checkpoint() const {
+    check_not_failed("checkpoint");
+    return m_ctx.checkpoint();
+  }
 
   /// Back to checkpoint(), also after a failed evaluation.
   void restore(typename context_type::checkpoint_type const &cp) { m_ctx.restore(cp); }
@@ -205,27 +222,64 @@ public:
   [[nodiscard]] std::vector<std::string> describe_history() const { return host_map().describe(); }
 
   /// Host-owned: the host's history at the start of the step, into both ends of every history output.
-  void load_history(std::span<value_type const> buffer) const { host_map().unpack(checked(buffer).data()); }
+  void load_history(std::span<value_type const> buffer) { host_map().unpack(checked(buffer).data()); }
 
   /// Host-owned: the evaluated history back to the host.
-  void store_history(std::span<value_type> buffer) const { host_map().pack(checked(buffer).data()); }
+  void store_history(std::span<value_type> buffer) const {
+    check_not_failed("store_history");
+    host_map().pack(checked(buffer).data());
+  }
 
   /// Host-owned: tensor history into the current configuration (after load_history()).
-  void rotate_history(tensor2 const &R) const { host_map().rotate_history(R); }
+  void rotate_history(tensor2 const &R) { host_map().rotate_history(R); }
 
   [[nodiscard]] bool has_rotatable_history() const { return host_map().has_rotatable_history(); }
 
-  /// Engine-owned checkpoint: the accepted state, restored into a point over an identical context.
-  void save(std::ostream &out) const { m_ctx.save_state(out); }
+  /// Engine-owned checkpoint: the accepted state, restored into a point over an identical context. load() clears a
+  /// failed evaluation like restore().
+  void save(std::ostream &out) const {
+    check_not_failed("save");
+    m_ctx.save_state(out);
+  }
   void load(std::istream &in) { m_ctx.load_state(in); }
 
-  [[nodiscard]] context_type &context() const noexcept { return m_ctx; }
+  [[nodiscard]] context_type &context() noexcept { return m_ctx; }
+  [[nodiscard]] context_type const &context() const noexcept { return m_ctx; }
 
 private:
   static parameter_handler checked(parameter_handler parameters) {
     static auto const check{material_point::parameters()};
     check.check_parameter(parameters);
     return parameters;
+  }
+
+  void update() {
+    m_ctx.update();
+    if (!m_residual)
+      return;
+    // the negated test also keeps a NaN residual unconverged
+    for (int pass{1}; !(std::abs(*m_residual) <= m_tolerance); ++pass) {
+      if (pass >= m_max_passes || std::isnan(*m_residual))
+        throw cutback_error(std::format("material_point: '{}' did not reach {:g} in {} passes (last {:g})",
+                                        m_parameters.template get<std::string>("residual_source"), m_tolerance,
+                                        m_max_passes, *m_residual));
+      m_ctx.update();
+    }
+  }
+
+  void check_not_failed(char const *what) const {
+    if (m_ctx.failed())
+      throw fatal_error(std::format("material_point: {}() after a failed evaluate() over this context; reset() first", what));
+  }
+
+  template <typename Source>
+  Source *find_input(std::string const &name) const {
+    if (!std::ranges::contains(m_inputs, name))
+      throw fatal_error("material_point: '" + name + "' is not an input of this material point");
+    auto *source = dynamic_cast<Source *>(m_ctx.find(name));
+    if (!source)
+      throw fatal_error("material_point: input '" + name + "' is another kind of source");
+    return source;
   }
 
   /// An input's history output, or "material::property".
@@ -258,10 +312,9 @@ private:
     return buffer;
   }
 
-  /// Built on first use: an engine-owned point may hold history no host buffer can.
   umat::statev_map<Traits> const &host_map() const {
     if (!m_host_map)
-      m_host_map = std::make_unique<umat::statev_map<Traits>>(m_ctx, m_exclusions);
+      throw fatal_error(m_host_map_error);
     return *m_host_map;
   }
 
@@ -276,7 +329,8 @@ private:
   std::vector<bool> m_live_slots;
   std::size_t m_props_needed{0};
   bool m_props_bound{false};
-  mutable std::unique_ptr<umat::statev_map<Traits>> m_host_map;
+  std::optional<umat::statev_map<Traits>> m_host_map; ///< empty when some history has no STATEV layout
+  std::string m_host_map_error;
 };
 
 } // namespace numsim::materials
