@@ -6,6 +6,7 @@
 #include "numsim-materials/default_materials.h"
 #include "numsim-materials/io/json_material_factory.h"
 #include "numsim-materials/materials/linear_elasticity.h"
+#include "test_support.h"
 
 namespace {
 
@@ -132,6 +133,102 @@ TEST(ParameterDiagnostics, AWrongParameterTypeIsNotABareBadAnyCast) {
     FAIL() << "still surfacing std::bad_any_cast";
   } catch (const std::invalid_argument&) {
     SUCCEED();
+  }
+}
+
+// --- The stored type of every declared parameter is checked at construction (#152) ---
+
+/// Declares "x", "label" and, without the helpers, "count" but reads none of them while it is built.
+template <typename Traits> class lazy final : public nm::material_base<lazy<Traits>, Traits> {
+public:
+  using base = nm::material_base<lazy<Traits>, Traits>;
+  using value_type = typename base::value_type;
+  using input_parameter_controller = typename base::input_parameter_controller;
+
+  template <typename... Args>
+  explicit lazy(Args &&...args) : base(std::forward<Args>(args)...), m_out(base::template add_output<value_type>("out")) {
+    base::add_callback(&lazy::compute, m_out).reads();
+  }
+
+  static input_parameter_controller parameters() {
+    input_parameter_controller para{base::parameters()};
+    nm::required<value_type>(para, "x");
+    nm::optional<std::string>(para, "label", std::string{});
+    para.template insert<int>("count").template add<nm::set_default>(1);
+    return para;
+  }
+
+  void compute() { m_out = base::template get_parameter<value_type>("x"); }
+
+private:
+  value_type &m_out;
+};
+
+/// The message of creating a lazy material with @p parameters, or "" if it was created.
+std::string lazy_error(std::initializer_list<nm::test::parameter<ctx_type>> parameters) {
+  ctx_type ctx;
+  try {
+    nm::test::add<lazy<policy>>(ctx, "lazy", parameters);
+    return "";
+  } catch (const std::exception &e) {
+    return e.what();
+  }
+}
+
+TEST(ParameterDiagnostics, AWrongTypeIsCaughtAtConstructionEvenIfNotReadThere) {
+  for (auto const &[msg, key] : {std::pair{lazy_error({{"x", 1}}), "'x' is not a real number"},
+                                 std::pair{lazy_error({{"x", 1.0}, {"label", 3}}), "'label' is not a string"},
+                                 std::pair{lazy_error({{"x", 1.0}, {"count", 2.0}}), "'count' is not an integer"}}) {
+    ASSERT_FALSE(msg.empty()) << key << ": the wrong type was accepted";
+    EXPECT_NE(msg.find(key), std::string::npos) << msg;
+  }
+}
+
+TEST(ParameterDiagnostics, TheRightTypesStillBuild) {
+  EXPECT_EQ(lazy_error({{"x", 1.0}}), "");
+  EXPECT_EQ(lazy_error({{"x", 1.0}, {"label", "a"}, {"count", 2}}), "");
+}
+
+/// The message of creating a linear_elasticity "elastic" with @p parameters, or "" if it was created.
+std::string elastic_error(std::initializer_list<nm::test::parameter<ctx_type>> parameters) {
+  ctx_type ctx;
+  try {
+    nm::test::add<nm::linear_elasticity<policy>>(ctx, "elastic", parameters);
+    return "";
+  } catch (const std::invalid_argument &e) {
+    return e.what();
+  }
+}
+
+// the check at construction words a wrong type as get_parameter() does (#65)
+TEST(ParameterDiagnostics, AWrongTypeAtConstructionReadsAsInGetParameter) {
+  EXPECT_EQ(elastic_error({{"strain_producer_name", "stepper"}, {"K", 166}, {"G", 76.92}}),
+            "material 'elastic': parameter 'K' is not a real number as this material reads it "
+            "(a whole number written without a decimal point is the usual cause)");
+}
+
+TEST(ParameterDiagnostics, EveryMissingAndWronglyTypedParameterIsReportedSorted) {
+  EXPECT_EQ(elastic_error({{"K", 166}, {"G", 77}}),
+            "material 'elastic': missing 1 required parameter(s): 'strain_producer_name'; "
+            "parameter 'G' is not a real number as this material reads it; "
+            "parameter 'K' is not a real number as this material reads it "
+            "(a whole number written without a decimal point is the usual cause)");
+}
+
+TEST(ParameterDiagnostics, ANameOfTheWrongTypeIsNotABareBadAnyCast) {
+  ctx_type ctx;
+  param_type p;
+  p.insert<int>("name", 3);
+  p.insert<std::string>("strain_producer_name", "stepper");
+  p.insert<T>("K", T{166});
+  p.insert<T>("G", T{76.92});
+  try {
+    ctx.create<nm::linear_elasticity<policy>>(p);
+    FAIL() << "a numeric name was accepted";
+  } catch (const std::invalid_argument &e) {
+    EXPECT_NE(std::string{e.what()}.find("parameter 'name' is not a string"), std::string::npos) << e.what();
+  } catch (const std::bad_any_cast &) {
+    FAIL() << "a numeric name surfaces as std::bad_any_cast";
   }
 }
 

@@ -284,7 +284,13 @@ private:
   /// `parameter` with the defaults applied, checked before the base reads "name": a missing name is listed with the rest.
   static parameter_handler checked(parameter_handler parameter) {
     static auto const check_para{Derived::parameters()};
-    check_parameters(check_para, parameter);
+    try {
+      check_parameters(check_para, parameter);
+    } catch (std::invalid_argument const& e) {
+      if (parameter.contains("name") && parameter.data("name").type() == typeid(std::string))
+        throw std::invalid_argument("material '" + parameter.template get<std::string>("name") + "': " + e.what());
+      throw;
+    }
     return parameter;
   }
 

@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <typeinfo>
 #include <unordered_map>
 #include <vector>
 #include "numsim-materials/core/material_base.h"
@@ -91,8 +92,8 @@ private:
   /// time adopt() sees it the collision has already happened in the property
   /// registry.
   void check_name_available(const parameter_handler& params) const {
-    if (!params.contains("name"))
-      return; // the material's parameter check names it with the other missing ones
+    if (!params.contains("name") || params.data("name").type() != typeid(std::string))
+      return; // the material's parameter check reports it with the other problems
     const auto& name = params.template get<std::string>("name");
     if (m_by_name.contains(name))
       throw std::invalid_argument(
