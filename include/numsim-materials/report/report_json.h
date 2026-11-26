@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <span>
@@ -85,6 +86,21 @@ V get(nlohmann::json const &j, std::string const &key) {
 template <typename V>
 V get(nlohmann::json const &j, std::string const &key, V fallback) {
   return j.is_object() && j.contains(key) ? get<V>(j, key) : fallback;
+}
+
+/// c[key] (or `fallback`) as a finite V of at least 0 (`strict`: above 0).
+template <typename V>
+V bounded(nlohmann::json const &c, std::string const &key, V fallback, bool strict) {
+  auto const v{get<V>(c, key, fallback)};
+  if (!std::isfinite(v) || v < V{0} || (strict && v == V{0}))
+    throw std::invalid_argument("\"" + key + "\": expected a number " + (strict ? "> 0" : ">= 0") + ", got " +
+                                nlohmann::json(v).dump());
+  return v;
+}
+
+template <typename V>
+V positive(nlohmann::json const &c, std::string const &key, V fallback) {
+  return bounded(c, key, fallback, true);
 }
 
 /// "case 'name'" for messages.
@@ -181,9 +197,9 @@ load_case<T> parse_case(nlohmann::json const &c, bool finite_strain) {
   return {name, finite_strain ? load_control<T>::strain() : parse_control(c, load_control<T>::strain()),
           finite_strain ? parse_control(c, deformation_control<T>::deformation()) : deformation_control<T>::deformation(),
           std::move(points), c.contains("stress") ? tensor_at<T>(c, "stress", finite_strain) : tensor2{},
-          load_path<T>{std::move(factors), count(c, "steps", 50, 1), c.contains("points") ? T{1} : scale, get<T>(c, "dt", T{1})},
+          load_path<T>{std::move(factors), count(c, "steps", 50, 1), c.contains("points") ? T{1} : scale, positive<T>(c, "dt", T{1})},
           count(c, "tangent_every", 1, 0), finite_strain,
-          c.contains("fd_step") ? std::optional<T>{get<T>(c, "fd_step")} : std::nullopt, max_cutbacks(c)};
+          c.contains("fd_step") ? std::optional<T>{positive<T>(c, "fd_step", T{1})} : std::nullopt, max_cutbacks(c)};
 }
 } // namespace detail
 
@@ -281,7 +297,7 @@ typename Traits::ParameterHandler parse_point(nlohmann::json const &doc) {
           key == "residual_source")
         out.template insert<std::string>(key, detail::get<std::string>(point, key));
       else if (key == "tolerance" || key == "fd_step" || key == "residual_tolerance")
-        out.template insert<T>(key, detail::get<T>(point, key));
+        out.template insert<T>(key, detail::bounded(point, key, T{}, key == "fd_step"));
       else if (key == "max_iter")
         out.template insert<int>(key, detail::as_count(value, "\"max_iter\"", 0));
       else if (key == "max_passes")

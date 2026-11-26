@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include <initializer_list>
+#include <limits>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
@@ -196,6 +197,28 @@ TEST(ReportJson, PointAndColumnErrorsNameTheKey) {
   EXPECT_TRUE(names(parse_columns(with_record), {"record", "k"}));
   with_record["record"] = json::parse(R"({"k": {"full": true}})");
   EXPECT_TRUE(names(parse_columns(with_record), {"record", "k", "source"}));
+}
+
+TEST(LoadPath, TheUnloadedStepTakesATimeStepEndingAtZero) {
+  r::load_path<T> const path{{0, 1}, 2, 1, 0.25};
+  EXPECT_EQ(path.unloaded().dt, 0.25);
+  EXPECT_EQ(path.unloaded().time + path.unloaded().dt, 0);
+  EXPECT_EQ(path.at(1).time, 0);
+  for (T const dt : {0.0, -1.0, std::numeric_limits<T>::quiet_NaN()})
+    EXPECT_THROW((r::load_path<T>{{0, 1}, 2, 1, dt}), std::invalid_argument) << dt;
+}
+
+TEST(ReportJson, TimeStepAndTolerancesAreCheckedWhenParsed) {
+  auto const u = [](std::string const &extra) { return R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1])" + extra + "}"; };
+  for (auto const *extra : {R"(, "dt": 0)", R"(, "dt": -0.1)"})
+    EXPECT_TRUE(names(error_of([&] { return r::parse_case<T>(json::parse(u(extra))); }), {"case 'u'", "dt"})) << extra;
+  for (auto const *extra : {R"(, "fd_step": 0)", R"(, "fd_step": -1e-7)"})
+    EXPECT_TRUE(names(error_of([&] { return r::parse_case<T>(json::parse(u(extra))); }), {"case 'u'", "fd_step"})) << extra;
+  EXPECT_EQ(r::parse_case<T>(json::parse(u(R"(, "dt": 0.5)"))).path.at(1).dt, 0.5);
+  auto const point = [](std::string const &p) { return json::parse(R"({"point": {"strain_source": "s", "stress_source": "m", )" + p + "}}"); };
+  for (auto const *bad : {R"("tolerance": -1e-10)", R"("fd_step": 0)", R"("residual_tolerance": -1)"})
+    EXPECT_TRUE(names(error_of([&] { return r::parse_point<policy>(point(bad)); }), {"point"})) << bad;
+  EXPECT_EQ(error_of([&] { return r::parse_point<policy>(point(R"("tolerance": 0, "fd_step": 1e-6)")); }), "");
 }
 
 TEST(ReportJson, APathStartsAtTheUnloadedState) {
@@ -416,11 +439,21 @@ TEST(CaseRunner, FiniteStrainRecordsFPCauchyAndJ) {
 }
 
 TEST(CaseRunner, TheCaseFdStepReachesTheDriver) {
-  auto const spec = json::parse(R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], "steps": 1,
-    "scale": 0.001, "fd_step": 0})");
+  auto c{r::parse_case<T>(json::parse(R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], "steps": 1,
+    "scale": 0.001, "fd_step": 1e-6})"))};
+  c.fd_step = 0; // past the parser's check
   recording_sink sink;
-  EXPECT_THROW(static_cast<void>(r::run_case<policy>(elastic_report(), r::parse_case<T>(spec), sink)),
-               nm::umat::fatal_error) << "fd_step must be > 0";
+  EXPECT_THROW(static_cast<void>(r::run_case<policy>(elastic_report(), c, sink)), nm::umat::fatal_error)
+      << "fd_step must be > 0";
+}
+
+TEST(CaseRunner, TheUnloadedStepRunsWithTheCaseTimeStep) {
+  auto const c{r::parse_case<T>(json::parse(R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], "steps": 2, "dt": 0.5})"))};
+  recording_sink sink;
+  ASSERT_TRUE(r::run_case<policy>(elastic_report(), c, sink));
+  EXPECT_EQ(sink.records.front().step.dt, 0.5);
+  EXPECT_EQ(sink.records.front().step.time + sink.records.front().step.dt, 0);
+  EXPECT_EQ(sink.records.back().step.time + sink.records.back().step.dt, 1);
 }
 
 TEST(CaseRunner, RecordsTheUnloadedStateAndEveryStep) {

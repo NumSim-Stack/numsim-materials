@@ -109,8 +109,9 @@ bool run_small_strain(nlohmann::json const &doc, load_case<typename Traits::valu
   sink.begin(columns.names());
   auto const values = [&](auto const &) { return columns.values(); };
 
-  auto const initial{driver.step(tensor2{}, tensor2{}, load_control<T>::strain(), 0, 0)};
-  if (!record_step<Traits>(driver, initial, c.path.unloaded(), 0, sink, values))
+  auto const unloaded{c.path.unloaded()};
+  auto const initial{driver.step(tensor2{}, tensor2{}, load_control<T>::strain(), unloaded.time, unloaded.dt)};
+  if (!record_step<Traits>(driver, initial, unloaded, 0, sink, values))
     return false;
   auto const solve{[&](load_step<T> const &s) {
     return driver.step(c.strain_at(s), tensor2{s.load * c.stress}, c.control, s.time, s.dt);
@@ -154,8 +155,9 @@ bool run_finite_strain(nlohmann::json const &doc, load_case<typename Traits::val
   };
 
   auto const I{tmech::eye<T, 3, 2>()};
-  auto const initial{driver.step(I, tensor2{}, deformation_control<T>::deformation(), 0, 0)};
-  if (!record_step<Traits>(driver, initial, c.path.unloaded(), 0, sink, values))
+  auto const unloaded{c.path.unloaded()};
+  auto const initial{driver.step(I, tensor2{}, deformation_control<T>::deformation(), unloaded.time, unloaded.dt)};
+  if (!record_step<Traits>(driver, initial, unloaded, 0, sink, values))
     return false;
   auto const solve{[&](load_step<T> const &s) {
     return driver.step(tensor2{I + c.strain_at(s)}, tensor2{s.load * c.stress}, c.finite_control, s.time, s.dt);

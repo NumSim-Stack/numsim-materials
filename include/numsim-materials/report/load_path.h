@@ -1,6 +1,7 @@
 #ifndef NUMSIM_MATERIALS_REPORT_LOAD_PATH_H
 #define NUMSIM_MATERIALS_REPORT_LOAD_PATH_H
 
+#include <cmath>
 #include <cstddef>
 #include <ranges>
 #include <stdexcept>
@@ -21,7 +22,7 @@ struct load_step {
 
 /// Step schedule along a piecewise linear path: `steps_per_segment` steps between consecutive
 /// points; `factors` (one per point, times `scale`) give the load factor of a step. The first
-/// factor is 0: step 0 is the unloaded state.
+/// factor is 0: step 0 is the unloaded state. Every step, step 0 too, takes `dt`.
 template <typename T>
 class load_path {
 public:
@@ -31,11 +32,14 @@ public:
       throw std::invalid_argument("load path: needs two points and at least one step per segment");
     if (m_points.front() != T{0})
       throw std::invalid_argument("load path: the first factor must be 0 (step 0 is the unloaded state)");
+    if (!(m_dt > T{0}) || !std::isfinite(m_dt))
+      throw std::invalid_argument("load path: dt > 0");
   }
 
   [[nodiscard]] std::size_t size() const noexcept { return (m_points.size() - 1) * static_cast<std::size_t>(m_steps); }
 
-  [[nodiscard]] load_step<T> unloaded() const noexcept { return {0, 0, 0, 0}; }
+  /// Step 0, at zero load: one time step that ends at time 0.
+  [[nodiscard]] load_step<T> unloaded() const noexcept { return {0, -m_dt, m_dt, 0}; }
 
   [[nodiscard]] load_step<T> at(int index) const {
     if (index < 1 || index > static_cast<int>(size()))
