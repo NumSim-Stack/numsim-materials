@@ -4,6 +4,7 @@
 #include <vector>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_context.h"
+#include "numsim-materials/core/partial_check.h"
 #include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/materials/deformation_gradient_kinematics.h"
 #include "numsim-materials/materials/neo_hooke.h"
@@ -84,6 +85,20 @@ TEST(DeformationGradientKinematics, AreNotHistoryAndTheSourceHoldsOnlyF) {
   nm::umat::statev_map<policy> const map{k.ctx, {}};
   ASSERT_EQ(map.describe(), std::vector<std::string>{"0..8  F::deformation_gradient  [full] [two-point]"})
       << "plain properties of the current F: nothing in STATEV";
+}
+
+TEST(DeformationGradientKinematics, TheDerivativesByFAreTheInverseAndTheCofactor) {
+  kinematics k;
+  auto const &d_inverse{k.ctx.derivative<tmech::tensor<T, 3, 4>>("kinematics", "inverse", "F", "deformation_gradient")};
+  auto const &d_determinant{k.ctx.derivative<tensor2>("kinematics", "determinant", "F", "deformation_gradient")};
+  tensor2 const F{deformation()};
+  k.F->bind(tmech::eye<T, 3, 2>(), F);
+  k.ctx.update();
+  tensor2 const Finv{tmech::inv(F)};
+  EXPECT_LT(tmech::norm(tmech::tensor<T, 3, 4>{d_inverse + tmech::otimesu(Finv, tmech::trans(Finv))}), 1e-14);
+  EXPECT_LT(tmech::norm(tensor2{d_determinant - tmech::det(F) * tmech::trans(Finv)}), 1e-14);
+  auto const mismatches{nm::check_partials(k.ctx, "kinematics")};
+  EXPECT_TRUE(mismatches.empty()) << mismatches.front();
 }
 
 /// F, its kinematics and a neo_hooke reading both.

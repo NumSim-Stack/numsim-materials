@@ -161,10 +161,11 @@ TEST(MaterialConformance, MissingRequiredParametersThrow) {
 
 /// Materials whose callbacks declare partials or independence (.partials(), .independent_of()), checked by finite differences below.
 const std::set<std::string> kPartialsChecked = {
-    "elastic_strain", "exponential_damage_law", "incremental_linear_elasticity", "isotropic_damage",
-    "isotropic_moduli", "isotropic_tangent", "linear_damage_law", "linear_elasticity", "linear_stress",
-    "peerlings_damage_law", "power_damage_law", "saturation_damage_law", "strain_energy_state_function",
-    "strain_threshold_yield", "thermal_eigenstrain", "vector_strain_state_function", "von_mises_state_function"};
+    "deformation_gradient_kinematics", "elastic_strain", "exponential_damage_law",
+    "incremental_linear_elasticity", "isotropic_damage", "isotropic_moduli", "isotropic_tangent",
+    "linear_damage_law", "linear_elasticity", "linear_stress", "peerlings_damage_law", "power_damage_law",
+    "saturation_damage_law", "strain_energy_state_function", "strain_threshold_yield", "thermal_eigenstrain",
+    "vector_strain_state_function", "von_mises_state_function"};
 
 /// Header stems under materials/ and solvers/ that declare partials or independent reads, themselves or through a
 /// detail/ base they include.
@@ -202,11 +203,13 @@ TEST(MaterialConformance, EveryMaterialDeclaringPartialsIsChecked) {
 std::unique_ptr<nm::material_context<policy>> partials_model(std::string const& damage_law, double kappa_f = 0.5) {
   auto owner{std::make_unique<nm::material_context<policy>>()};
   auto& ctx{*owner};
-  for (const auto* source : {"strain", "temperature"}) {
+  for (const auto* source : {"strain", "temperature", "F"}) {
     policy::ParameterHandler p;
     p.insert<std::string>("name", source);
     if (std::string{source} == "strain")
       ctx.create<nm::external_strain_source<policy>>(p);
+    else if (std::string{source} == "F")
+      ctx.create<nm::external_deformation_gradient_source<policy>>(p);
     else
       ctx.create<nm::external_scalar_source<policy>>(p);
   }
@@ -214,6 +217,7 @@ std::unique_ptr<nm::material_context<policy>> partials_model(std::string const& 
   // check, which a perturbed tangent fails
   for (const std::string& document : std::vector<std::string>{
            R"({"type": "constant_scalar", "name": "alpha", "value": 1.2e-5})",
+           R"({"type": "deformation_gradient_kinematics", "name": "deformation_gradient_kinematics", "deformation_gradient_source": "F"})",
            R"({"type": "constant_scalar", "name": "K", "value": 150.0})",
            R"({"type": "constant_scalar", "name": "G", "value": 70.0})",
            R"({"type": "thermal_eigenstrain", "name": "thermal_eigenstrain", "alpha_source": "alpha::value", "reference_temperature": 20.0})",
@@ -242,8 +246,12 @@ std::unique_ptr<nm::material_context<policy>> partials_model(std::string const& 
   return owner;
 }
 
+/// A general deformation gradient, det F > 0.
+tmech::tensor<double, 3, 2> const general_F{1.1, 0.2, -0.1, 0.05, 0.9, 0.3, -0.2, 0.15, 1.2};
+
 void bind_state(nm::material_context<policy>& ctx, tmech::tensor<double, 3, 2> const& previous,
                 tmech::tensor<double, 3, 2> const& strain, double temperature) {
+  dynamic_cast<nm::external_deformation_gradient_source<policy>*>(ctx.find("F"))->bind(tmech::eye<double, 3, 2>(), general_F);
   dynamic_cast<nm::external_strain_source<policy>*>(ctx.find("strain"))->bind(previous, strain);
   dynamic_cast<nm::external_scalar_source<policy>*>(ctx.find("temperature"))->bind(20, temperature);
   ctx.update();
