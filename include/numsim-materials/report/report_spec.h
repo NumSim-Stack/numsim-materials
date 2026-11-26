@@ -61,17 +61,25 @@ inline void substitute(nlohmann::json &j, nlohmann::json const &parameters, std:
   }
 }
 
+/// The JSON document in `file`; a syntax error names the file.
+inline nlohmann::json parse_file(std::filesystem::path const &file) {
+  std::ifstream in{file};
+  if (!in)
+    throw std::invalid_argument("cannot open " + file.string());
+  try {
+    return nlohmann::json::parse(in);
+  } catch (nlohmann::json::parse_error const &e) {
+    throw std::invalid_argument(file.string() + ": " + e.what());
+  }
+}
+
 inline nlohmann::json load_included(nlohmann::json const &spec, std::filesystem::path const &dir, int depth = 0) {
   if (depth > 16)
     throw std::invalid_argument("include: nesting deeper than 16 levels (a cycle?) at " + dir.string());
   auto merged = nlohmann::json::object();
   for (auto const &file : spec.value("include", nlohmann::json::array())) {
     auto const path{dir / file.get<std::string>()};
-    std::ifstream in{path};
-    if (!in)
-      throw std::invalid_argument("include: cannot open " + path.string());
-    auto const included = nlohmann::json::parse(in);
-    merge_into(merged, load_included(included, path.parent_path(), depth + 1));
+    merge_into(merged, load_included(parse_file(path), path.parent_path(), depth + 1));
   }
   auto local = spec;
   local.erase("include");

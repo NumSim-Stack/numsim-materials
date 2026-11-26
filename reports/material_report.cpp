@@ -25,10 +25,7 @@ using policy = numsim::materials::material_policy_default;
 using T = policy::value_type;
 
 nlohmann::json load(std::filesystem::path const &file) {
-  std::ifstream in{file};
-  if (!in)
-    throw std::invalid_argument("cannot open " + file.string());
-  return r::resolve_report(nlohmann::json::parse(in), file.parent_path());
+  return r::resolve_report(r::detail::parse_file(file), file.parent_path());
 }
 
 std::ofstream open_out(std::filesystem::path const &file) {
@@ -78,7 +75,11 @@ bool run(nlohmann::json const &doc, std::filesystem::path const &out) {
   }
   bool converged{true};
   for (std::size_t i{0}; i < cases.size(); ++i)
-    converged = run_one(doc, cases[i], out / stems[i]) && converged;
+    try {
+      converged = run_one(doc, cases[i], out / stems[i]) && converged;
+    } catch (std::exception const &e) {
+      throw std::runtime_error("'" + stems[i] + "': " + e.what());
+    }
   return converged;
 }
 

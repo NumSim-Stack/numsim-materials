@@ -58,9 +58,42 @@ tmech::tensor<T, 3, 2> parse_symmetric(nlohmann::json const &j) {
   return parse_tensor<T>(j);
 }
 
+namespace detail {
+/// Runs `f`; an nlohmann error or an invalid_argument it throws gets `where` in front.
+template <typename F>
+decltype(auto) in_context(std::string const &where, F &&f) {
+  try {
+    return f();
+  } catch (nlohmann::json::exception const &e) {
+    throw std::invalid_argument(where + ": " + e.what());
+  } catch (std::invalid_argument const &e) {
+    throw std::invalid_argument(where + ": " + e.what());
+  }
+}
+
+/// j[key] as V; errors name the key.
+template <typename V>
+V get(nlohmann::json const &j, std::string const &key) {
+  return in_context("\"" + key + "\"", [&] { return j.at(key).template get<V>(); });
+}
+
+/// The same, `fallback` without the key.
+template <typename V>
+V get(nlohmann::json const &j, std::string const &key, V fallback) {
+  return j.is_object() && j.contains(key) ? get<V>(j, key) : fallback;
+}
+
+/// "case 'name'" for messages.
+inline std::string case_label(nlohmann::json const &c) {
+  if (c.is_object() && c.contains("name") && c["name"].is_string())
+    return "case '" + c["name"].get<std::string>() + "'";
+  return "a case without a \"name\"";
+}
+} // namespace detail
+
 /// A point with a deformation_gradient_source is driven by F and reports P.
 inline bool is_finite_strain(nlohmann::json const &doc) {
-  return doc.at("point").contains("deformation_gradient_source");
+  return detail::in_context("report: \"point\"", [&] { return doc.at("point").contains("deformation_gradient_source"); });
 }
 
 namespace detail {
@@ -72,31 +105,75 @@ inline int as_count(nlohmann::json const &v, std::string const &what, int min) {
 }
 
 inline int count(nlohmann::json const &c, std::string const &key, int fallback, int min) {
-  return c.contains(key) ? as_count(c[key], "case '" + c.value("name", std::string{}) + "': " + key, min) : fallback;
+  return c.contains(key) ? as_count(c[key], "\"" + key + "\"", min) : fallback;
 }
 
 /// "max_cutbacks": 0 (the default) to 20, a million substeps.
 inline int max_cutbacks(nlohmann::json const &c) {
   auto const n{count(c, "max_cutbacks", 0, 0)};
   if (n > 20)
-    throw std::invalid_argument("case '" + c.value("name", std::string{}) + "': max_cutbacks is at most 20, got " +
-                                std::to_string(n));
+    throw std::invalid_argument("\"max_cutbacks\": at most 20, got " + std::to_string(n));
   return n;
 }
 
 template <typename Control>
 Control parse_control(nlohmann::json const &c, Control all_prescribed) {
-  auto const kind = c.value("control", std::string{"strain"});
+  auto const kind{get<std::string>(c, "control", "strain")};
   if (kind == "strain")
     return all_prescribed;
   if (kind == "uniaxial_stress")
     return Control::uniaxial_stress();
   if (kind == "mixed") {
-    auto const names = c.at("stress_components").get<std::vector<std::string>>();
+    auto const names{get<std::vector<std::string>>(c, "stress_components")};
     std::vector<std::string_view> const views(names.begin(), names.end());
-    return Control::mixed(std::span<std::string_view const>{views});
+    return in_context("\"stress_components\"", [&] { return Control::mixed(std::span<std::string_view const>{views}); });
   }
-  throw std::invalid_argument("unknown control '" + kind + "' (strain, uniaxial_stress, mixed)");
+  throw std::invalid_argument("\"control\": unknown '" + kind + "' (strain, uniaxial_stress, mixed)");
+}
+
+/// c[key] as a tensor; errors name the key.
+template <typename T>
+tmech::tensor<T, 3, 2> tensor_at(nlohmann::json const &c, std::string const &key) {
+  return in_context("\"" + key + "\"", [&] { return parse_symmetric<T>(c.at(key)); });
+}
+
+template <typename T>
+load_case<T> parse_case(nlohmann::json const &c, bool finite_strain) {
+  using tensor2 = tmech::tensor<T, 3, 2>;
+  if (!c.is_object())
+    throw std::invalid_argument("expected an object, got " + c.dump());
+  auto const name{get<std::string>(c, "name")};
+  auto const scale{get<T>(c, "scale", T{1})};
+  std::vector<tensor2> points;
+  std::vector<T> factors;
+  if (c.contains("points") == c.contains("direction"))
+    throw std::invalid_argument("give either direction + path or points");
+  if (c.contains("points")) {
+    if (c.contains("path"))
+      throw std::invalid_argument("points and path exclude each other");
+    auto const &list{c["points"]};
+    if (!list.is_array())
+      throw std::invalid_argument("\"points\": expected an array of tensors, got " + list.dump());
+    for (std::size_t i{0}; i < list.size(); ++i) {
+      points.push_back(tensor2{scale * in_context("\"points\"[" + std::to_string(i) + "]", [&] { return parse_symmetric<T>(list[i]); })});
+      factors.push_back(T(factors.size()));
+    }
+    if (!points.empty() && tmech::norm(points.front()) != T{0})
+      throw std::invalid_argument("the first point must be zero (step 0 is the unloaded state)");
+  } else {
+    auto const direction{tensor_at<T>(c, "direction")};
+    factors = get<std::vector<T>>(c, "path");
+    if (!factors.empty() && factors.front() != T{0})
+      throw std::invalid_argument("the path must start at 0 (step 0 is the unloaded state)");
+    for (auto const f : factors)
+      points.push_back(tensor2{scale * f * direction});
+  }
+  return {name, finite_strain ? load_control<T>::strain() : parse_control(c, load_control<T>::strain()),
+          finite_strain ? parse_control(c, deformation_control<T>::deformation()) : deformation_control<T>::deformation(),
+          std::move(points), c.contains("stress") ? tensor_at<T>(c, "stress") : tensor2{},
+          load_path<T>{std::move(factors), count(c, "steps", 50, 1), c.contains("points") ? T{1} : scale, get<T>(c, "dt", T{1})},
+          count(c, "tangent_every", 1, 0), finite_strain,
+          c.contains("fd_step") ? std::optional<T>{get<T>(c, "fd_step")} : std::nullopt, max_cutbacks(c)};
 }
 } // namespace detail
 
@@ -113,41 +190,11 @@ deformation_control<T> parse_deformation_control(nlohmann::json const &c) {
 
 /// Proportional: "direction" times the factors of "path". Non-proportional: "points", strain states
 /// in order (the load factor then counts segments). Both are scaled by "scale". Only the control of
-/// the point's kinematics is parsed (is_finite_strain()); the other stays all prescribed.
+/// the point's kinematics is parsed (is_finite_strain()); the other stays all prescribed. Errors are
+/// invalid_arguments naming the case and the key.
 template <typename T>
 load_case<T> parse_case(nlohmann::json const &c, bool finite_strain = false) {
-  using tensor2 = tmech::tensor<T, 3, 2>;
-  auto const scale{c.value("scale", T{1})};
-  std::vector<tensor2> points;
-  std::vector<T> factors;
-  if (c.contains("points") == c.contains("direction"))
-    throw std::invalid_argument("case '" + c.value("name", std::string{}) + "': give either direction + path or points");
-  if (c.contains("points")) {
-    if (c.contains("path"))
-      throw std::invalid_argument("case '" + c.value("name", std::string{}) + "': points and path exclude each other");
-    for (auto const &pt : c["points"]) {
-      points.push_back(tensor2{scale * parse_symmetric<T>(pt)});
-      factors.push_back(T(factors.size()));
-    }
-    if (!points.empty() && tmech::norm(points.front()) != T{0})
-      throw std::invalid_argument("case '" + c.value("name", std::string{}) +
-                                  "': the first point is zero, the unloaded state of step 0");
-  } else {
-    auto const direction{parse_symmetric<T>(c.at("direction"))};
-    factors = c.at("path").get<std::vector<T>>();
-    if (!factors.empty() && factors.front() != T{0})
-      throw std::invalid_argument("case '" + c.value("name", std::string{}) +
-                                  "': the path starts at 0, the unloaded state of step 0");
-    for (auto const f : factors)
-      points.push_back(tensor2{scale * f * direction});
-  }
-  return {c.at("name").get<std::string>(), finite_strain ? load_control<T>::strain() : parse_control<T>(c),
-          finite_strain ? parse_deformation_control<T>(c) : deformation_control<T>::deformation(), std::move(points),
-          c.contains("stress") ? parse_symmetric<T>(c["stress"]) : tensor2{},
-          load_path<T>{std::move(factors), detail::count(c, "steps", 50, 1), c.contains("points") ? T{1} : scale,
-                       c.value("dt", T{1})},
-          detail::count(c, "tangent_every", 1, 0), finite_strain,
-          c.contains("fd_step") ? std::optional<T>{c.at("fd_step").get<T>()} : std::nullopt, detail::max_cutbacks(c)};
+  return detail::in_context(detail::case_label(c), [&] { return detail::parse_case<T>(c, finite_strain); });
 }
 
 /// A case run again with several step counts (document key "studies").
@@ -192,8 +239,13 @@ inline std::vector<std::string> output_stems(nlohmann::json const &doc) {
       throw std::invalid_argument("report: two outputs are named '" + stem + "'");
     out.push_back(std::move(stem));
   };
-  for (auto const &c : doc.at("cases"))
-    add(c.at("name").get<std::string>());
+  std::vector<std::string> names;
+  detail::in_context("report: \"cases\"", [&] {
+    for (auto const &c : doc.at("cases"))
+      names.push_back(detail::get<std::string>(c, "name"));
+  });
+  for (auto &name : names)
+    add(std::move(name));
   for (auto const &study : parse_studies(doc))
     for (auto const n : study.steps)
       add(study.name + "_" + std::to_string(n));
@@ -207,22 +259,27 @@ inline std::vector<std::string> output_stems(nlohmann::json const &doc) {
 template <typename Traits>
 typename Traits::ParameterHandler parse_point(nlohmann::json const &doc) {
   using T = typename Traits::value_type;
-  typename Traits::ParameterHandler out;
-  for (auto const &[key, value] : doc.at("point").items()) {
-    if (key == "strain_source" || key == "deformation_gradient_source" || key == "stress_source" ||
-        key == "tangent_source" || key == "stress_property" || key == "tangent_property" || key == "time_source" ||
-        key == "residual_source")
-      out.template insert<std::string>(key, value.template get<std::string>());
-    else if (key == "tolerance" || key == "fd_step" || key == "residual_tolerance")
-      out.template insert<T>(key, value.template get<T>());
-    else if (key == "max_iter")
-      out.template insert<int>(key, detail::as_count(value, "report: \"point\": max_iter", 0));
-    else if (key == "max_passes")
-      out.template insert<int>(key, detail::as_count(value, "report: \"point\": max_passes", 1));
-    else
-      throw std::invalid_argument("report: \"point\" has no parameter '" + key + "'");
-  }
-  return out;
+  return detail::in_context("report: \"point\"", [&] {
+    auto const &point{doc.at("point")};
+    if (!point.is_object())
+      throw std::invalid_argument("expected an object, got " + point.dump());
+    typename Traits::ParameterHandler out;
+    for (auto const &[key, value] : point.items()) {
+      if (key == "strain_source" || key == "deformation_gradient_source" || key == "stress_source" ||
+          key == "tangent_source" || key == "stress_property" || key == "tangent_property" || key == "time_source" ||
+          key == "residual_source")
+        out.template insert<std::string>(key, detail::get<std::string>(point, key));
+      else if (key == "tolerance" || key == "fd_step" || key == "residual_tolerance")
+        out.template insert<T>(key, detail::get<T>(point, key));
+      else if (key == "max_iter")
+        out.template insert<int>(key, detail::as_count(value, "\"max_iter\"", 0));
+      else if (key == "max_passes")
+        out.template insert<int>(key, detail::as_count(value, "\"max_passes\"", 1));
+      else
+        throw std::invalid_argument("no parameter '" + key + "'");
+    }
+    return out;
+  });
 }
 
 /// A report column wired to a graph property.
@@ -235,19 +292,27 @@ struct column_spec {
 /// The point's kinematics and stress first (strain/stress, or F/P with nine components), then
 /// "record" (nlohmann::json orders those by column name; a value may be {"source", "full"}).
 inline std::vector<column_spec> parse_columns(nlohmann::json const &doc) {
-  auto const &p{doc.at("point")};
-  auto const stress{p.at("stress_source").get<std::string>() + "::" + p.value("stress_property", std::string{"stress"})};
   std::vector<column_spec> out;
-  if (is_finite_strain(doc))
-    out = {{"F", p.at("deformation_gradient_source").get<std::string>() + "::deformation_gradient", true}, {"P", stress, true}};
-  else
-    out = {{"strain", p.at("strain_source").get<std::string>() + "::strain"}, {"stress", stress}};
-  auto const record = doc.value("record", nlohmann::json::object());
-  for (auto const &[name, value] : record.items())
-    if (value.is_string())
-      out.push_back({name, value.get<std::string>()});
+  detail::in_context("report: \"point\"", [&] {
+    auto const &p{doc.at("point")};
+    auto const stress{detail::get<std::string>(p, "stress_source") + "::" +
+                      detail::get<std::string>(p, "stress_property", "stress")};
+    if (is_finite_strain(doc))
+      out = {{"F", detail::get<std::string>(p, "deformation_gradient_source") + "::deformation_gradient", true},
+             {"P", stress, true}};
     else
-      out.push_back({name, value.at("source").get<std::string>(), value.value("full", false)});
+      out = {{"strain", detail::get<std::string>(p, "strain_source") + "::strain"}, {"stress", stress}};
+  });
+  detail::in_context("report: \"record\"", [&] {
+    auto const record = doc.value("record", nlohmann::json::object());
+    for (auto const &[name, value] : record.items())
+      detail::in_context("\"" + name + "\"", [&] {
+        if (value.is_string())
+          out.push_back({name, value.get<std::string>()});
+        else
+          out.push_back({name, detail::get<std::string>(value, "source"), detail::get<bool>(value, "full", false)});
+      });
+  });
   return out;
 }
 

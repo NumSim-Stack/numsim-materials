@@ -133,6 +133,20 @@ TEST(ReportSpec, IncludeCycleThrows) {
   EXPECT_THROW(r::resolve_report(json::parse(R"({"include": ["a.json"]})"), dir.string()), std::invalid_argument);
 }
 
+TEST(ReportSpec, AnIncludedFileThatIsNoJsonIsNamed) {
+  auto const dir{std::filesystem::temp_directory_path() / "numsim_report_spec_parse_error"};
+  std::filesystem::create_directories(dir);
+  std::ofstream{dir / "broken.json"} << R"({"cases": [)";
+  try {
+    static_cast<void>(r::resolve_report(json::parse(R"({"include": ["broken.json"]})"), dir));
+    ADD_FAILURE() << "no throw";
+  } catch (std::invalid_argument const &e) {
+    EXPECT_NE(std::string{e.what()}.find("broken.json"), std::string::npos) << e.what();
+  } catch (std::exception const &e) {
+    ADD_FAILURE() << "not an invalid_argument: " << e.what();
+  }
+}
+
 TEST(ReportSpec, UnknownParameterThrows) {
   auto const spec = json::parse(R"({"parameters": {}, "model": {"K": "$K"}})");
   EXPECT_THROW(r::resolve_report(spec, "."), std::invalid_argument);

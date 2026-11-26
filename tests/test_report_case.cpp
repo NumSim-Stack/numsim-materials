@@ -1,6 +1,10 @@
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <cmath>
+#include <initializer_list>
+#include <stdexcept>
+#include <string_view>
+#include <utility>
 #include <string>
 #include <vector>
 #include <nlohmann/json.hpp>
@@ -27,15 +31,23 @@ using tensor4 = tmech::tensor<T, 3, 4>;
 using control = nm::load_control<T>;
 using json = nlohmann::json;
 
-/// The message of what `f` throws; empty if it does not throw.
+/// The message of the invalid_argument `f` throws; empty if it does not throw.
 template <typename F>
 std::string error_of(F &&f) {
   try {
     static_cast<void>(f());
-  } catch (std::exception const &e) {
+  } catch (std::invalid_argument const &e) {
     return e.what();
+  } catch (std::exception const &e) {
+    return std::string{"not an invalid_argument: "} + e.what();
   }
   return {};
+}
+
+/// `message` is an invalid_argument's and holds every part.
+bool names(std::string const &message, std::initializer_list<std::string_view> parts) {
+  return !message.empty() && !message.starts_with("not an invalid_argument") &&
+         std::ranges::all_of(parts, [&](auto p) { return message.find(p) != std::string::npos; });
 }
 
 TEST(LoadControl, StrainControlPrescribesNoStress) {
@@ -147,6 +159,43 @@ TEST(LoadPath, RejectsStepsOutsideThePath) {
 TEST(LoadPath, StartsUnloaded) {
   EXPECT_THROW((r::load_path<T>{{0.5, 1}, 2}), std::invalid_argument);
   EXPECT_EQ((r::load_path<T>{{0, 1}, 2, 0.5}).unloaded().load, 0);
+}
+
+TEST(ReportJson, WrongTypesNameTheCaseAndTheKey) {
+  auto const u = [](std::string const &extra) { return R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1])" + extra + "}"; };
+  for (auto const &[spec, key] : std::vector<std::pair<std::string, std::string_view>>{
+           {u(R"(, "scale": "0.01")"), "scale"},
+           {R"({"name": "u", "points": 3})", "points"},
+           {R"({"name": "u", "points": [[0, 0, 0, 0, 0, 0], [1, 0]]})", "points"},
+           {R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": 1})", "path"},
+           {R"({"name": "u", "direction": "x", "path": [0, 1]})", "direction"},
+           {u(R"(, "stress": [1])"), "stress"},
+           {u(R"(, "control": 1)"), "control"},
+           {u(R"(, "control": "mixed")"), "stress_components"},
+           {u(R"(, "control": "mixed", "stress_components": ["14"])"), "stress_components"},
+           {u(R"(, "dt": "1")"), "dt"},
+           {u(R"(, "fd_step": null)"), "fd_step"}}) {
+    auto const message{error_of([&] { return r::parse_case<T>(json::parse(spec)); })};
+    EXPECT_TRUE(names(message, {"case 'u'", key})) << spec << "\n" << message;
+  }
+  auto const unnamed{error_of([] { return r::parse_case<T>(json::parse(R"({"direction": [1, 0, 0, 0, 0, 0], "path": [0, 1]})")); })};
+  EXPECT_TRUE(names(unnamed, {"name"})) << unnamed;
+}
+
+TEST(ReportJson, PointAndColumnErrorsNameTheKey) {
+  auto const point = [](std::string const &p) { return json::parse(R"({"point": {"strain_source": "s", "stress_source": "m")" + p + "}}"); };
+  auto const parse_point = [](json const &doc) { return error_of([&] { return r::parse_point<policy>(doc); }); };
+  EXPECT_TRUE(names(parse_point(json::parse(R"({"point": {"strain_source": 1}})")), {"point", "strain_source"}));
+  EXPECT_TRUE(names(parse_point(point(R"(, "tolerance": "x")")), {"point", "tolerance"}));
+  EXPECT_TRUE(names(parse_point(point(R"(, "max_iter": "x")")), {"point", "max_iter"}));
+  EXPECT_TRUE(names(parse_point(json::object()), {"point"}));
+  auto const parse_columns = [](json const &doc) { return error_of([&] { return r::parse_columns(doc); }); };
+  EXPECT_TRUE(names(parse_columns(json::parse(R"({"point": {"strain_source": "s"}})")), {"point", "stress_source"}));
+  auto with_record = point("");
+  with_record["record"] = json::parse(R"({"k": 1})");
+  EXPECT_TRUE(names(parse_columns(with_record), {"record", "k"}));
+  with_record["record"] = json::parse(R"({"k": {"full": true}})");
+  EXPECT_TRUE(names(parse_columns(with_record), {"record", "k", "source"}));
 }
 
 TEST(ReportJson, APathStartsAtTheUnloadedState) {

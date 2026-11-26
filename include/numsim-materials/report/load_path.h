@@ -30,7 +30,7 @@ public:
     if (m_points.size() < 2 || m_steps < 1)
       throw std::invalid_argument("load path: needs two points and at least one step per segment");
     if (m_points.front() != T{0})
-      throw std::invalid_argument("load path: starts at load factor 0, the unloaded state of step 0");
+      throw std::invalid_argument("load path: the first factor must be 0 (step 0 is the unloaded state)");
   }
 
   [[nodiscard]] std::size_t size() const noexcept { return (m_points.size() - 1) * static_cast<std::size_t>(m_steps); }
