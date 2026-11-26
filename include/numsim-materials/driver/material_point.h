@@ -97,7 +97,8 @@ public:
 
   // --- Inputs ---
 
-  /// The input source `name`, to bind its old and new values.
+  /// The input source `name`, to bind its old and new values. Searches and casts per call: resolve once, keep the
+  /// reference.
   template <typename Source>
     requires std::derived_from<Source, material_interface<Traits>>
   Source &input(std::string const &name) {
@@ -110,7 +111,8 @@ public:
     return *find_input<Source>(name);
   }
 
-  /// Copy the host's material constants into the props_scalar readers; a no-op without any.
+  /// Copy the host's material constants into the props_scalar readers; a no-op without any. They stay bound across
+  /// reset() (the UMAT evaluator binds once per host call, then resets per iterate): rebind on every host call.
   void bind_props(std::span<value_type const> props) {
     if (m_props_readers.empty())
       return;
@@ -131,6 +133,7 @@ public:
 
   // --- Outputs ---
 
+  /// Searches per call: resolve once, keep the reference.
   template <typename T>
   T const &output(std::string const &material, std::string const &property) const {
     if (auto const *value = property_value<T>(find(material, property)))

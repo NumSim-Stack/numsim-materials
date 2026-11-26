@@ -12,6 +12,7 @@
 #include "numsim-materials/core/parameter_helpers.h"
 #include "numsim-materials/driver/material_point.h"
 #include "numsim-materials/materials/constant_scalar.h"
+#include "numsim-materials/materials/props_scalar.h"
 #include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/umat/statev_map.h"
 #include "test_fixture_materials.h"
@@ -98,6 +99,18 @@ public:
 private:
   value_type &m_x;
   value_type &m_residual;
+};
+
+/// strain, mem and a props_scalar "K" reading host constant 2.
+struct live_setup {
+  ctx_type ctx;
+
+  live_setup() {
+    add<nm::external_strain_source<policy>>(ctx, "strain");
+    add<memory<policy>>(ctx, "mem");
+    add<nm::props_scalar<policy>>(ctx, "K", {{"index", std::size_t{2}}});
+    ctx.finalize();
+  }
 };
 
 /// strain (external) and "mem", plus an int_counter "tag" with `tagged`.
@@ -332,6 +345,92 @@ TEST(MaterialPoint, EngineOwnedHistoryNeedsNoHostLayout) {
   point.accept();
   EXPECT_EQ(point.history<int>("tag", "count").new_value(), 2);
   EXPECT_THROW(static_cast<void>(point.history_width()), nm::umat::fatal_error) << "an int has no STATEV layout";
+}
+
+TEST(MaterialPoint, LiveConstantsAreBoundBeforeEvaluating) {
+  live_setup s;
+  point_type point{s.ctx, strain_input()};
+  EXPECT_TRUE(point.has_live_props());
+  EXPECT_TRUE(point.is_live_prop(2));
+  EXPECT_FALSE(point.is_live_prop(0)) << "no reader of slot 0";
+  EXPECT_FALSE(point.is_live_prop(3)) << "past the last reader";
+  EXPECT_THROW(point.evaluate(), nm::umat::fatal_error) << "evaluate() before bind_props()";
+  std::vector<T> const too_short{1, 2};
+  EXPECT_THROW(point.bind_props(too_short), nm::umat::fatal_error);
+  EXPECT_THROW(point.evaluate(), nm::umat::fatal_error) << "a rejected span binds nothing";
+  std::vector<T> const props{1, 2, 7};
+  point.bind_props(props);
+  EXPECT_NO_THROW(trial(point, 0, 1));
+  EXPECT_EQ(point.output<T>("K", "value"), 7);
+}
+
+TEST(MaterialPoint, BoundConstantsStayAcrossReset) {
+  live_setup s;
+  point_type point{s.ctx, strain_input()};
+  std::vector<T> const props{1, 2, 7};
+  point.bind_props(props);
+  trial(point, 0, 1);
+  point.reset();
+  EXPECT_NO_THROW(point.evaluate()) << "the UMAT evaluator binds once per call and resets per iterate";
+  EXPECT_EQ(point.output<T>("K", "value"), 7);
+}
+
+TEST(MaterialPoint, NeedsAFinalizedContext) {
+  ctx_type ctx;
+  add<nm::external_strain_source<policy>>(ctx, "strain");
+  EXPECT_THROW((point_type{ctx, strain_input()}), nm::umat::fatal_error);
+}
+
+TEST(MaterialPoint, UnknownResidualSourceIsFatal) {
+  setup s;
+  for (std::string const source : {"mem::nothing", "nothing::residual", "mem::stress"})
+    EXPECT_THROW((point_type{s.ctx, residual(source)}), nm::umat::fatal_error) << source;
+}
+
+TEST(MaterialPoint, RotatesTheHostHistory) {
+  setup s;
+  point_type point{s.ctx, strain_input()};
+  ASSERT_TRUE(point.has_rotatable_history()) << "mem::last is a tensor";
+  std::vector<T> statev(point.history_width());
+  trial(point, 0, 1);
+  point.store_history(statev);
+
+  tensor2 R;
+  R(0, 1) = -1;
+  R(1, 0) = 1;
+  R(2, 2) = 1;
+  point.reset();
+  point.load_history(statev);
+  point.rotate_history(R);
+  tensor2 const expected{R * strain_at(1) * tmech::trans(R)};
+  EXPECT_LT(tmech::norm(tensor2{point.history<tensor2>("mem", "last").old_value() - expected}), 1e-14);
+  EXPECT_EQ(point.history<T>("mem", "count").old_value(), 1) << "scalars stay";
+
+  ctx_type plain;
+  add<relaxer<policy>>(plain, "relax");
+  plain.finalize();
+  EXPECT_FALSE((point_type{plain, param_type{}}.has_rotatable_history()));
+}
+
+TEST(MaterialPoint, TwoPointsOverOneContextShareItsHistory) {
+  setup s{1.5};
+  point_type engine{s.ctx, strain_input()};
+  auto parameters{strain_input()};
+  parameters.insert<std::vector<std::string>>("host_owned", {"mem::count"});
+  point_type host{s.ctx, parameters};
+  EXPECT_EQ(host.history_width() + 1, engine.history_width()) << "each point has its own STATEV layout";
+  EXPECT_EQ(&host.output<tensor2>("mem::stress"), &engine.output<tensor2>("mem::stress"));
+
+  trial(engine, 0, 1);
+  engine.accept();
+  EXPECT_EQ(host.history<T>("mem", "count").old_value(), 1) << "one history";
+
+  EXPECT_THROW(trial(engine, 1, 2), std::runtime_error);
+  EXPECT_THROW(host.accept(), std::logic_error) << "the context's failed update blocks every point";
+  host.reset();
+  EXPECT_THROW(engine.accept(), nm::umat::fatal_error) << "the failed evaluate() is the engine point's own";
+  engine.reset();
+  EXPECT_NO_THROW(engine.accept());
 }
 
 TEST(MaterialPoint, CheckpointsThroughStreams) {
