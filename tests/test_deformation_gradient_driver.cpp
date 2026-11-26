@@ -7,9 +7,15 @@
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/materials/constant_scalar.h"
 #include "numsim-materials/materials/deformation_gradient_kinematics.h"
+#include "numsim-materials/materials/eshelby_spheroid.h"
+#include "numsim-materials/materials/isotropic_moduli.h"
+#include "numsim-materials/materials/isotropic_tangent.h"
 #include "numsim-materials/materials/j2_plasticity.h"
 #include "numsim-materials/materials/lagrangian_stress_to_first_piola.h"
 #include "numsim-materials/materials/linear_isotropic_hardening.h"
+#include "numsim-materials/materials/linear_stress.h"
+#include "numsim-materials/materials/mean_field_composite_global.h"
+#include "numsim-materials/materials/phase.h"
 #include "numsim-materials/materials/neo_hooke.h"
 #include "numsim-materials/materials/saint_venant_kirchhoff.h"
 #include "numsim-materials/materials/seth_hill_strain.h"
@@ -31,7 +37,9 @@ using driver = nm::deformation_gradient_driver<policy>;
 using tensor2 = driver::tensor2;
 using control = nm::deformation_control<T>;
 using numsim::materials::test::add;
+using numsim::materials::test::constant;
 using numsim::materials::test::stretch;
+using numsim::materials::test::uniaxial;
 
 constexpr T K{166.67};
 constexpr T G{76.92};
@@ -237,23 +245,10 @@ TEST(DeformationGradientDriver, TangentErrorOfAZeroTangentIsFinite) {
   EXPECT_EQ(d.tangent_error(res), 0);
 }
 
-// The residual check throws after the graph was updated: accept() must not commit that trial.
-TEST(DeformationGradientDriver, AThrowingStepLeavesNothingToAccept) {
-  ctx_type ctx;
-  build<nm::neo_hooke<policy>>(ctx, true);
-  auto p{parameters()};
-  p.insert<std::string>("residual_source", "stuck::value");
-  p.insert<int>("max_passes", 3);
-  driver d{ctx, p};
-  EXPECT_THROW(static_cast<void>(d.step(stretch(1.01), tensor2{}, control::deformation(), 0, 1)), u::cutback_error);
-  d.accept();
-  EXPECT_EQ(d.accepted_F(), stretch(1.0));
-}
-
-// uniaxial_stress() prescribes the skew part of F: a rotation left by an earlier shear is taken out, and the rotations
-// that cost no stress at P = 0 are no unknowns.
-TEST(DeformationGradientDriver, UniaxialStressPrescribesTheRotation) {
-  for (auto const &[i, j] : {std::pair{0, 1}, std::pair{1, 0}, std::pair{1, 2}}) {
+// uniaxial_stress() prescribes F21 = F31 = F32 = 0: a rotation left by an earlier shear is taken out, and the
+// rotations that cost no stress at P = 0 are no unknowns. For an isotropic material F is diagonal.
+TEST(DeformationGradientDriver, UniaxialStressGivesAnUpperTriangularF) {
+  for (auto const &[i, j] : {std::pair{0, 1}, std::pair{1, 0}, std::pair{1, 2}, std::pair{2, 1}}) {
     ctx_type ctx;
     build<nm::neo_hooke<policy>>(ctx);
     driver d(ctx, parameters());
@@ -263,11 +258,56 @@ TEST(DeformationGradientDriver, UniaxialStressPrescribesTheRotation) {
     d.accept();
     auto const res{d.step(stretch(1.0 + 1e-6), tensor2{}, control::uniaxial_stress(), 1, 1)};
     ASSERT_TRUE(res.converged) << i << j;
-    EXPECT_LE(tmech::norm(tensor2{res.F - tmech::trans(res.F)}), 1e-15) << i << j;
+    EXPECT_EQ(res.F(1, 0), 0) << i << j;
+    EXPECT_EQ(res.F(2, 0), 0) << i << j;
+    EXPECT_EQ(res.F(2, 1), 0) << i << j;
     EXPECT_NEAR(res.F(i, j), 0, 1e-15) << i << j;
     EXPECT_NEAR(res.F(1, 1) - 1, -nu * 1e-6, 1e-3 * nu * 1e-6) << i << j;
     EXPECT_LE(res.residuals.size(), 4u) << i << j;
   }
+}
+
+/// Saint Venant-Kirchhoff with a Mori-Tanaka stiffness of fibres tilted out of the axes: Green-Lagrange strain,
+/// S = C : E, P = F S.
+void build_anisotropic(ctx_type &ctx) {
+  add<nm::external_deformation_gradient_source<policy>>(ctx, "F");
+  add<nm::seth_hill_strain<policy>>(ctx, "strain", {{"m", 2.0}, {"deformation_gradient_source", "F"}});
+  for (auto const &[name, scale] : {std::pair{"matrix", 1.0}, std::pair{"fibre", 20.0}}) {
+    constant(ctx, std::string{name} + "_K", scale * K);
+    constant(ctx, std::string{name} + "_G", scale * G);
+    add<nm::isotropic_tangent<policy>>(ctx, std::string{name} + "_C",
+        {{"K_source", std::string{name} + "_K"}, {"G_source", std::string{name} + "_G"}});
+  }
+  add<nm::isotropic_moduli<policy>>(ctx, "moduli", {{"tangent_source", "matrix_C"}});
+  add<nm::eshelby_spheroid<policy>>(ctx, "shape",
+      {{"nu_source", "moduli"}, {"nu_property", "poisson_ratio"}, {"aspect_ratio", 10.0},
+       {"direction", std::vector<T>{std::sqrt(3.0) / 2, 0.5, 0.3}}});
+  constant(ctx, "c", 0.2);
+  constant(ctx, "cm", 0.8);
+  add<nm::phase<policy>>(ctx, "fibres", {{"tangent_source", "fibre_C"}, {"eshelby_source", "shape"}, {"fraction_source", "c"}});
+  add<nm::phase<policy>>(ctx, "matrix", {{"tangent_source", "matrix_C"}, {"fraction_source", "cm"}});
+  add<nm::mean_field_composite_global<policy>>(ctx, "composite",
+      {{"phases", std::vector<std::string>{"matrix", "fibres"}},
+       {"kernel", nm::object_spec<param_type>{"mori_tanaka", {}}}});
+  add<nm::linear_stress<policy>>(ctx, "S", {{"tangent_source", "composite"}, {"strain_source", "strain"}});
+  add<nm::lagrangian_stress_to_first_piola<policy>>(ctx, "model",
+      {{"stress_source", "S"}, {"tangent_source", "composite"}, {"strain_source", "strain"},
+       {"deformation_gradient_source", "F"}});
+  ctx.finalize();
+}
+
+// With the shear parts of F free, P = J sigma F^-T is uniaxial only if F^-1 e1 is parallel to e1: the gauge.
+TEST(DeformationGradientDriver, UniaxialStressIsUniaxialForAnAnisotropicMaterial) {
+  ctx_type ctx;
+  build_anisotropic(ctx);
+  driver d(ctx, parameters());
+  auto const res{d.step(stretch(1.05), tensor2{}, control::uniaxial_stress(), 0, 1)};
+  ASSERT_TRUE(res.converged);
+  tensor2 const sigma{res.stress * tmech::trans(res.F) / tmech::det(res.F)};
+  EXPECT_GT(tmech::norm(tensor2{res.F - tmech::trans(res.F)}), 1e-3) << "shear in F";
+  EXPECT_LE(tmech::norm(tensor2{sigma - uniaxial(sigma(0, 0))}), 1e-10 * sigma(0, 0));
+  EXPECT_LE(tmech::norm(tensor2{res.stress - uniaxial(res.stress(0, 0))}), 1e-10 * res.stress(0, 0));
+  EXPECT_LT(d.tangent_error(res), 1e-5);
 }
 
 // Near F = I the stress is a difference of O(1) terms: it converges to its roundoff, not to tolerance * |P|.
@@ -285,10 +325,11 @@ TEST(DeformationGradientDriver, TinyStretchesConverge) {
 }
 
 /// F -> Green-Lagrange strain -> J2 plasticity on it -> P: a history material at finite strain.
-void build_plastic(ctx_type &ctx) {
+/// `solver_iterations` 0: every plastic step throws.
+void build_plastic(ctx_type &ctx, int solver_iterations = 50) {
   add<nm::external_deformation_gradient_source<policy>>(ctx, "F");
   add<nm::seth_hill_strain<policy>>(ctx, "strain", {{"m", 2.0}, {"deformation_gradient_source", "F"}});
-  add<nm::local_newton<policy>>(ctx, "solver");
+  add<nm::local_newton<policy>>(ctx, "solver", {{"max_iter", solver_iterations}});
   add<nm::linear_isotropic_hardening<policy>>(ctx, "hardening", {{"source", "j2"}, {"K", 1000.0}});
   add<nm::j2_plasticity<policy>>(ctx, "j2",
       {{"K", K}, {"G", G}, {"sigma_0", 0.5}, {"hardening_source", "hardening"}, {"strain_source", "strain"},
@@ -316,4 +357,35 @@ TEST(DeformationGradientDriver, TangentErrorOfAHistoryMaterial) {
   EXPECT_LT(d.tangent_error(res), 1e-5);
 }
 
+// After a throw the point stays failed: accept() throws until reject().
+TEST(DeformationGradientDriver, AcceptAfterAFailedStepThrows) {
+  ctx_type ctx;
+  build_plastic(ctx, 0);
+  driver d(ctx, parameters());
+  EXPECT_THROW(static_cast<void>(d.step(stretch(1.01), tensor2{}, control::uniaxial_stress(), 0, 1)),
+               u::cutback_error);
+  EXPECT_ANY_THROW(d.accept());
+  d.reject();
+  EXPECT_EQ(d.accepted_F(), stretch(1.0));
+  ASSERT_TRUE(d.step(stretch(1.001), tensor2{}, control::uniaxial_stress(), 0, 1).converged);
+  d.accept();
+}
+
+// Just below yield, the +fd_step perturbation of the check yields and the return map throws: the converged trial is
+// evaluated again, so accept() commits it.
+TEST(DeformationGradientDriver, AThrowInTheTangentCheckKeepsTheTrial) {
+  ctx_type ctx;
+  build_plastic(ctx, 0);
+  auto p{parameters()};
+  p.insert<T>("fd_step", 1e-4);
+  driver d(ctx, p);
+  T const yield{0.5 / (2 * G)}; // uniaxial Green-Lagrange strain
+  auto const res{d.step(stretch(std::sqrt(1 + 2 * 0.98 * yield)), tensor2{}, control::deformation(), 0, 1)};
+  ASSERT_TRUE(res.converged);
+  EXPECT_THROW(static_cast<void>(d.tangent_error(res)), u::cutback_error);
+  d.accept();
+  EXPECT_EQ(d.accepted_F(), res.F);
+}
+
 } // namespace
+

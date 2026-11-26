@@ -2,6 +2,8 @@
 #include <cmath>
 #include <stdexcept>
 #include <string>
+#include <utility>
+#include <vector>
 #include <tmech/tmech.h>
 #include "numsim-materials/core/material_context.h"
 #include "numsim-materials/materials/constant_scalar.h"
@@ -11,6 +13,7 @@
 #include "numsim-materials/materials/exponential_isotropic_hardening.h"
 #include "numsim-materials/materials/j2_plasticity.h"
 #include "numsim-materials/materials/thermal_eigenstrain.h"
+#include "numsim-materials/materials/weighted_sum.h"
 #include "numsim-materials/solvers/local_newton.h"
 #include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/driver/material_point_driver.h"
@@ -38,6 +41,12 @@ constexpr T nu{(3 * K - 2 * G) / (2 * (3 * K + G))};
 constexpr T sigma_0{0.5}; // yields at about 2.5e-3
 constexpr T H{1000.0};
 constexpr T alpha{1e-4};
+
+tensor2 axial(T value) {
+  tensor2 v;
+  v(0, 0) = value;
+  return v;
+}
 
 /// `stuck`: a constant_scalar "stuck::value" of 1, a residual that never falls.
 void build_elastic(ctx_type& ctx, bool stuck = false) {
@@ -77,14 +86,30 @@ void build_j2(ctx_type& ctx, bool exponential = false, int solver_iterations = 5
   ctx.finalize();
 }
 
-/// "elastic", "stiff" with 5/4 of its moduli and "void" with none, all on "strain".
-void build_three(ctx_type& ctx) {
+/// "elastic" and copies with scaled moduli, all on "strain": "stiff" 5/4, "double" 2, "half" 1/2, "void" 0.
+void build_scaled(ctx_type& ctx) {
   add<nm::external_strain_source<policy>>(ctx, "strain");
-  add<nm::linear_elasticity<policy>>(ctx, "elastic", {{"strain_producer_name", "strain"}, {"K", K}, {"G", G}});
-  add<nm::linear_elasticity<policy>>(ctx, "stiff",
-      {{"strain_producer_name", "strain"}, {"K", 1.25 * K}, {"G", 1.25 * G}});
-  add<nm::linear_elasticity<policy>>(ctx, "void", {{"strain_producer_name", "strain"}, {"K", 0.0}, {"G", 0.0}});
+  for (auto const &[name, scale] : {std::pair{"elastic", 1.0}, std::pair{"stiff", 1.25}, std::pair{"double", 2.0},
+                                    std::pair{"half", 0.5}, std::pair{"void", 0.0}})
+    add<nm::linear_elasticity<policy>>(ctx, name, {{"strain_producer_name", "strain"}, {"K", scale * K}, {"G", scale * G}});
   ctx.finalize();
+}
+
+/// "sum": a prestress (elastic on the fixed strain "pre", its tangent left out) plus "soft" on "strain" with `scale`
+/// times the moduli. A large stress with a correct, small tangent.
+void build_prestressed(ctx_type& ctx, T scale) {
+  add<nm::external_strain_source<policy>>(ctx, "strain");
+  auto &pre{add<nm::external_strain_source<policy>>(ctx, "pre")};
+  add<nm::linear_elasticity<policy>>(ctx, "prestress", {{"strain_producer_name", "pre"}, {"K", K}, {"G", G}});
+  add<nm::linear_elasticity<policy>>(ctx, "soft", {{"strain_producer_name", "strain"}, {"K", scale * K}, {"G", scale * G}});
+  add<nm::linear_elasticity<policy>>(ctx, "void", {{"strain_producer_name", "strain"}, {"K", 0.0}, {"G", 0.0}});
+  numsim::materials::test::constant(ctx, "one", 1.0);
+  using terms_type = std::vector<std::pair<std::string, std::string>>;
+  add<nm::weighted_sum<policy>>(ctx, "sum", {{"terms", terms_type{{"one", "prestress"}, {"one", "soft"}}},
+                                             {"tangent_sources", std::vector<std::string>{"void", ""}}});
+  ctx.finalize();
+  tensor2 const eps{axial(1e-3)};
+  pre.bind(eps, eps);
 }
 
 /// "strain" -> "elastic_strain" (less the thermal eigenstrain of the scalar source "clock") -> "elastic".
@@ -104,12 +129,6 @@ param_type parameters_for(std::string const &stress_source) {
   p.insert<std::string>("strain_source", "strain");
   p.insert<std::string>("stress_source", stress_source);
   return p;
-}
-
-tensor2 axial(T value) {
-  tensor2 v;
-  v(0, 0) = value;
-  return v;
 }
 
 TEST(MaterialPointDriver, StrainControlNeedsNoIteration) {
@@ -334,7 +353,7 @@ TEST(LoadControl, ARepeatedComponentIsAnError) {
 // A fully damaged point: zero tangent and zero stress, so the error is zero, not 0 / 0.
 TEST(MaterialPointDriver, TangentErrorOfAZeroTangentIsFinite) {
   ctx_type ctx;
-  build_three(ctx);
+  build_scaled(ctx);
   driver none(ctx, parameters_for("void"));
   auto const res{none.step(axial(1e-3), tensor2{}, control::strain(), 0, 1)};
   EXPECT_EQ(none.tangent_error(res), 0);
@@ -345,10 +364,35 @@ TEST(MaterialPointDriver, TangentErrorOfAZeroTangentIsFinite) {
   EXPECT_NEAR(missing.tangent_error(wrong), 1, 1e-6) << "relative to the finite-difference tangent";
 }
 
+// Relative to the finite-difference tangent, the reference: twice the moduli is an error of 1, half of 1/2.
+TEST(MaterialPointDriver, TangentErrorIsRelativeToTheFiniteDifferences) {
+  ctx_type ctx;
+  build_scaled(ctx);
+  for (auto const &[source, error] : {std::pair{"double", 1.0}, std::pair{"half", 0.5}}) {
+    auto p{parameters_for("elastic")};
+    p.insert<std::string>("tangent_source", source);
+    driver d(ctx, p);
+    auto const res{d.step(axial(1e-3), tensor2{}, control::strain(), 0, 1)};
+    EXPECT_NEAR(d.tangent_error(res), error, 1e-6) << source;
+  }
+}
+
+// Moduli far below the resolution eps |sigma| / fd_step of the differences: the differences are roundoff, a
+// correct tangent is no error (relative to the larger of the two it was about 1).
+TEST(MaterialPointDriver, TangentErrorOfATangentBelowTheRoundoffIsSmall) {
+  ctx_type ctx;
+  build_prestressed(ctx, 1e-14);
+  driver d(ctx, parameters_for("sum"));
+  auto const res{d.step(axial(1e-3), tensor2{}, control::strain(), 0, 1)};
+  EXPECT_GT(tmech::norm(res.stress), 0.1);
+  EXPECT_LT(tmech::norm(res.tangent), 1e-10);
+  EXPECT_LT(d.tangent_error(res), 0.2);
+}
+
 // The Newton matrix from "stiff", the stress from "elastic": converges, linearly, to the stress of "elastic".
 TEST(MaterialPointDriver, TheTangentCanComeFromAnotherSource) {
   ctx_type ctx;
-  build_three(ctx);
+  build_scaled(ctx);
   auto p{parameters_for("elastic")};
   p.insert<std::string>("tangent_source", "stiff");
   driver d(ctx, p);
@@ -358,19 +402,17 @@ TEST(MaterialPointDriver, TheTangentCanComeFromAnotherSource) {
   EXPECT_GT(res.residuals.size(), 3u);
   EXPECT_NEAR(res.stress(0, 0), E * 1e-3, 1e-10);
   EXPECT_NEAR(res.strain(1, 1), -nu * 1e-3, 1e-12);
-  EXPECT_NEAR(d.tangent_error(res), 0.2, 1e-6) << "|C - 5/4 C| / |5/4 C|";
+  EXPECT_NEAR(d.tangent_error(res), 0.25, 1e-6) << "|5/4 C - C| / |C|";
 }
 
-// The residual check throws after the graph was updated: accept() must not commit that trial.
-TEST(MaterialPointDriver, AThrowingStepLeavesNothingToAccept) {
+// After a throw the point stays failed: accept() throws until reject().
+TEST(MaterialPointDriver, AcceptAfterAFailedStepThrows) {
   ctx_type ctx;
-  build_elastic(ctx, true);
-  auto p{parameters_for("elastic")};
-  p.insert<std::string>("residual_source", "stuck::value");
-  p.insert<int>("max_passes", 3);
-  driver d{ctx, p};
-  EXPECT_THROW(static_cast<void>(d.step(axial(1e-3), tensor2{}, control::strain(), 0, 1)), u::cutback_error);
-  d.accept();
+  build_j2(ctx, false, 0);
+  driver d(ctx, parameters_for("j2"));
+  EXPECT_THROW(static_cast<void>(d.step(axial(1e-2), tensor2{}, control::uniaxial_stress(), 0, 1)), u::cutback_error);
+  EXPECT_ANY_THROW(d.accept());
+  d.reject();
   EXPECT_EQ(d.accepted_strain(), tensor2{});
 }
 
@@ -396,9 +438,9 @@ TEST(MaterialPointDriver, ThrowRejectStepRecovers) {
   EXPECT_EQ(failing.accepted_strain(), a.strain);
 }
 
-// Just below yield, the +fd_step perturbation of the check yields and the return map throws: the point is back at
-// the accepted state, so accept() commits nothing and the next step runs.
-TEST(MaterialPointDriver, AThrowInTheTangentCheckLeavesTheAcceptedState) {
+// Just below yield, the +fd_step perturbation of the check yields and the return map throws: the converged trial is
+// evaluated again, so accept() commits it and the next step starts from it.
+TEST(MaterialPointDriver, AThrowInTheTangentCheckKeepsTheTrial) {
   ctx_type ctx;
   build_j2(ctx, true, 0);
   auto p{parameters_for("j2")};
@@ -409,8 +451,8 @@ TEST(MaterialPointDriver, AThrowInTheTangentCheckLeavesTheAcceptedState) {
   ASSERT_TRUE(res.converged);
   EXPECT_THROW(static_cast<void>(d.tangent_error(res)), u::cutback_error);
   d.accept();
-  EXPECT_EQ(d.accepted_strain(), tensor2{});
-  ASSERT_TRUE(d.step(axial(0.5 * yield), tensor2{}, control::strain(), 0, 1).converged);
+  EXPECT_EQ(d.accepted_strain(), res.strain);
+  ASSERT_TRUE(d.step(axial(0.5 * yield), tensor2{}, control::strain(), 1, 1).converged);
   d.accept();
   EXPECT_EQ(d.accepted_strain(), axial(0.5 * yield));
 }

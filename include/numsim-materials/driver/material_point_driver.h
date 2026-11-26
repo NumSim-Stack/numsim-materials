@@ -19,9 +19,9 @@
 ///
 /// The history lives in the graph (engine-owned, see material_point): step() leaves the converged trial,
 /// accept() makes it the start of the next step and reject() returns to the accepted state. The accepted
-/// strain is the old value of the strain source. A throw from step() or tangent_error() returns to the accepted
-/// state first, as reject() does. Drivers on one context share its history: each evaluation rebinds the sources,
-/// but accept() or reject() of one moves the others too.
+/// strain is the old value of the strain source. A throw from step() leaves the point failed: accept() throws,
+/// reject() recovers. Drivers on one context share its history: each evaluation rebinds the sources, but accept() or
+/// reject() of one moves the others too.
 namespace numsim::materials {
 
 template <typename Traits>
@@ -79,7 +79,7 @@ public:
 
   /// Strain-controlled components from `strain`, stress-controlled ones from `stress`, from the accepted strain.
   /// Leaves the converged trial in the graph: accept() or reject() next.
-  step_result step(tensor2 const &strain, tensor2 const &stress, control const &c, value_type time, value_type dt) try {
+  step_result step(tensor2 const &strain, tensor2 const &stress, control const &c, value_type time, value_type dt) {
     auto const &P{c.stress_projector()};
     tensor4 const Q{c.strain_projector() + skew_identity<value_type, 3>()}; // Iskw: A regular on the full 9x9 space
     tensor2 const start{accepted_strain()};
@@ -104,9 +104,6 @@ public:
       res.strain = tmech::eval(res.strain - tmech::dcontract(tensor4{tmech::invf(A)}, r));
     }
     return res;
-  } catch (...) {
-    m_point.reset(); // nothing of the failed trial is left to accept()
-    throw;
   }
 
   /// The trial of step() becomes the start of the next step.
@@ -115,22 +112,28 @@ public:
   /// Back to the accepted state.
   void reject() { m_point.reset(); }
 
-  /// Error of the tangent of the trial `res` against central differences, relative to the larger of the two, before
-  /// accept(). The trial is evaluated again afterwards, so accepting it is unaffected.
+  /// Error of the tangent of the trial `res` against central differences, relative to the differences, before accept().
+  /// The trial is evaluated again afterwards, also after a throw, so accepting it is unaffected.
   value_type tangent_error(step_result const &res) try {
     tensor4 fd;
-    for (auto const &E : materials::symmetric_basis<value_type>()) {
+    auto const &basis{materials::symmetric_basis<value_type>()};
+    for (auto const &E : basis) {
       evaluate(tensor2{res.strain + m_fd_step * E}, res.time, res.dt);
       tensor2 const plus{m_stress};
       evaluate(tensor2{res.strain - m_fd_step * E}, res.time, res.dt);
       fd += tmech::otimes(tensor2{(plus - m_stress) / (2 * m_fd_step)}, E);
     }
     evaluate(res.strain, res.time, res.dt);
-    // relative to the larger of the two: finite for a zero tangent
-    auto const scale{std::max({tmech::norm(res.tangent), tmech::norm(fd), std::numeric_limits<value_type>::min()})};
+    // floor: the roundoff of the differences, about eps |stress| / fd_step per direction
+    auto const noise{static_cast<value_type>(basis.size()) * std::numeric_limits<value_type>::epsilon() *
+                     tmech::norm(res.stress) / m_fd_step};
+    auto const scale{std::max(tmech::norm(fd) + noise, std::numeric_limits<value_type>::min())};
     return tmech::norm(tensor4{fd - res.tangent}) / scale;
   } catch (...) {
-    m_point.reset();
+    try {
+      evaluate(res.strain, res.time, res.dt);
+    } catch (...) { // the trial throws again: the point stays failed
+    }
     throw;
   }
 

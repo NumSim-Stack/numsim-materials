@@ -19,8 +19,8 @@
 ///
 /// The history lives in the graph, as for material_point_driver: step() leaves the converged trial, accept()
 /// makes it the start of the next step, reject() returns to the accepted state. The accepted F is the old
-/// value of the deformation gradient source. A throw from step() or tangent_error() returns to the accepted
-/// state first, as reject() does. Drivers on one context share its history, as for material_point_driver.
+/// value of the deformation gradient source. A throw from step() leaves the point failed: accept() throws, reject()
+/// recovers. Drivers on one context share its history, as for material_point_driver.
 namespace numsim::materials {
 
 template <typename Traits>
@@ -78,7 +78,7 @@ public:
 
   /// Prescribed components of F from `F`, stress-controlled ones from `P`, from the accepted F.
   /// Leaves the converged trial in the graph: accept() or reject() next.
-  step_result step(tensor2 const &F, tensor2 const &P, control const &c, value_type time, value_type dt) try {
+  step_result step(tensor2 const &F, tensor2 const &P, control const &c, value_type time, value_type dt) {
     auto const &M{c.stress_projector()};
     tensor4 const N{c.deformation_projector()};
     tensor2 const start{accepted_F()};
@@ -93,7 +93,7 @@ public:
       auto const scale{std::max({tmech::norm(res.stress), tmech::norm(tensor2{tmech::dcontract(M, P)}),
                                  tmech::norm(res.tangent) * tmech::norm(tensor2{res.F - start})})};
       // near F = I, P is a difference of O(|dP/dF| |F|) terms: the residual cannot fall below their roundoff
-      auto const roundoff{8 * std::numeric_limits<value_type>::epsilon() * tmech::norm(res.tangent) *
+      auto const roundoff{2 * std::numeric_limits<value_type>::epsilon() * tmech::norm(res.tangent) *
                           tmech::norm(res.F)};
       if (res.residuals.back() <= std::max(m_tolerance * scale, roundoff)) {
         res.converged = true;
@@ -105,9 +105,6 @@ public:
       res.F = tmech::eval(res.F - tmech::dcontract(tensor4{tmech::invf(A)}, r));
     }
     return res;
-  } catch (...) {
-    m_point.reset(); // nothing of the failed trial is left to accept()
-    throw;
   }
 
   /// The trial of step() becomes the start of the next step.
@@ -116,22 +113,28 @@ public:
   /// Back to the accepted state.
   void reject() { m_point.reset(); }
 
-  /// Error of dP/dF of the trial `res` against central differences, relative to the larger of the two, before
-  /// accept(). The trial is evaluated again afterwards, so accepting it is unaffected.
+  /// Error of dP/dF of the trial `res` against central differences, relative to the differences, before accept().
+  /// The trial is evaluated again afterwards, also after a throw, so accepting it is unaffected.
   value_type tangent_error(step_result const &res) try {
     tensor4 fd;
-    for (auto const &E : materials::full_basis<value_type>()) {
+    auto const &basis{materials::full_basis<value_type>()};
+    for (auto const &E : basis) {
       evaluate(tensor2{res.F + m_fd_step * E}, res.time, res.dt);
       tensor2 const plus{m_stress};
       evaluate(tensor2{res.F - m_fd_step * E}, res.time, res.dt);
       fd += tmech::otimes(tensor2{(plus - m_stress) / (2 * m_fd_step)}, E);
     }
     evaluate(res.F, res.time, res.dt);
-    // relative to the larger of the two: finite for a zero tangent
-    auto const scale{std::max({tmech::norm(res.tangent), tmech::norm(fd), std::numeric_limits<value_type>::min()})};
+    // floor: the roundoff of the differences, about eps |stress| / fd_step per direction
+    auto const noise{static_cast<value_type>(basis.size()) * std::numeric_limits<value_type>::epsilon() *
+                     tmech::norm(res.stress) / m_fd_step};
+    auto const scale{std::max(tmech::norm(fd) + noise, std::numeric_limits<value_type>::min())};
     return tmech::norm(tensor4{fd - res.tangent}) / scale;
   } catch (...) {
-    m_point.reset();
+    try {
+      evaluate(res.F, res.time, res.dt);
+    } catch (...) { // the trial throws again: the point stays failed
+    }
     throw;
   }
 
