@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "numsim-materials/core/material_context.h"
+#include "numsim-materials/core/partial_check.h"
 #include "numsim-materials/materials/linear_elasticity.h"
 #include "numsim-materials/materials/deformation_gradient_kinematics.h"
 #include "numsim-materials/materials/neo_hooke.h"
@@ -120,6 +121,19 @@ TEST(NeoHooke, TangentMatchesFiniteDifferences) {
   ctx_type ctx;
   auto& src = add_model<nm::neo_hooke<policy>>(ctx);
   expect_tangent_matches_finite_differences<nm::neo_hooke<policy>>(ctx, src);
+}
+
+TEST(NeoHooke, TheDerivativeOfPByFIsThePublishedTangent) {
+  ctx_type ctx;
+  auto& src = add_model<nm::neo_hooke<policy>>(ctx);
+  const auto& dP = ctx.derivative<tensor4>("model", "stress", "F", "deformation_gradient");
+  src.bind(test_deformation(), test_deformation());
+  ctx.update();
+  EXPECT_LT(nm::test::relative(dP, ctx.get<tensor4>("model", "tangent")), 1e-12);
+  for (const auto* name : {"kinematics", "model"}) {
+    const auto mismatches{nm::check_partials(ctx, name)};
+    EXPECT_TRUE(mismatches.empty()) << name << ": " << mismatches.front();
+  }
 }
 
 TEST(NeoHooke, IsStressFreeAtIdentityAndLinearElasticAtSmallStrain) {
