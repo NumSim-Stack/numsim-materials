@@ -77,3 +77,38 @@ def evaluate_checks(expr: Expressions) -> list[CheckResult]:
             results.append(CheckResult(check["name"], case, error if np.isfinite(error) else math.inf,
                                        float(check["tolerance"])))
     return results
+
+
+CHECK_KEYS = {"name", "case", "cases", "value", "expected", "tolerance", "relative", "where", "plot"}
+CHECK_PLOT_KEYS = {"x", "y", "xlabel", "ylabel"}
+FIGURE_KEYS = {"title", "text", "columns", "panels"}
+PANEL_KEYS = {"title", "kind", "case", "cases", "x", "y", "reference", "logy", "xlabel", "ylabel"}
+CURVE_KEYS = {"expr", "label"}
+REFERENCE_KEYS = {"x", "y", "label"}
+
+
+def _require_known(item, known: set[str], where: str) -> None:
+    unknown = sorted(set(item) - known) if isinstance(item, dict) else []
+    if unknown:
+        raise ValueError(f"{where}: unknown key '{unknown[0]}' (one of {', '.join(sorted(known))})")
+
+
+def check_keys(spec: dict) -> None:
+    """ValueError naming the place of the first unknown key in "checks" and "figures" (material_report checks the rest)."""
+    for i, check in enumerate(spec.get("checks", [])):
+        where = f"checks[{i}]" + (f" '{check['name']}'" if isinstance(check, dict) and "name" in check else "")
+        _require_known(check, CHECK_KEYS, where)
+        if isinstance(check, dict) and isinstance(check.get("plot"), dict):
+            _require_known(check["plot"], CHECK_PLOT_KEYS, where + ".plot")
+    for i, figure in enumerate(spec.get("figures", [])):
+        _require_known(figure, FIGURE_KEYS, f"figures[{i}]")
+        for j, panel in enumerate(figure.get("panels", []) if isinstance(figure, dict) else []):
+            where = f"figures[{i}].panels[{j}]"
+            _require_known(panel, PANEL_KEYS, where)
+            if not isinstance(panel, dict):
+                continue
+            ys = panel.get("y", [])
+            for k, y in enumerate(ys if isinstance(ys, list) else [ys]):
+                _require_known(y, CURVE_KEYS, f"{where}.y[{k}]")
+            for k, ref in enumerate(panel.get("reference", [])):
+                _require_known(ref, REFERENCE_KEYS, f"{where}.reference[{k}]")

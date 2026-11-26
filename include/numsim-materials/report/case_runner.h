@@ -21,7 +21,10 @@ namespace numsim::materials::report {
 template <typename Traits>
 class case_model {
 public:
-  explicit case_model(nlohmann::json const &doc) { umat::make_json_builder<Traits>(doc.at("model").dump())(m_ctx, {}); }
+  explicit case_model(nlohmann::json const &doc) {
+    auto const model = detail::in_context("report", [&] { return detail::get<nlohmann::json>(doc, "model"); });
+    umat::make_json_builder<Traits>(model.dump())(m_ctx, {});
+  }
 
   [[nodiscard]] material_context<Traits> &context() noexcept { return m_ctx; }
 
@@ -30,6 +33,19 @@ private:
 };
 
 namespace detail {
+
+/// The columns after step_columns, checked: the property columns, at finite strain then Cauchy stress and J.
+template <typename Traits>
+std::vector<std::string> column_names(nlohmann::json const &doc, property_columns<Traits> const &columns) {
+  auto names{columns.names()};
+  if (is_finite_strain(doc)) {
+    for (auto const &comp : symmetric_components)
+      names.push_back("stress_" + std::string{comp});
+    names.push_back("J");
+  }
+  require_unique_columns(names);
+  return names;
+}
 
 /// The document's "point", with the case's fd_step when it sets one.
 template <typename Traits>
@@ -105,11 +121,12 @@ bool run_small_strain(nlohmann::json const &doc, load_case<typename Traits::valu
   case_model<Traits> model(doc);
   material_point_driver<Traits> driver{model.context(), detail::point_for<Traits>(doc, c)};
   property_columns<Traits> const columns{model.context(), parse_columns(doc)};
-  sink.begin(columns.names());
+  sink.begin(column_names(doc, columns));
   auto const values = [&](auto const &) { return columns.values(); };
 
-  auto const initial{driver.step(tensor2{}, tensor2{}, load_control<T>::strain(), 0, 0)};
-  if (!record_step<Traits>(driver, initial, c.path.unloaded(), 0, sink, values))
+  auto const unloaded{c.path.unloaded()};
+  auto const initial{driver.step(tensor2{}, tensor2{}, load_control<T>::strain(), unloaded.time, unloaded.dt)};
+  if (!record_step<Traits>(driver, initial, unloaded, 0, sink, values))
     return false;
   auto const solve{[&](load_step<T> const &s) {
     return driver.step(c.strain_at(s), tensor2{s.load * c.stress}, c.control, s.time, s.dt);
@@ -139,11 +156,7 @@ bool run_finite_strain(nlohmann::json const &doc, load_case<typename Traits::val
   case_model<Traits> model(doc);
   deformation_gradient_driver<Traits> driver{model.context(), detail::point_for<Traits>(doc, c)};
   property_columns<Traits> const columns{model.context(), parse_columns(doc)};
-  auto names{columns.names()};
-  for (auto const &comp : symmetric_components)
-    names.push_back("stress_" + std::string{comp});
-  names.push_back("J");
-  sink.begin(names);
+  sink.begin(column_names(doc, columns));
   auto const values = [&](auto const &res) {
     auto out{columns.values()};
     for (auto const v : cauchy_and_J<T>(res.F, res.stress))
@@ -152,8 +165,9 @@ bool run_finite_strain(nlohmann::json const &doc, load_case<typename Traits::val
   };
 
   auto const I{tmech::eye<T, 3, 2>()};
-  auto const initial{driver.step(I, tensor2{}, deformation_control<T>::deformation(), 0, 0)};
-  if (!record_step<Traits>(driver, initial, c.path.unloaded(), 0, sink, values))
+  auto const unloaded{c.path.unloaded()};
+  auto const initial{driver.step(I, tensor2{}, deformation_control<T>::deformation(), unloaded.time, unloaded.dt)};
+  if (!record_step<Traits>(driver, initial, unloaded, 0, sink, values))
     return false;
   auto const solve{[&](load_step<T> const &s) {
     return driver.step(tensor2{I + c.strain_at(s)}, tensor2{s.load * c.stress}, c.finite_control, s.time, s.dt);
@@ -165,6 +179,18 @@ bool run_finite_strain(nlohmann::json const &doc, load_case<typename Traits::val
 }
 
 } // namespace detail
+
+/// The input errors of the document's model, point and columns, without running a step.
+template <typename Traits>
+void check_model_and_columns(nlohmann::json const &doc) {
+  case_model<Traits> model(doc);
+  auto const point{parse_point<Traits>(doc)};
+  if (is_finite_strain(doc))
+    deformation_gradient_driver<Traits>{model.context(), point};
+  else
+    material_point_driver<Traits>{model.context(), point};
+  static_cast<void>(detail::column_names(doc, property_columns<Traits>{model.context(), parse_columns(doc)}));
+}
 
 /// Runs one load case on a fresh material point; false if a step does not converge after the case's max_cutbacks
 /// halvings (it is still recorded, then rejected). Every converged step is accepted after its columns and tangent

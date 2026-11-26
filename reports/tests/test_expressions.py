@@ -60,3 +60,24 @@ class CheckTest(unittest.TestCase):
 
     def test_nan_fails(self):
         self.assertFalse(self.run_check({"value": "x", "tolerance": 1}, x=[0, float("nan")]).passed)
+
+
+class KeyTest(unittest.TestCase):
+    def test_unknown_keys_of_checks_and_figures_are_named(self):
+        from numsim_report.expressions import check_keys
+        good = {"checks": [{"name": "c", "cases": "*", "value": "x", "expected": 0, "tolerance": 1, "relative": True,
+                            "where": "x > 0", "plot": {"x": "step", "y": "x", "xlabel": "s", "ylabel": "y"}}],
+                "figures": [{"title": "f", "text": "t", "columns": 1, "panels": [
+                    {"title": "p", "kind": "line", "case": "a", "x": "x", "y": [{"expr": "y", "label": "l"}], "logy": True,
+                     "xlabel": "x", "ylabel": "y", "reference": [{"x": "x", "y": "y", "label": "r"}]}]}]}
+        check_keys(good)
+        for spec, where in (({"checks": [{"name": "c", "relatve": True}]}, "checks[0] 'c'"),
+                            ({"checks": [{"name": "c", "plot": {"xlable": "s"}}]}, "checks[0] 'c'.plot"),
+                            ({"figures": [{"title": "f", "pannels": []}]}, "figures[0]"),
+                            ({"figures": [{"panels": [{"x": "x", "y": "y", "logx": True}]}]}, "figures[0].panels[0]"),
+                            ({"figures": [{"panels": [{"x": "x", "y": [{"expr": "y", "lable": "l"}]}]}]}, "figures[0].panels[0].y[0]"),
+                            ({"figures": [{"panels": [{"x": "x", "y": "y", "reference": [{"y": "y", "z": 1}]}]}]},
+                             "figures[0].panels[0].reference[0]")):
+            with self.subTest(where=where), self.assertRaises(ValueError) as e:
+                check_keys(spec)
+            self.assertIn(where, str(e.exception))

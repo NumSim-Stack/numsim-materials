@@ -6,11 +6,12 @@
 #include <fstream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 
-/// Report documents: "include" files are merged first (arrays appended, named entries replaced
-/// by name, local keys win), then every string "$name" is replaced by parameters.name.
+/// Report documents: "include" files merged first (arrays appended, named entries replaced, local keys win),
+/// then every string "$name" (an identifier) replaced by parameters.name.
 namespace numsim::materials::report {
 
 namespace detail {
@@ -40,12 +41,19 @@ inline void merge_into(nlohmann::json &base, nlohmann::json const &local) {
   }
 }
 
+/// "$name", name an ASCII identifier; anything else ("$\sigma_{11}$") is text.
+inline bool is_parameter_reference(std::string const &s) {
+  auto const letter = [](char ch) { return (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || ch == '_'; };
+  return s.size() > 1 && s.front() == '$' && letter(s[1]) &&
+         std::all_of(s.begin() + 2, s.end(), [&](char ch) { return letter(ch) || (ch >= '0' && ch <= '9'); });
+}
+
 /// Replaces "$name" strings; `usage[name]` collects the paths where each parameter went.
 inline void substitute(nlohmann::json &j, nlohmann::json const &parameters, std::string const &where,
                        nlohmann::json &usage) {
   if (j.is_string()) {
     auto const s = j.get<std::string>();
-    if (s.size() > 1 && s.front() == '$') {
+    if (is_parameter_reference(s)) {
       auto const key{s.substr(1)};
       if (!parameters.contains(key))
         throw std::invalid_argument(where + ": unknown parameter '" + s + "'");
@@ -61,17 +69,52 @@ inline void substitute(nlohmann::json &j, nlohmann::json const &parameters, std:
   }
 }
 
-inline nlohmann::json load_included(nlohmann::json const &spec, std::filesystem::path const &dir, int depth = 0) {
-  if (depth > 16)
-    throw std::invalid_argument("include: nesting deeper than 16 levels (a cycle?) at " + dir.string());
+/// The JSON document in `file`; a syntax error names the file.
+inline nlohmann::json parse_file(std::filesystem::path const &file) {
+  std::ifstream in{file};
+  if (!in)
+    throw std::invalid_argument("cannot open " + file.string());
+  try {
+    return nlohmann::json::parse(in);
+  } catch (nlohmann::json::parse_error const &e) {
+    throw std::invalid_argument(file.string() + ": " + e.what());
+  }
+}
+
+/// The files being included (a cycle) and those already merged (a diamond merges a file once).
+struct include_state {
+  std::vector<std::filesystem::path> open, merged;
+};
+
+/// `spec` with its includes merged; `where` names it in messages. Include paths are relative to `dir`.
+inline nlohmann::json load_included(nlohmann::json const &spec, std::filesystem::path const &dir, std::string const &where,
+                                    include_state &state) {
+  if (!spec.is_object())
+    throw std::invalid_argument(where + ": a report document is a JSON object");
+  auto const files = spec.value("include", nlohmann::json::array());
+  if (!files.is_array() || !std::all_of(files.begin(), files.end(), [](auto const &f) { return f.is_string(); }))
+    throw std::invalid_argument(where + ": \"include\" is an array of file names");
   auto merged = nlohmann::json::object();
-  for (auto const &file : spec.value("include", nlohmann::json::array())) {
-    auto const path{dir / file.get<std::string>()};
-    std::ifstream in{path};
-    if (!in)
-      throw std::invalid_argument("include: cannot open " + path.string());
-    auto const included = nlohmann::json::parse(in);
-    merge_into(merged, load_included(included, path.parent_path(), depth + 1));
+  for (auto const &file : files) {
+    std::filesystem::path const name{file.get<std::string>()};
+    if (name.is_absolute())
+      throw std::invalid_argument(where + ": include '" + name.string() + "' is absolute; includes are relative to the including file");
+    auto const path{dir / name};
+    if (!std::filesystem::is_regular_file(path))
+      throw std::invalid_argument(where + ": cannot open include " + path.string());
+    auto const canonical{std::filesystem::canonical(path)};
+    if (std::ranges::contains(state.open, canonical)) {
+      std::string chain;
+      for (auto const &f : state.open)
+        chain += f.filename().string() + " -> ";
+      throw std::invalid_argument("include cycle: " + chain + canonical.filename().string() + " (" + path.string() + ")");
+    }
+    if (std::ranges::contains(state.merged, canonical))
+      continue;
+    state.open.push_back(canonical);
+    merge_into(merged, load_included(parse_file(path), path.parent_path(), path.string(), state));
+    state.open.pop_back();
+    state.merged.push_back(canonical);
   }
   auto local = spec;
   local.erase("include");
@@ -81,9 +124,11 @@ inline nlohmann::json load_included(nlohmann::json const &spec, std::filesystem:
 
 } // namespace detail
 
-/// The report document with includes merged, parameters substituted and "parameter_usage" added.
+/// The report document with includes merged, parameters substituted and "parameter_usage" added. An include is
+/// a file relative to the including one, holding an object; a file included twice is merged once.
 inline nlohmann::json resolve_report(nlohmann::json const &spec, std::filesystem::path const &dir) {
-  auto out = detail::load_included(spec, dir);
+  detail::include_state state;
+  auto out = detail::load_included(spec, dir, "report", state);
   auto const parameters = out.value("parameters", nlohmann::json::object());
   auto usage = nlohmann::json::object();
   for (auto const &[key, value] : parameters.items())

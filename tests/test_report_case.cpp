@@ -1,6 +1,12 @@
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <cmath>
+#include <initializer_list>
+#include <locale>
+#include <limits>
+#include <stdexcept>
+#include <string_view>
+#include <utility>
 #include <string>
 #include <vector>
 #include <nlohmann/json.hpp>
@@ -26,6 +32,25 @@ using tensor2 = tmech::tensor<T, 3, 2>;
 using tensor4 = tmech::tensor<T, 3, 4>;
 using control = nm::load_control<T>;
 using json = nlohmann::json;
+
+/// The message of the invalid_argument `f` throws; empty if it does not throw.
+template <typename F>
+std::string error_of(F &&f) {
+  try {
+    static_cast<void>(f());
+  } catch (std::invalid_argument const &e) {
+    return e.what();
+  } catch (std::exception const &e) {
+    return std::string{"not an invalid_argument: "} + e.what();
+  }
+  return {};
+}
+
+/// `message` is an invalid_argument's and holds every part.
+bool names(std::string const &message, std::initializer_list<std::string_view> parts) {
+  return !message.empty() && !message.starts_with("not an invalid_argument") &&
+         std::ranges::all_of(parts, [&](auto p) { return message.find(p) != std::string::npos; });
+}
 
 TEST(LoadControl, StrainControlPrescribesNoStress) {
   EXPECT_EQ(tmech::norm(control::strain().stress_projector()), 0);
@@ -133,6 +158,78 @@ TEST(LoadPath, RejectsStepsOutsideThePath) {
   EXPECT_NO_THROW((void)path.at(2));
 }
 
+TEST(LoadPath, StartsUnloaded) {
+  EXPECT_THROW((r::load_path<T>{{0.5, 1}, 2}), std::invalid_argument);
+  EXPECT_EQ((r::load_path<T>{{0, 1}, 2, 0.5}).unloaded().load, 0);
+}
+
+TEST(ReportJson, WrongTypesNameTheCaseAndTheKey) {
+  auto const u = [](std::string const &extra) { return R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1])" + extra + "}"; };
+  for (auto const &[spec, key] : std::vector<std::pair<std::string, std::string_view>>{
+           {u(R"(, "scale": "0.01")"), "scale"},
+           {R"({"name": "u", "points": 3})", "points"},
+           {R"({"name": "u", "points": [[0, 0, 0, 0, 0, 0], [1, 0]]})", "points"},
+           {R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": 1})", "path"},
+           {R"({"name": "u", "direction": "x", "path": [0, 1]})", "direction"},
+           {u(R"(, "stress": [1])"), "stress"},
+           {u(R"(, "control": 1)"), "control"},
+           {u(R"(, "control": "mixed")"), "stress_components"},
+           {u(R"(, "control": "mixed", "stress_components": ["14"])"), "stress_components"},
+           {u(R"(, "dt": "1")"), "dt"},
+           {u(R"(, "fd_step": null)"), "fd_step"}}) {
+    auto const message{error_of([&] { return r::parse_case<T>(json::parse(spec)); })};
+    EXPECT_TRUE(names(message, {"case 'u'", key})) << spec << "\n" << message;
+  }
+  auto const unnamed{error_of([] { return r::parse_case<T>(json::parse(R"({"direction": [1, 0, 0, 0, 0, 0], "path": [0, 1]})")); })};
+  EXPECT_TRUE(names(unnamed, {"name"})) << unnamed;
+}
+
+TEST(ReportJson, PointAndColumnErrorsNameTheKey) {
+  auto const point = [](std::string const &p) { return json::parse(R"({"point": {"strain_source": "s", "stress_source": "m")" + p + "}}"); };
+  auto const parse_point = [](json const &doc) { return error_of([&] { return r::parse_point<policy>(doc); }); };
+  EXPECT_TRUE(names(parse_point(json::parse(R"({"point": {"strain_source": 1}})")), {"point", "strain_source"}));
+  EXPECT_TRUE(names(parse_point(point(R"(, "tolerance": "x")")), {"point", "tolerance"}));
+  EXPECT_TRUE(names(parse_point(point(R"(, "max_iter": "x")")), {"point", "max_iter"}));
+  EXPECT_TRUE(names(parse_point(json::object()), {"point"}));
+  auto const parse_columns = [](json const &doc) { return error_of([&] { return r::parse_columns(doc); }); };
+  EXPECT_TRUE(names(parse_columns(json::parse(R"({"point": {"strain_source": "s"}})")), {"point", "stress_source"}));
+  auto with_record = point("");
+  with_record["record"] = json::parse(R"({"k": 1})");
+  EXPECT_TRUE(names(parse_columns(with_record), {"record", "k"}));
+  with_record["record"] = json::parse(R"({"k": {"full": true}})");
+  EXPECT_TRUE(names(parse_columns(with_record), {"record", "k", "source"}));
+}
+
+TEST(LoadPath, TheUnloadedStepTakesATimeStepEndingAtZero) {
+  r::load_path<T> const path{{0, 1}, 2, 1, 0.25};
+  EXPECT_EQ(path.unloaded().dt, 0.25);
+  EXPECT_EQ(path.unloaded().time + path.unloaded().dt, 0);
+  EXPECT_EQ(path.at(1).time, 0);
+  for (T const dt : {0.0, -1.0, std::numeric_limits<T>::quiet_NaN()})
+    EXPECT_THROW((r::load_path<T>{{0, 1}, 2, 1, dt}), std::invalid_argument) << dt;
+}
+
+TEST(ReportJson, TimeStepAndTolerancesAreCheckedWhenParsed) {
+  auto const u = [](std::string const &extra) { return R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1])" + extra + "}"; };
+  for (auto const *extra : {R"(, "dt": 0)", R"(, "dt": -0.1)"})
+    EXPECT_TRUE(names(error_of([&] { return r::parse_case<T>(json::parse(u(extra))); }), {"case 'u'", "dt"})) << extra;
+  for (auto const *extra : {R"(, "fd_step": 0)", R"(, "fd_step": -1e-7)"})
+    EXPECT_TRUE(names(error_of([&] { return r::parse_case<T>(json::parse(u(extra))); }), {"case 'u'", "fd_step"})) << extra;
+  EXPECT_EQ(r::parse_case<T>(json::parse(u(R"(, "dt": 0.5)"))).path.at(1).dt, 0.5);
+  auto const point = [](std::string const &p) { return json::parse(R"({"point": {"strain_source": "s", "stress_source": "m", )" + p + "}}"); };
+  for (auto const *bad : {R"("tolerance": -1e-10)", R"("fd_step": 0)", R"("residual_tolerance": -1)"})
+    EXPECT_TRUE(names(error_of([&] { return r::parse_point<policy>(point(bad)); }), {"point"})) << bad;
+  EXPECT_EQ(error_of([&] { return r::parse_point<policy>(point(R"("tolerance": 0, "fd_step": 1e-6)")); }), "");
+}
+
+TEST(ReportJson, APathStartsAtTheUnloadedState) {
+  auto const error = [](std::string const &spec) { return error_of([&] { return r::parse_case<T>(json::parse(spec)); }); };
+  EXPECT_NE(error(R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": [0.5, 1]})").find("case 'u'"), std::string::npos);
+  EXPECT_NE(error(R"({"name": "p", "points": [[1e-3, 0, 0, 0, 0, 0], [2e-3, 0, 0, 0, 0, 0]]})").find("case 'p'"), std::string::npos);
+  EXPECT_EQ(error(R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], "scale": 2})"), "");
+  EXPECT_EQ(error(R"({"name": "p", "points": [[0, 0, 0, 0, 0, 0], [2e-3, 0, 0, 0, 0, 0]]})"), "");
+}
+
 TEST(ReportJson, ParsesThePointAndTheColumns) {
   auto const doc = json::parse(R"({"point": {"strain_source": "s", "stress_source": "m", "tangent_source": "t",
     "stress_property": "damaged_stress", "tangent_property": "damaged_tangent"}, "record": {"kappa": "m::kappa"}})");
@@ -172,6 +269,15 @@ TEST(ReportJson, ParsesRefinementStudies) {
   EXPECT_TRUE(r::parse_studies(json::parse(R"({"cases": []})")).empty());
   EXPECT_THROW(r::parse_studies(json::parse(R"({"cases": [], "studies": [{"name": "s", "case": "nope", "steps": [1]}]})")),
                std::invalid_argument);
+}
+
+TEST(ReportJson, StudyErrorsNameTheStudy) {
+  auto const error = [](std::string const &doc) { return error_of([&] { return r::parse_studies(json::parse(doc)); }); };
+  EXPECT_TRUE(names(error(R"({"cases": [{"direction": [1, 0, 0, 0, 0, 0]}, {"name": "u"}], "studies": [{"name": "s", "case": "u", "steps": [1]}]})"),
+                    {"case without a \"name\""}));
+  EXPECT_TRUE(names(error(R"({"cases": [{"name": "u"}], "studies": [{"case": "u", "steps": [1]}]})"), {"study", "name"}));
+  EXPECT_TRUE(names(error(R"({"cases": [{"name": "u"}], "studies": [{"name": "s", "steps": [1]}]})"), {"study 's'", "case"}));
+  EXPECT_TRUE(names(error(R"({"cases": [{"name": "u"}], "studies": [{"name": "s", "case": "u", "steps": 4}]})"), {"study 's'", "steps"}));
 }
 
 TEST(ReportJson, ParsesALoadCase) {
@@ -233,6 +339,18 @@ TEST(ReportJson, FiniteStrainPointAndNineComponentTensors) {
   EXPECT_THROW(r::parse_tensor<T>(json::parse("[1, 2, 3]")), std::invalid_argument);
 }
 
+TEST(ReportJson, NineComponentsOnlyAtFiniteStrain) {
+  std::string const nine{"[1, 0, 0, 0, 0, 0, 0, 0, 1]"}, zero{"[0, 0, 0, 0, 0, 0, 0, 0, 0]"};
+  for (auto const &[spec, key] : std::vector<std::pair<std::string, std::string_view>>{
+           {R"({"name": "u", "path": [0, 1], "direction": )" + nine + "}", "direction"},
+           {R"({"name": "u", "points": [)" + zero + ", " + nine + "]}", "points"},
+           {R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], "stress": )" + nine + "}", "stress"}}) {
+    EXPECT_TRUE(names(error_of([&] { return r::parse_case<T>(json::parse(spec)); }), {"case 'u'", key, "six"})) << spec;
+    EXPECT_EQ(error_of([&] { return r::parse_case<T>(json::parse(spec), true); }), "") << spec;
+  }
+  EXPECT_THROW(r::parse_symmetric<T>(json::parse(nine)), std::invalid_argument);
+}
+
 TEST(ReportJson, FiniteStrainMixedControlMayNameTheLowerComponents) {
   auto const spec = json::parse(R"({"name": "f", "control": "mixed", "stress_components": ["22", "33", "21"],
     "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1]})");
@@ -277,6 +395,99 @@ TEST(ReportJson, OutputNamesStayInTheOutputDirectoryAndAreUnique) {
             (std::vector<std::string>{"u-1.a", "a study_2", "a study_4"}));
 }
 
+TEST(ReportJson, RecordIsAnObjectOfCsvSafeNames) {
+  auto doc = elastic_report();
+  doc["record"] = json::array({"elastic::stress"});
+  EXPECT_TRUE(names(error_of([&] { return r::parse_columns(doc); }), {"record", "object"}));
+  for (auto const *bad : {"a,b", "a\"b", "a\nb", ""}) {
+    doc["record"] = json::object({{bad, "elastic::stress[1,1]"}});
+    EXPECT_TRUE(names(error_of([&] { return r::parse_columns(doc); }), {"record"})) << bad;
+  }
+  doc["record"] = json::object({{"a b-c.d", "elastic::stress[1,1]"}});
+  EXPECT_EQ(r::parse_columns(doc).size(), 3u);
+}
+
+TEST(ReportJson, UnknownKeysAreNamedWithTheirPlace) {
+  auto const u = [](std::string const &extra) { return R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1])" + extra + "}"; };
+  for (auto const &[extra, key] : std::vector<std::pair<std::string, std::string_view>>{{R"(, "stpes": 1)", "stpes"},
+                                                                                         {R"(, "contorl": "mixed")", "contorl"}}) {
+    auto const message{error_of([&] { return r::parse_case<T>(json::parse(u(extra))); })};
+    EXPECT_TRUE(names(message, {"case 'u'", key})) << message;
+  }
+  EXPECT_EQ(error_of([&] { return r::parse_case<T>(json::parse(u(R"(, "control": "mixed", "stress_components": ["22"],
+    "stress": [0, 0, 0, 0, 0, 0], "steps": 2, "scale": 2, "dt": 1, "tangent_every": 1, "fd_step": 1e-7, "max_cutbacks": 1)"))); }), "");
+
+  auto const study = json::parse(R"({"cases": [{"name": "u"}], "studies": [{"name": "s", "case": "u", "steps": [1, 2],
+    "quantity": "stress_11", "min_order": 1, "quanity": "x"}]})");
+  EXPECT_TRUE(names(error_of([&] { return r::parse_studies(study); }), {"study 's'", "quanity"}));
+
+  auto doc = elastic_report();
+  doc["record"] = json::parse(R"({"k": {"source": "elastic::stress", "fulll": true}})");
+  EXPECT_TRUE(names(error_of([&] { return r::parse_columns(doc); }), {"record", "k", "fulll"}));
+
+  doc = elastic_report();
+  EXPECT_EQ(error_of([&] { r::check_report_keys(doc); }), "");
+  for (auto const *key : {"title", "notes", "parameters", "parameter_usage", "derived", "figures", "checks", "studies"})
+    doc[key] = json::object();
+  EXPECT_EQ(error_of([&] { r::check_report_keys(doc); }), "");
+  doc["cses"] = json::array();
+  EXPECT_TRUE(names(error_of([&] { r::check_report_keys(doc); }), {"report", "cses"}));
+}
+
+TEST(ReportJson, CasesStudyStepsAndStressComponentsAreNonEmptyArrays) {
+  auto const stems = [](std::string const &doc) { return error_of([&] { return r::output_stems(json::parse(doc)); }); };
+  EXPECT_TRUE(names(stems(R"({"cases": {"x": {"name": "u"}}})"), {"\"cases\"", "array"}));
+  EXPECT_TRUE(names(stems(R"({"cases": []})"), {"\"cases\""}));
+  EXPECT_TRUE(names(error_of([] { return r::parse_studies(json::parse(R"({"cases": {"x": {"name": "u"}}, "studies": [{"name": "s", "case": "u", "steps": [1, 2]}]})")); }),
+                    {"\"cases\"", "array"}));
+  for (auto const *steps : {"[]", "[4]"})
+    EXPECT_TRUE(names(error_of([&] { return r::parse_studies(json::parse(std::string{R"({"cases": [{"name": "u"}], "studies": [{"name": "s", "case": "u", "steps": )"} + steps + "}]}")); }),
+                      {"study 's'", "steps"})) << steps;
+  auto const mixed = json::parse(R"({"name": "u", "control": "mixed", "stress_components": [], "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1]})");
+  EXPECT_TRUE(names(error_of([&] { return r::parse_case<T>(mixed); }), {"case 'u'", "stress_components"}));
+  EXPECT_TRUE(names(error_of([&] { return r::parse_case<T>(mixed, true); }), {"case 'u'", "stress_components"}));
+}
+
+TEST(CaseRunner, ColumnNamesAreUnique) {
+  auto const c{r::parse_case<T>(json::parse(R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], "steps": 1})"))};
+  for (auto const &[record, duplicate] : std::vector<std::pair<json, std::string_view>>{
+           {json::object({{"strain_11", "elastic::stress[1,1]"}}), "strain_11"},
+           {json::object({{"stress", "elastic::stress"}}), "stress_11"},
+           {json::object({{"time", "elastic::stress[1,1]"}}), "time"},
+           {json::object({{"converged", "elastic::stress[1,1]"}}), "converged"},
+           {json::object({{"p", "elastic::stress[1,1]"}}), "'p'"},
+           {json::object({{"q", "elastic::stress[1,1]"}}), "'q'"}}) {
+    auto doc = elastic_report();
+    doc["record"] = record;
+    recording_sink sink;
+    EXPECT_TRUE(names(error_of([&] { return r::run_case<policy>(doc, c, sink); }), {duplicate})) << record.dump();
+  }
+  auto doc = neo_hooke_report();
+  doc["record"] = json::object({{"J", "model::stress[1,1]"}});
+  recording_sink sink;
+  auto const finite{r::parse_case<T>(json::parse(R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], "steps": 1})"), true)};
+  EXPECT_TRUE(names(error_of([&] { return r::run_case<policy>(doc, finite, sink); }), {"'J'"}));
+}
+
+TEST(CaseRunner, ModelPointAndColumnErrorsShowWithoutACase) {
+  EXPECT_EQ(error_of([] { r::check_model_and_columns<policy>(elastic_report()); }), "");
+  EXPECT_EQ(error_of([] { r::check_model_and_columns<policy>(neo_hooke_report()); }), "");
+  auto doc = elastic_report();
+  doc["record"] = json::object({{"p", "elastic::stress[1,1]"}});
+  EXPECT_TRUE(names(error_of([&] { r::check_model_and_columns<policy>(doc); }), {"'p'"}));
+  doc["record"] = json::object({{"k", "elastic::nope"}});
+  EXPECT_TRUE(names(error_of([&] { r::check_model_and_columns<policy>(doc); }), {"'k'", "nope"}));
+  doc = neo_hooke_report();
+  doc["record"] = json::object({{"J", "model::stress[1,1]"}});
+  EXPECT_TRUE(names(error_of([&] { r::check_model_and_columns<policy>(doc); }), {"'J'"}));
+  doc = elastic_report();
+  doc["point"]["tolerance"] = -1;
+  EXPECT_TRUE(names(error_of([&] { r::check_model_and_columns<policy>(doc); }), {"point", "tolerance"}));
+  doc = elastic_report();
+  doc["point"]["stress_source"] = "nope";
+  EXPECT_THROW(r::check_model_and_columns<policy>(doc), nm::umat::fatal_error) << "the driver's own check";
+}
+
 TEST(CaseRunner, FiniteStrainRecordsFPCauchyAndJ) {
   auto const doc = neo_hooke_report();
   auto const spec = json::parse(R"({"name": "u", "control": "uniaxial_stress",
@@ -300,11 +511,42 @@ TEST(CaseRunner, FiniteStrainRecordsFPCauchyAndJ) {
 }
 
 TEST(CaseRunner, TheCaseFdStepReachesTheDriver) {
-  auto const spec = json::parse(R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], "steps": 1,
-    "scale": 0.001, "fd_step": 0})");
+  auto c{r::parse_case<T>(json::parse(R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], "steps": 1,
+    "scale": 0.001, "fd_step": 1e-6})"))};
+  c.fd_step = 0; // past the parser's check
   recording_sink sink;
-  EXPECT_THROW(static_cast<void>(r::run_case<policy>(elastic_report(), r::parse_case<T>(spec), sink)),
-               nm::umat::fatal_error) << "fd_step must be > 0";
+  EXPECT_THROW(static_cast<void>(r::run_case<policy>(elastic_report(), c, sink)), nm::umat::fatal_error)
+      << "fd_step must be > 0";
+}
+
+/// Elastic, plus a degree of cure z with dz/dt = z (1 - z) (E = 0), integrated by backward Euler from z = 0.5.
+json curing_report() {
+  return json::parse(R"({
+    "model": {"materials": [
+      {"type": "external_strain_source", "name": "strain"},
+      {"type": "linear_elasticity", "name": "elastic", "strain_producer_name": "strain", "K": 100.0, "G": 50.0},
+      {"type": "external_scalar_source", "name": "time"},
+      {"type": "scalar_stepper", "name": "temperature", "increment": 300.0},
+      {"type": "backward_euler", "name": "solver", "function": "curing"},
+      {"type": "autocatalytic_reaction", "name": "curing", "A": 1.0, "E": 0.0, "n": 1.0, "m": 1.0, "start_value": 0.5}]},
+    "point": {"strain_source": "strain", "stress_source": "elastic", "time_source": "time"},
+    "record": {"z": "curing::current_state", "t": "time::state"}})");
+}
+
+TEST(CaseRunner, TheUnloadedStepRunsWithTheCaseTimeStep) {
+  for (T const dt : {0.5, 2.0}) {
+    auto const c{r::parse_case<T>(json::parse(R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], "steps": 2,
+      "scale": 1e-3, "tangent_every": 0, "dt": )" + std::to_string(dt) + "}"))};
+    recording_sink sink;
+    ASSERT_TRUE(r::run_case<policy>(curing_report(), c, sink));
+    auto const col = [&](std::size_t step, std::string const &n) {
+      return sink.records[step].columns[static_cast<std::size_t>(std::ranges::find(sink.names, n) - sink.names.begin())];
+    };
+    // backward Euler over step 0: dz = dt (0.5 + dz) (0.5 - dz)
+    EXPECT_NEAR(col(0, "z"), 0.5 + (std::sqrt(1 + dt * dt) - 1) / (2 * dt), 1e-10) << "dt " << dt;
+    EXPECT_EQ(col(0, "t"), 0) << "step 0 ends at time 0";
+    EXPECT_EQ(col(2, "t"), 2 * dt);
+  }
 }
 
 TEST(CaseRunner, RecordsTheUnloadedStateAndEveryStep) {
@@ -661,8 +903,54 @@ TEST(CsvSink, WritesHeaderRowsAndResiduals) {
   rec.columns = {1e-3, 2.0};
   rec.tangent_error = 1e-9;
   sink.record(rec);
-  EXPECT_EQ(csv.str(), "step,time,load,iterations,converged,tangent_error,strain_11,kappa\n1,1,0.5,1,1,1.0000000000000001e-09,0.001,2\n");
+  EXPECT_EQ(csv.str(), "step,time,load,iterations,converged,tangent_error,strain_11,kappa\n1,1,0.5,1,1,1e-09,0.001,2\n");
   EXPECT_EQ(its.str(), "step,iteration,residual\n1,0,1\n1,1,1e-12\n");
+}
+
+/// A locale writing 1.234,5 for 1234.5.
+struct comma_decimal : std::numpunct<char> {
+  char do_decimal_point() const override { return ','; }
+  char do_thousands_sep() const override { return '.'; }
+  std::string do_grouping() const override { return "\3"; }
+};
+
+TEST(CsvSink, KeepsTheStreamsPrecisionAndIgnoresItsLocale) {
+  std::ostringstream csv, its;
+  csv.precision(3);
+  its.precision(3);
+  csv.imbue(std::locale(std::locale::classic(), new comma_decimal));
+  its.imbue(std::locale(std::locale::classic(), new comma_decimal));
+  {
+    r::csv_sink<policy> sink{csv, its};
+    sink.begin({"x"});
+    r::step_record<policy> rec;
+    rec.step = {1000, 0, 1, 1234.5};
+    rec.result.residuals = {0.123456789, 1e-12};
+    rec.columns = {0.1 + 0.2};
+    rec.tangent_error = 1e-9;
+    sink.record(rec);
+  }
+  EXPECT_EQ(csv.str(), "step,time,load,iterations,converged,tangent_error,x\n1000,1,1234.5,1,0,1e-09,0.30000000000000004\n");
+  EXPECT_EQ(its.str(), "step,iteration,residual\n1000,0,0.123457\n1000,1,1e-12\n");
+  EXPECT_EQ(csv.precision(), 3);
+  EXPECT_EQ(its.precision(), 3);
+}
+
+TEST(CsvSink, WritesNanAndInfinity) {
+  std::ostringstream csv, its;
+  r::csv_sink<policy> sink{csv, its};
+  sink.begin({"a", "b", "c", "d"});
+  r::step_record<policy> rec;
+  rec.columns = {std::numeric_limits<T>::infinity(), -std::numeric_limits<T>::infinity(), std::numeric_limits<T>::quiet_NaN(),
+                 std::copysign(std::numeric_limits<T>::quiet_NaN(), T{-1})}; // x86 0/0 has the sign bit set
+  sink.record(rec);
+  EXPECT_EQ(csv.str(), "step,time,load,iterations,converged,tangent_error,a,b,c,d\n0,0,0,0,0,nan,inf,-inf,nan,nan\n");
+}
+
+TEST(GraphDescription, ErrorsNameTheModel) {
+  auto doc = elastic_report();
+  doc.erase("model");
+  EXPECT_TRUE(names(error_of([&] { return r::describe_graph<policy>(doc); }), {"\"model\""}));
 }
 
 TEST(GraphDescription, ListsMaterialsParametersAndWiring) {

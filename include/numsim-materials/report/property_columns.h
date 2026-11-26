@@ -2,11 +2,14 @@
 #define NUMSIM_MATERIALS_REPORT_PROPERTY_COLUMNS_H
 
 #include <array>
+#include <charconv>
 #include <cstddef>
 #include <functional>
 #include <algorithm>
 #include <stdexcept>
 #include <string>
+#include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -62,7 +65,8 @@ private:
     auto *p{ctx.find_property(material, prop)};
     if (p == nullptr)
       throw std::invalid_argument("column '" + name + "': no property '" + material + "::" + prop + "'");
-    auto const idx{indices(name, bracketed ? source.substr(open + 1, source.size() - open - 2) : std::string{})};
+    auto const idx{bracketed ? indices(name, std::string_view{source}.substr(open + 1, source.size() - open - 2))
+                             : std::vector<std::size_t>{}};
 
     if (auto const *s{property_value<value_type>(p)}) {
       require(name, idx.empty(), "a scalar takes no component");
@@ -88,18 +92,21 @@ private:
   }
 
   /// "1,2" -> {0, 1}
-  static std::vector<std::size_t> indices(std::string const &name, std::string const &list) {
+  static std::vector<std::size_t> indices(std::string const &name, std::string_view list) {
     std::vector<std::size_t> idx;
-    std::size_t pos{0};
-    while (pos < list.size()) {
+    for (std::size_t pos{0}; pos <= list.size(); ++pos) {
       auto const end{std::min(list.find(',', pos), list.size())};
-      auto const item{list.substr(pos, end - pos)};
-      require(name, item.find_first_not_of(" 0123456789") == std::string::npos && item.find_first_of("0123456789") != std::string::npos,
+      auto item{list.substr(pos, end - pos)};
+      item.remove_prefix(std::min(item.find_first_not_of(' '), item.size()));
+      item.remove_suffix(item.size() - (item.find_last_not_of(' ') + 1));
+      std::size_t i{0};
+      auto const [ptr, ec]{std::from_chars(item.data(), item.data() + item.size(), i)};
+      require(name, !item.empty() && item.find_first_not_of("0123456789") == std::string_view::npos,
               "indices are comma-separated numbers");
-      auto const i{std::stoul(item)};
-      require(name, i >= 1 && i <= 3, "indices run from 1 to 3");
+      require(name, ec == std::errc{} && ptr == item.data() + item.size() && i >= 1 && i <= 3,
+              "indices run from 1 to 3");
       idx.push_back(i - 1);
-      pos = end + 1;
+      pos = end;
     }
     return idx;
   }

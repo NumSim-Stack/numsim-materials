@@ -2,35 +2,46 @@
 
 Writes <directory>/<material>.html, self-contained (figures embedded), and an index.html.
 --check runs the cases and checks only; the exit code is 1 if a check fails or a step does not converge.
+A key the sections below do not list is an error that names it and its place.
 
 report.json
-  include      files merged first (arrays appended, local keys win)
-  parameters   values; every string "$name" in the document is replaced by parameters.name
+  title        page title
+  notes        remarks for the reader of report.json (not rendered)
+  include      files merged first (arrays appended, local keys win); paths relative to the including
+               file, a file included twice is merged once
+  parameters   values; every string "$name" in the document is replaced by parameters.name (name: letters,
+               digits, _; other strings starting with $, such as "$\\sigma$", stay text)
   derived      expressions of the parameters ("E": "9 * K * G / (3 * K + G)")
   model        the material graph, a json_model document {"materials": [...]}
   point        strain_source (or deformation_gradient_source), stress_source; optional tangent_source,
                stress_property, tangent_property ("damaged_stress"), time_source
   record       extra columns wired to graph properties: "kappa": "j2::equivalent_plastic_strain";
                a rank-2 tensor gives six columns name_11 ... name_23, a component is selected with
-               "j2::plastic_strain[1,1]" (1-based); columns are ordered by name
+               "j2::plastic_strain[1,1]" (1-based); columns are ordered by name, names have no comma,
+               quote or control character and no two columns share one
   cases        name; control: strain | uniaxial_stress | mixed with stress_components ["22", "33"];
-               proportional: direction (strain per unit load) and path (load factors); non-proportional:
-               points (strain states in order, the load factor counts segments); stress (target per
-               unit load factor); tensors as components [11, 22, 33, 12, 13, 23]; steps per segment,
-               scale (applies to the strains), dt;
+               proportional: direction (strain per unit load) and path (load factors from 0); non-proportional:
+               points (strain states in order from zero, the load factor counts segments); stress (target per
+               unit load factor); tensors as components [11, 22, 33, 12, 13, 23] (finite strain: or nine,
+               then 21, 31, 32); steps per segment, scale (applies to the strains), dt (> 0, step 0 too);
                tangent_every: finite-difference tangent check every n-th step (1; 0 = never), fd_step (1e-7);
                max_cutbacks: halvings of a step that fails before the case stops (0, at most 20)
   figures      title, text, columns, panels: kind line (x, y, reference, logy, xlabel, ylabel),
                residuals, iterations; case or cases (list or "*")
   checks       name, case/cases, value, expected (default 0), tolerance, relative, where;
-               plot: true or {"x": ...} draws value, expected and the error per case
-  studies      step-size studies: name, case, steps (list of step counts), quantity (expression of
+               plot: true or {"x", "y" (default value), "xlabel", "ylabel"} draws y, expected and the error
+               per case
+  studies      step-size studies: name, case, steps (at least two step counts), quantity (expression of
                the final state, default stress_11), min_order (default 0.9); the error against the
                finest run is fitted with a power of the load increment
 
 Expressions are Python over numpy (np), the parameters, the derived values and the columns of the
-case: step, time, load, iterations, converged, tangent_error, strain_11..23 and stress_11..23
-(tensor components), p (pressure), q (von Mises stress) and the recorded columns.
+case: step, time (at the end of the step), load, iterations, converged (1 or 0), tangent_error,
+strain_11..23 and stress_11..23 (tensor components), p (pressure), q (von Mises stress) and the
+recorded columns (no column may be named p or q).
+
+material_report exits with 0 (converged), 1 (a case did not converge or failed numerically, e.g. det F <= 0; the
+other cases still ran) or 2 (an input error, before any case runs).
 """
 from __future__ import annotations
 
@@ -40,12 +51,13 @@ import sys
 
 from . import html
 from .data import run_tool
-from .expressions import Expressions, evaluate_checks
+from .expressions import Expressions, check_keys, evaluate_checks
 from .studies import evaluate_studies
 
 
 def build(tool: str, folder: pathlib.Path, out: pathlib.Path | None) -> html.ReportSummary:
     run = run_tool(tool, folder / "report.json")
+    check_keys(run.spec)
     expr = Expressions(run.spec, run.cases)
     checks = evaluate_checks(expr)
     studies = evaluate_studies(expr, run.studies)
