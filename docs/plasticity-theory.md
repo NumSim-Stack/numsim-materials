@@ -24,7 +24,7 @@ projector is
 
 $$\mathbb{I}^{\mathrm{dev}} = \mathbb{I}^{\mathrm{sym}} - \tfrac{1}{D}\,\boldsymbol{I}\otimes\boldsymbol{I}$$
 
-*(`plasticity_utils.h: make_IIdev`)*, so
+*(`tensor_identities.h: dev_projector`)*, so
 $\operatorname{dev}(\boldsymbol{a}) = \mathbb{I}^{\mathrm{dev}} : \boldsymbol{a} = \boldsymbol{a} - \tfrac{1}{D}\operatorname{tr}(\boldsymbol{a})\,\boldsymbol{I}$.
 
 ---
