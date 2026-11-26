@@ -29,10 +29,8 @@ std::string csv_field(V v, int digits = 0) {
 }
 } // namespace detail
 
-/// step_sink writing one CSV row per step and the Newton residuals (six digits) to a second stream. The
-/// columns are step_columns, then the property columns: time is the end of the step (0 for step 0),
-/// iterations the Newton corrections, converged 1 or 0, tangent_error nan where it was not checked.
-/// Numbers do not depend on the streams' locale or precision, which are left as they are.
+/// step_sink writing a CSV row per step (time: end of the step, converged: 1 or 0) and the residuals to a
+/// second stream; numbers ignore the streams' locale and precision.
 template <typename Traits>
 class csv_sink {
 public:

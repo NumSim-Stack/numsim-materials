@@ -216,9 +216,8 @@ deformation_control<T> parse_deformation_control(nlohmann::json const &c) {
 
 /// Proportional: "direction" times the factors of "path". Non-proportional: "points", strain states
 /// in order (the load factor then counts segments). Both are scaled by "scale". Only the control of
-/// the point's kinematics is parsed (is_finite_strain()); the other stays all prescribed. Tensors have
-/// six components, at finite strain also nine. Errors are
-/// invalid_arguments naming the case and the key.
+/// the point's kinematics is parsed (is_finite_strain()); the other stays all prescribed. Tensors take six
+/// components (or nine at finite strain); errors name the case and the key.
 template <typename T>
 load_case<T> parse_case(nlohmann::json const &c, bool finite_strain = false) {
   return detail::in_context(detail::case_label(c), [&] { return detail::parse_case<T>(c, finite_strain); });
