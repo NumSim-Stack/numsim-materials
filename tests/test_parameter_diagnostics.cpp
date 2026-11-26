@@ -6,6 +6,7 @@
 #include "numsim-materials/default_materials.h"
 #include "numsim-materials/io/json_material_factory.h"
 #include "numsim-materials/materials/linear_elasticity.h"
+#include "test_support.h"
 
 namespace {
 
@@ -259,6 +260,58 @@ TEST(ParameterDiagnostics, AWellFormedEntryStillBuilds) {
                       {"G", 76.92}};
 
   EXPECT_EQ(error_from(entry), "");
+}
+
+// --- The stored type of every declared parameter is checked at construction (#152) ---
+
+/// Declares "x" and "label" but reads neither while it is built.
+template <typename Traits> class lazy final : public nm::material_base<lazy<Traits>, Traits> {
+public:
+  using base = nm::material_base<lazy<Traits>, Traits>;
+  using value_type = typename base::value_type;
+  using input_parameter_controller = typename base::input_parameter_controller;
+
+  template <typename... Args>
+  explicit lazy(Args &&...args) : base(std::forward<Args>(args)...), m_out(base::template add_output<value_type>("out")) {
+    base::add_callback(&lazy::compute, m_out).reads();
+  }
+
+  static input_parameter_controller parameters() {
+    input_parameter_controller para{base::parameters()};
+    nm::required<value_type>(para, "x");
+    nm::optional<std::string>(para, "label", std::string{});
+    return para;
+  }
+
+  void compute() { m_out = base::template get_parameter<value_type>("x"); }
+
+private:
+  value_type &m_out;
+};
+
+/// The message of creating a lazy material with @p parameters, or "" if it was created.
+std::string lazy_error(std::initializer_list<nm::test::parameter<ctx_type>> parameters) {
+  ctx_type ctx;
+  try {
+    nm::test::add<lazy<policy>>(ctx, "lazy", parameters);
+    return "";
+  } catch (const std::exception &e) {
+    return e.what();
+  }
+}
+
+TEST(ParameterDiagnostics, AWrongTypeIsCaughtAtConstructionEvenIfNotReadThere) {
+  for (auto const &[msg, key] : {std::pair{lazy_error({{"x", 1}}), "'x'"},
+                                 std::pair{lazy_error({{"x", 1.0}, {"label", 3}}), "'label'"}}) {
+    ASSERT_FALSE(msg.empty()) << key << " of the wrong type was accepted";
+    EXPECT_NE(msg.find(key), std::string::npos) << msg;
+    EXPECT_NE(msg.find("wrong type"), std::string::npos) << msg;
+  }
+}
+
+TEST(ParameterDiagnostics, TheRightTypesStillBuild) {
+  EXPECT_EQ(lazy_error({{"x", 1.0}}), "");
+  EXPECT_EQ(lazy_error({{"x", 1.0}, {"label", "a"}}), "");
 }
 
 } // namespace

@@ -11,9 +11,9 @@
 
 namespace numsim::materials {
 
-/// Declare a required parameter `key` of type T.
+/// Declare a required parameter `key` of type T; a value of another type is rejected at construction.
 template <typename T, typename Controller> auto& required(Controller& para, std::string const& key) {
-  return para.template insert<T>(key).template add<numsim_core::is_required>();
+  return para.template insert<T>(key).template add<numsim_core::is_required>().template add<numsim_core::check_data_type>();
 }
 
 /// Run every check of `para`; all missing required parameters are named in one invalid_argument.
@@ -37,9 +37,11 @@ template <typename Controller, typename Handler> void check_parameters(Controlle
   throw std::invalid_argument(msg);
 }
 
-/// Declare an optional parameter `key` of type T with a default.
+/// Declare an optional parameter `key` of type T with a default; a value of another type is rejected at construction.
 template <typename T, typename Controller> auto& optional(Controller& para, std::string const& key, T value) {
-  return para.template insert<T>(key).template add<numsim_core::set_default>(std::move(value));
+  return para.template insert<T>(key)
+      .template add<numsim_core::set_default>(std::move(value))
+      .template add<numsim_core::check_data_type>();
 }
 
 }  // namespace numsim::materials

@@ -59,7 +59,11 @@ public:
     // object_store::create, AFTER the derived constructor has returned -- see
     // the note there.
     static auto check_para{Derived::parameters()};
-    check_parameters(check_para, base::m_parameter_handler);
+    try {
+      check_parameters(check_para, base::m_parameter_handler);
+    } catch (std::invalid_argument const& e) {
+      throw std::invalid_argument("material '" + base::name() + "': " + e.what());
+    }
   }
 
   material_base(material_base const&) = delete;
