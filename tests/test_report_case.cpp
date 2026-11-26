@@ -306,6 +306,18 @@ TEST(ReportJson, FiniteStrainPointAndNineComponentTensors) {
   EXPECT_THROW(r::parse_tensor<T>(json::parse("[1, 2, 3]")), std::invalid_argument);
 }
 
+TEST(ReportJson, NineComponentsOnlyAtFiniteStrain) {
+  std::string const nine{"[1, 0, 0, 0, 0, 0, 0, 0, 1]"}, zero{"[0, 0, 0, 0, 0, 0, 0, 0, 0]"};
+  for (auto const &[spec, key] : std::vector<std::pair<std::string, std::string_view>>{
+           {R"({"name": "u", "path": [0, 1], "direction": )" + nine + "}", "direction"},
+           {R"({"name": "u", "points": [)" + zero + ", " + nine + "]}", "points"},
+           {R"({"name": "u", "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1], "stress": )" + nine + "}", "stress"}}) {
+    EXPECT_TRUE(names(error_of([&] { return r::parse_case<T>(json::parse(spec)); }), {"case 'u'", key, "six"})) << spec;
+    EXPECT_EQ(error_of([&] { return r::parse_case<T>(json::parse(spec), true); }), "") << spec;
+  }
+  EXPECT_THROW(r::parse_symmetric<T>(json::parse(nine)), std::invalid_argument);
+}
+
 TEST(ReportJson, FiniteStrainMixedControlMayNameTheLowerComponents) {
   auto const spec = json::parse(R"({"name": "f", "control": "mixed", "stress_components": ["22", "33", "21"],
     "direction": [1, 0, 0, 0, 0, 0], "path": [0, 1]})");

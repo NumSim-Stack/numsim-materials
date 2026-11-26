@@ -19,8 +19,8 @@ report.json
   cases        name; control: strain | uniaxial_stress | mixed with stress_components ["22", "33"];
                proportional: direction (strain per unit load) and path (load factors from 0); non-proportional:
                points (strain states in order from zero, the load factor counts segments); stress (target per
-               unit load factor); tensors as components [11, 22, 33, 12, 13, 23]; steps per segment,
-               scale (applies to the strains), dt;
+               unit load factor); tensors as components [11, 22, 33, 12, 13, 23] (finite strain: or nine,
+               then 21, 31, 32); steps per segment, scale (applies to the strains), dt;
                tangent_every: finite-difference tangent check every n-th step (1; 0 = never), fd_step (1e-7);
                max_cutbacks: halvings of a step that fails before the case stops (0, at most 20)
   figures      title, text, columns, panels: kind line (x, y, reference, logy, xlabel, ylabel),

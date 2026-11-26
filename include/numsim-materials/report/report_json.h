@@ -53,9 +53,13 @@ tmech::tensor<T, 3, 2> parse_tensor(nlohmann::json const &j) {
   throw std::invalid_argument("expected six components [11, 22, 33, 12, 13, 23] or nine (then 21, 31, 32)");
 }
 
+/// Six components only, a small-strain tensor.
 template <typename T>
 tmech::tensor<T, 3, 2> parse_symmetric(nlohmann::json const &j) {
-  return parse_tensor<T>(j);
+  auto const v = j.get<std::vector<T>>();
+  if (v.size() != 6)
+    throw std::invalid_argument("expected six components [11, 22, 33, 12, 13, 23], got " + std::to_string(v.size()));
+  return symmetric_tensor<T>(std::span<T const, 6>{v.data(), 6});
 }
 
 namespace detail {
@@ -131,10 +135,16 @@ Control parse_control(nlohmann::json const &c, Control all_prescribed) {
   throw std::invalid_argument("\"control\": unknown '" + kind + "' (strain, uniaxial_stress, mixed)");
 }
 
+/// `j` as a tensor: nine components only at finite strain.
+template <typename T>
+tmech::tensor<T, 3, 2> tensor_of(nlohmann::json const &j, bool finite_strain) {
+  return finite_strain ? parse_tensor<T>(j) : parse_symmetric<T>(j);
+}
+
 /// c[key] as a tensor; errors name the key.
 template <typename T>
-tmech::tensor<T, 3, 2> tensor_at(nlohmann::json const &c, std::string const &key) {
-  return in_context("\"" + key + "\"", [&] { return parse_symmetric<T>(c.at(key)); });
+tmech::tensor<T, 3, 2> tensor_at(nlohmann::json const &c, std::string const &key, bool finite_strain) {
+  return in_context("\"" + key + "\"", [&] { return tensor_of<T>(c.at(key), finite_strain); });
 }
 
 template <typename T>
@@ -155,13 +165,13 @@ load_case<T> parse_case(nlohmann::json const &c, bool finite_strain) {
     if (!list.is_array())
       throw std::invalid_argument("\"points\": expected an array of tensors, got " + list.dump());
     for (std::size_t i{0}; i < list.size(); ++i) {
-      points.push_back(tensor2{scale * in_context("\"points\"[" + std::to_string(i) + "]", [&] { return parse_symmetric<T>(list[i]); })});
+      points.push_back(tensor2{scale * in_context("\"points\"[" + std::to_string(i) + "]", [&] { return tensor_of<T>(list[i], finite_strain); })});
       factors.push_back(T(factors.size()));
     }
     if (!points.empty() && tmech::norm(points.front()) != T{0})
       throw std::invalid_argument("the first point must be zero (step 0 is the unloaded state)");
   } else {
-    auto const direction{tensor_at<T>(c, "direction")};
+    auto const direction{tensor_at<T>(c, "direction", finite_strain)};
     factors = get<std::vector<T>>(c, "path");
     if (!factors.empty() && factors.front() != T{0})
       throw std::invalid_argument("the path must start at 0 (step 0 is the unloaded state)");
@@ -170,7 +180,7 @@ load_case<T> parse_case(nlohmann::json const &c, bool finite_strain) {
   }
   return {name, finite_strain ? load_control<T>::strain() : parse_control(c, load_control<T>::strain()),
           finite_strain ? parse_control(c, deformation_control<T>::deformation()) : deformation_control<T>::deformation(),
-          std::move(points), c.contains("stress") ? tensor_at<T>(c, "stress") : tensor2{},
+          std::move(points), c.contains("stress") ? tensor_at<T>(c, "stress", finite_strain) : tensor2{},
           load_path<T>{std::move(factors), count(c, "steps", 50, 1), c.contains("points") ? T{1} : scale, get<T>(c, "dt", T{1})},
           count(c, "tangent_every", 1, 0), finite_strain,
           c.contains("fd_step") ? std::optional<T>{get<T>(c, "fd_step")} : std::nullopt, max_cutbacks(c)};
@@ -190,7 +200,8 @@ deformation_control<T> parse_deformation_control(nlohmann::json const &c) {
 
 /// Proportional: "direction" times the factors of "path". Non-proportional: "points", strain states
 /// in order (the load factor then counts segments). Both are scaled by "scale". Only the control of
-/// the point's kinematics is parsed (is_finite_strain()); the other stays all prescribed. Errors are
+/// the point's kinematics is parsed (is_finite_strain()); the other stays all prescribed. Tensors have
+/// six components, at finite strain also nine. Errors are
 /// invalid_arguments naming the case and the key.
 template <typename T>
 load_case<T> parse_case(nlohmann::json const &c, bool finite_strain = false) {
