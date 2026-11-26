@@ -57,6 +57,16 @@ numsim_dependency(numsim-core
   FIND_PACKAGE_ARGS CONFIG
   OPTIONS NUMSIM_CORE_BUILD_TESTS=OFF NUMSIM_CORE_BUILD_EXAMPLES=OFF
           NUMSIM_CORE_INSTALL=${NUMSIM_MATERIALS_INSTALL})
+# The tag is cached: a build dir configured before a bump keeps fetching the old core.
+set(_nm_core_version "${numsim-core_VERSION}")
+if(NOT _nm_core_version AND EXISTS "${numsim-core_SOURCE_DIR}/project-meta-info.in")
+  file(STRINGS "${numsim-core_SOURCE_DIR}/project-meta-info.in" _nm_core_version REGEX "project_version")
+  string(REGEX MATCH "[0-9]+\\.[0-9]+\\.[0-9]+" _nm_core_version "${_nm_core_version}")
+endif()
+if(_nm_core_version AND _nm_core_version VERSION_LESS 1.1.0)
+  message(WARNING "numsim-core ${_nm_core_version} predates v1.1.0: the JSON path's exception does not name the "
+                  "missing parameters. Reconfigure with -DNUMSIM_MATERIALS_NUMSIM_CORE_TAG=v1.2.1 (the pin).")
+endif()
 
 numsim_dependency(tmech
   TARGET tmech::tmech

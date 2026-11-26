@@ -53,17 +53,10 @@ public:
   material_base(parameter_handler const& parameter,
                 property_handler& properties,
                 material_handler& /*materials*/)
-      : base(parameter, properties)
+      : base(checked(parameter), properties)
   {
-    // Validation only. Registration in the material handler happens in
-    // object_store::create, AFTER the derived constructor has returned -- see
-    // the note there.
-    static auto check_para{Derived::parameters()};
-    try {
-      check_parameters(check_para, base::m_parameter_handler);
-    } catch (std::invalid_argument const& e) {
-      throw std::invalid_argument("material '" + base::name() + "': " + e.what());
-    }
+    // Registration in the material handler happens in object_store::create,
+    // AFTER the derived constructor has returned -- see the note there.
   }
 
   material_base(material_base const&) = delete;
@@ -288,6 +281,19 @@ protected:
   }
 
 private:
+  /// `parameter` with the defaults applied, checked before the base reads "name": a missing name is listed with the rest.
+  static parameter_handler checked(parameter_handler parameter) {
+    static auto const check_para{Derived::parameters()};
+    try {
+      check_parameters(check_para, parameter);
+    } catch (std::invalid_argument const& e) {
+      if (parameter.contains("name") && parameter.data("name").type() == typeid(std::string))
+        throw std::invalid_argument("material '" + parameter.template get<std::string>("name") + "': " + e.what());
+      throw;
+    }
+    return parameter;
+  }
+
   template <typename P, typename A>
   static void collect(std::vector<P>& to, A const& output) {
     if constexpr (std::is_pointer_v<A>) {

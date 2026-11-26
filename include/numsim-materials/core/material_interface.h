@@ -114,9 +114,9 @@ public:
   using property_registry_type = property_registry_interface<property_handler, property_traits>;
   using parameter_handler = typename Traits::ParameterHandler;
 
-  material_interface(parameter_handler const& param_handler,
+  material_interface(parameter_handler param_handler,
                      property_handler& prop_handler)
-      : m_parameter_handler(param_handler),
+      : m_parameter_handler(std::move(param_handler)),
         m_property_handler(prop_handler),
         m_name(m_parameter_handler.template get<std::string>("name")) {}
 

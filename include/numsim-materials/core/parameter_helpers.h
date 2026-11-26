@@ -16,7 +16,7 @@ template <typename T, typename Controller> auto& required(Controller& para, std:
   return para.template insert<T>(key).template add<numsim_core::is_required>().template add<numsim_core::check_data_type>();
 }
 
-/// Run every check of `para`; all missing required parameters are named in one invalid_argument.
+/// Run every check of `para`; all missing required parameters are named, sorted, in one invalid_argument.
 template <typename Controller, typename Handler> void check_parameters(Controller const& para, Handler& handler) {
   std::vector<std::string> missing;
   for (auto const& [key, check] : para) {
