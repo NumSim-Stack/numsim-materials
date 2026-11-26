@@ -28,23 +28,13 @@
 #include "numsim-materials/core/input_types.h"
 #include "numsim-materials/core/property_registry_interface.h"
 #include "numsim-materials/core/material_ref.h"
+#include "numsim-materials/core/parameter_helpers.h"
 #include "numsim-materials/core/traits.h"
 #include "numsim-materials/core/unknown_spec.h"
 
 namespace numsim::materials {
 
 namespace detail {
-/// How a parameter type reads in an error message.
-template <typename T>
-std::string parameter_type_label() {
-  if constexpr (std::is_same_v<T, bool>) return "a boolean";
-  else if constexpr (std::is_floating_point_v<T>) return "a real number";
-  else if constexpr (std::is_integral_v<T>) return "an integer";
-  else if constexpr (std::is_same_v<T, std::string>) return "a string";
-  else if constexpr (requires { typename T::value_type; typename T::iterator; }) return "a list";
-  else return std::string{"of type "} + typeid(T).name();
-}
-
 /// Types whose recomputed value same_value() can compare with the stored one; only these can be constant.
 template <typename T>
 concept verifiable = std::copy_constructible<T> && !std::is_pointer_v<T> && // a pointer compares by address
