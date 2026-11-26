@@ -4,7 +4,8 @@ Writes <directory>/<material>.html, self-contained (figures embedded), and an in
 --check runs the cases and checks only; the exit code is 1 if a check fails or a step does not converge.
 
 report.json
-  include      files merged first (arrays appended, local keys win)
+  include      files merged first (arrays appended, local keys win); paths relative to the including
+               file, a file included twice is merged once
   parameters   values; every string "$name" in the document is replaced by parameters.name (name: letters,
                digits, _; other strings starting with $, such as "$\\sigma$", stay text)
   derived      expressions of the parameters ("E": "9 * K * G / (3 * K + G)")

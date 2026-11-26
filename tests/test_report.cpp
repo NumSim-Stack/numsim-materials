@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 #include <filesystem>
 #include <fstream>
+#include <stdexcept>
+#include <string>
 #include <nlohmann/json.hpp>
 #include <tmech/tmech.h>
 #include "numsim-materials/driver/material_point_driver.h"
@@ -19,6 +21,19 @@ using ctx_type = nm::material_context<policy>;
 using driver = nm::material_point_driver<policy>;
 using columns = r::property_columns<policy>;
 using json = nlohmann::json;
+
+/// The message of the invalid_argument `f` throws; empty if it does not throw.
+template <typename F>
+std::string error_of(F &&f) {
+  try {
+    static_cast<void>(f());
+  } catch (std::invalid_argument const &e) {
+    return e.what();
+  } catch (std::exception const &e) {
+    return std::string{"not an invalid_argument: "} + e.what();
+  }
+  return {};
+}
 
 constexpr T H{1000.0};
 
@@ -129,8 +144,35 @@ TEST(ReportSpec, IncludeCycleThrows) {
   auto const dir{std::filesystem::temp_directory_path() / "numsim_report_spec_cycle"};
   std::filesystem::create_directories(dir);
   std::ofstream{dir / "a.json"} << R"({"include": ["b.json"]})";
-  std::ofstream{dir / "b.json"} << R"({"include": ["a.json"]})";
-  EXPECT_THROW(r::resolve_report(json::parse(R"({"include": ["a.json"]})"), dir.string()), std::invalid_argument);
+  std::ofstream{dir / "b.json"} << R"({"include": ["./a.json"]})";
+  auto const message{error_of([&] { return r::resolve_report(json::parse(R"({"include": ["a.json"]})"), dir); })};
+  EXPECT_NE(message.find("cycle"), std::string::npos) << message;
+  EXPECT_NE(message.find("b.json"), std::string::npos) << message;
+}
+
+TEST(ReportSpec, ADiamondIncludeMergesTheSharedFileOnce) {
+  auto const dir{std::filesystem::temp_directory_path() / "numsim_report_spec_diamond"};
+  std::filesystem::create_directories(dir / "sub");
+  std::ofstream{dir / "base.json"} << R"({"figures": [{"title": "f"}], "cases": [{"name": "a"}]})";
+  std::ofstream{dir / "left.json"} << R"({"include": ["base.json"]})";
+  std::ofstream{dir / "sub" / "right.json"} << R"({"include": ["../base.json"], "figures": [{"title": "g"}]})";
+  auto const out = r::resolve_report(json::parse(R"({"include": ["left.json", "sub/right.json"]})"), dir);
+  ASSERT_EQ(out["figures"].size(), 2u);
+  EXPECT_EQ(out["figures"][1]["title"], "g");
+  EXPECT_EQ(out["cases"].size(), 1u);
+}
+
+TEST(ReportSpec, IncludesAreRelativeFilesHoldingAnObject) {
+  auto const dir{std::filesystem::temp_directory_path() / "numsim_report_spec_include_checks"};
+  std::filesystem::create_directories(dir);
+  std::ofstream{dir / "list.json"} << "[1, 2]";
+  std::ofstream{dir / "base.json"} << R"({"cases": []})";
+  auto const error = [&](json const &spec) { return error_of([&] { return r::resolve_report(spec, dir); }); };
+  EXPECT_NE(error(json::parse(R"({"include": ["list.json"]})")).find("list.json"), std::string::npos);
+  EXPECT_NE(error(json{{"include", json::array({(dir / "base.json").string()})}}).find("absolute"), std::string::npos);
+  EXPECT_NE(error(json::parse(R"({"include": "base.json"})")).find("include"), std::string::npos);
+  EXPECT_NE(error(json::parse(R"({"include": ["missing.json"]})")).find("missing.json"), std::string::npos);
+  EXPECT_NE(error(json::array()).find("object"), std::string::npos);
 }
 
 TEST(ReportSpec, AnIncludedFileThatIsNoJsonIsNamed) {
