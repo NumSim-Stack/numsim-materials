@@ -5,6 +5,7 @@
 #include <tmech/tmech.h>
 #include "numsim-materials/core/elastic_constants.h"
 #include "numsim-materials/core/material_context.h"
+#include "numsim-materials/core/partial_check.h"
 #include "numsim-materials/driver/deformation_gradient_driver.h"
 #include "numsim-materials/driver/external_state_source.h"
 #include "numsim-materials/umat/json_model.h"
@@ -23,6 +24,7 @@ using tensor2 = tmech::tensor<T, 3, 2>;
 using driver = nm::deformation_gradient_driver<policy>;
 using control = nm::deformation_control<T>;
 using numsim::materials::test::stretch;
+using tensor4 = tmech::tensor<T, 3, 4>;
 
 /// The driver on "F" -> "hencky" (the push-forward at the end of the chain).
 policy::ParameterHandler point() {
@@ -162,6 +164,58 @@ TEST(Hencky, TangentMatchesFiniteDifferencesAtAGeneralFWithAnEigenstrain) {
     auto const res{d.step(F, tensor2{}, control::deformation(), 0, 1)};
     ASSERT_TRUE(res.converged);
     EXPECT_LT(d.tangent_error(res), 1e-6) << fixed;
+  }
+}
+
+/// A general F: stretch, rotation and shear.
+tensor2 general_F() {
+  tmech::tensor<T, 3, 1> axis;
+  axis(0) = 1, axis(1) = 2, axis(2) = 2;
+  tensor2 U{stretch(1.25, 0.9, 1.1)};
+  U(0, 1) = U(1, 0) = 0.15;
+  tensor2 F{nm::rotation(tmech::tensor<T, 3, 1>{axis / 3}, T{0.7}) * U};
+  F(0, 1) += 0.2;
+  return F;
+}
+
+void bind(ctx_type &ctx, tensor2 const &F, T temperature) {
+  dynamic_cast<nm::external_deformation_gradient_source<policy> *>(ctx.find("F"))->bind(tmech::eye<T, 3, 2>(), F);
+  dynamic_cast<nm::external_scalar_source<policy> *>(ctx.find("temperature"))->bind(T0, temperature);
+  ctx.update();
+}
+
+TEST(Hencky, TheDerivativeOfPByFIsThePublishedTangent) {
+  for (bool const fixed : {false, true}) {
+    auto ctx{build(true, fixed)};
+    auto const &dP{ctx->derivative<tensor4>("hencky", "stress", "F", "deformation_gradient")};
+    bind(*ctx, general_F(), T0 + 40);
+    EXPECT_LT(nm::test::relative(dP, ctx->get<tensor4>("hencky", "tangent")), 1e-12) << fixed;
+  }
+}
+
+TEST(Hencky, TheDerivativeOfPByTheTemperatureMatchesCentralDifferences) {
+  for (bool const fixed : {false, true}) {
+    auto ctx{build(true, fixed)};
+    auto const &dP{ctx->derivative<tensor2>("hencky", "stress", "temperature", "state")};
+    constexpr T h{1e-3};
+    bind(*ctx, general_F(), T0 + 40 + h);
+    tensor2 const plus{ctx->get<tensor2>("hencky", "stress")};
+    bind(*ctx, general_F(), T0 + 40 - h);
+    tensor2 const minus{ctx->get<tensor2>("hencky", "stress")};
+    bind(*ctx, general_F(), T0 + 40);
+    tensor2 const fd{(plus - minus) / (2 * h)};
+    EXPECT_LT(nm::test::relative(dP, fd), 1e-8) << fixed;
+    ASSERT_GT(tmech::norm(fd), 1e-3) << "a temperature dependence to see";
+  }
+}
+
+TEST(Hencky, TheDeclaredPartialsOfTheChainMatchFiniteDifferences) {
+  for (bool const fixed : {false, true}) {
+    auto ctx{build(true, fixed)};
+    bind(*ctx, general_F(), T0 + 40);
+    for (auto const *material : ctx->materials())
+      for (auto const &mismatch : nm::check_partials(*ctx, material->name()))
+        ADD_FAILURE() << fixed << ": " << mismatch;
   }
 }
 

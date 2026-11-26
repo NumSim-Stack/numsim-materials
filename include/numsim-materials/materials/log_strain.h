@@ -10,7 +10,7 @@
 namespace numsim::materials {
 
 /// Logarithmic (Hencky) strain ln V = ln(F F^T) / 2 of the deformation gradient ("deformation_gradient_source").
-/// Outputs "strain" and "d_strain_d_deformation_gradient" (d ln V / dF).
+/// Outputs "strain" with its partial d ln V / dF, and the same as "d_strain_d_deformation_gradient" (unsymmetric).
 template <typename Traits>
 class log_strain final : public material_base<log_strain<Traits>, Traits> {
 public:
@@ -28,8 +28,8 @@ public:
         m_dstrain(base::template add_output<tensor4>("d_strain_d_deformation_gradient")),
         m_F(base::template add_input<tensor2>(base::template get_parameter<std::string>("deformation_gradient_source"),
                                               "deformation_gradient", EdgeKind::Global)) {
-    // no partials(): F is not symmetric and the declared derivatives cover symmetric tensors only
-    base::add_callback(&log_strain::compute, m_strain, m_dstrain).reads(m_F);
+    base::add_callback(&log_strain::compute, m_strain, m_dstrain).reads(m_F).partials(m_strain, m_F);
+    base::unsymmetric_output(m_dstrain);
   }
 
   static input_parameter_controller parameters() {
@@ -46,6 +46,8 @@ public:
     m_strain = value_type{0.5} * ln_b;
     // d ln V / dF = 1/2 (d ln b / db) : (db / dF), db_ij / dF_kl = d_ik F_jl + F_il d_jk
     m_dstrain = value_type{0.5} * tmech::dcontract(tensor4{ln_b.derivative()}, tensor4{tmech::otimesu(I, F) + tmech::otimesl(F, I)});
+    if (base::want_partials())
+      base::partial(m_strain, m_F) = m_dstrain;
   }
 
 private:
