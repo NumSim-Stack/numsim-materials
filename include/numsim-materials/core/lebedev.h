@@ -16,8 +16,8 @@ namespace numsim::materials::lebedev {
 
 using detail::node;
 
-/// Degrees of polynomial exactness with a table: 3 (6 points) ... 23 (194 points).
-inline constexpr std::array<std::size_t, 8> precisions_available{3, 5, 7, 9, 11, 13, 15, 23};
+/// Degrees of polynomial exactness with a table: 3 (6 points) ... 77 (2030 points).
+inline constexpr std::array<std::size_t, 12> precisions_available{3, 5, 7, 9, 11, 13, 15, 23, 25, 41, 59, 77};
 
 inline constexpr std::span<std::size_t const> precisions() { return precisions_available; }
 
@@ -31,7 +31,11 @@ inline std::span<node const> rule(std::size_t precision) {
   case 13: return detail::precision_13;
   case 15: return detail::precision_15;
   case 23: return detail::precision_23;
-  default: throw std::invalid_argument("lebedev: no rule of precision " + std::to_string(precision) + " (3, 5, 7, 9, 11, 13, 15, 23)");
+  case 25: return detail::precision_25;
+  case 41: return detail::precision_41;
+  case 59: return detail::precision_59;
+  case 77: return detail::precision_77;
+  default: throw std::invalid_argument("lebedev: no rule of precision " + std::to_string(precision) + " (3, 5, 7, 9, 11, 13, 15, 23, 25, 41, 59, 77)");
   }
 }
 

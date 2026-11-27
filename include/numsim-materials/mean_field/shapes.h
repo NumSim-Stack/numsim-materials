@@ -1,6 +1,8 @@
 #ifndef NUMSIM_MATERIALS_MEAN_FIELD_SHAPES_H
 #define NUMSIM_MATERIALS_MEAN_FIELD_SHAPES_H
 
+#include <cstddef>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -11,19 +13,23 @@
 #include "numsim-materials/core/eshelby.h"
 #include "numsim-materials/core/object_spec.h"
 #include "numsim-materials/core/parameter_helpers.h"
+#include "numsim-materials/core/polarisation.h"
 #include "numsim-materials/materials/detail/direction.h"
 
 namespace numsim::materials::mean_field {
 
-/// An inclusion shape as data: its Eshelby tensor in an isotropic medium of Poisson's ratio nu. For the
-/// kernels whose reference medium is the unknown (self-consistent); the others consume Eshelby properties.
+/// An inclusion shape as data: its Eshelby tensor in an isotropic medium of Poisson's ratio nu, and the
+/// quadrature rule of its Hill polarisation tensor in any medium (polarisation::hill). For the kernels whose
+/// reference medium is the unknown (self-consistent); the others consume Eshelby properties.
 template <typename Traits>
 class shape {
 public:
   using value_type = typename Traits::value_type;
   using tensor4 = tmech::tensor<value_type, 3, 4>;
+  using rule = std::vector<polarisation::node<value_type>>;
   virtual ~shape() = default;
   [[nodiscard]] virtual tensor4 eshelby(value_type nu) const = 0;
+  [[nodiscard]] virtual rule polarisation_rule(polarisation::scheme const &quadrature) const = 0;
 };
 
 template <typename Derived, typename Traits>
@@ -57,6 +63,9 @@ public:
   using typename shape<Traits>::tensor4;
   explicit sphere(typename base::parameter_handler p) : base(std::move(p)) {}
   [[nodiscard]] tensor4 eshelby(value_type nu) const override { return eshelby::sphere(nu); }
+  [[nodiscard]] typename shape<Traits>::rule polarisation_rule(polarisation::scheme const &quadrature) const override {
+    return polarisation::rule<value_type>({1, 1, 1}, tmech::tensor<value_type, 3, 2>{tmech::eye<value_type, 3, 2>()}, quadrature);
+  }
 };
 
 /// Parameters: "direction" (default x1).
@@ -74,6 +83,9 @@ public:
     return para;
   }
   [[nodiscard]] tensor4 eshelby(value_type nu) const override { return eshelby::cylinder(nu, m_direction); }
+  [[nodiscard]] typename shape<Traits>::rule polarisation_rule(polarisation::scheme const &quadrature) const override {
+    return polarisation::rule<value_type>({std::numeric_limits<value_type>::infinity(), 1, 1}, rotation_to(m_direction), quadrature);
+  }
 
 private:
   tmech::tensor<value_type, 3, 1> m_direction;
@@ -101,6 +113,9 @@ public:
   [[nodiscard]] tensor4 eshelby(value_type nu) const override {
     return rotate(eshelby::ellipsoid(nu, m_aspect_ratio, value_type{1}, value_type{1}), m_rotation);
   }
+  [[nodiscard]] typename shape<Traits>::rule polarisation_rule(polarisation::scheme const &quadrature) const override {
+    return polarisation::rule<value_type>({m_aspect_ratio, 1, 1}, m_rotation, quadrature);
+  }
 
 private:
   value_type m_aspect_ratio;
@@ -124,6 +139,9 @@ public:
     return para;
   }
   [[nodiscard]] tensor4 eshelby(value_type nu) const override { return eshelby::ellipsoid(nu, m_a[0], m_a[1], m_a[2]); }
+  [[nodiscard]] typename shape<Traits>::rule polarisation_rule(polarisation::scheme const &quadrature) const override {
+    return polarisation::rule<value_type>({m_a[0], m_a[1], m_a[2]}, tmech::tensor<value_type, 3, 2>{tmech::eye<value_type, 3, 2>()}, quadrature);
+  }
 
 private:
   std::vector<value_type> m_a;

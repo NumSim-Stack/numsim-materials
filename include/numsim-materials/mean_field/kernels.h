@@ -1,6 +1,7 @@
 #ifndef NUMSIM_MATERIALS_MEAN_FIELD_KERNELS_H
 #define NUMSIM_MATERIALS_MEAN_FIELD_KERNELS_H
 
+#include <cmath>
 #include <ranges>
 #include <map>
 #include <memory>
@@ -12,9 +13,11 @@
 #include <vector>
 
 #include <tmech/tmech.h>
+#include "numsim-materials/core/elastic_constants.h"
 #include "numsim-materials/core/isotropize.h"
 #include "numsim-materials/core/object_spec.h"
 #include "numsim-materials/core/parameter_helpers.h"
+#include "numsim-materials/core/polarisation.h"
 #include "numsim-materials/core/tensor_identities.h"
 #include "numsim-materials/mean_field/kernel.h"
 #include "numsim-materials/mean_field/shapes.h"
@@ -139,13 +142,15 @@ public:
   }
 };
 
-/// Every phase embedded in the effective medium C: T_r = (I + S_r(nu) : C^-1 : (C_r - C))^-1,
-/// A_r = T_r : (sum_s c_s T_s)^-1, C = sum_r c_r C_r : A_r, iterated to "tolerance" with relaxed steps from
-/// the last converged C (Voigt at first). S_r comes from the phase's shape at the Poisson's ratio of the
-/// isotropised C (exact for an isotropic C).
+/// Every phase embedded in the effective medium C: A_r = T_r : (sum_s c_s T_s)^-1, C = sum_r c_r C_r : A_r,
+/// iterated to "tolerance" with relaxed steps from the last converged C (Voigt at first).
+/// "reference": "anisotropic" (default): T_r = (I + P_r(C) : (C_r - C))^-1 with Hill's polarisation tensor of
+/// the shape in C itself; "isotropised": T_r = (I + S_r(nu0) : C0^-1 : (C_r - C0))^-1 in C0 = iso(C).
 ///
 /// Parameters: "shapes" {phase: {"type": sphere | cylinder | spheroid | ellipsoid, ...}} for every phase,
-/// "relaxation" (0.5, in (0, 1]), "tolerance" (1e-10), "max_iterations" (100).
+/// "reference", "quadrature": "legendre" (default, "quadrature_order" 12 points per panel, at most 64; a sphere takes
+/// Lebedev 77) or "lebedev" ("lebedev_degree" 41, a tabled degree), "relaxation" (0.5, in (0, 1]), "tolerance" (1e-10),
+/// "max_iterations" (100).
 template <typename Traits>
 class self_consistent final : public kernel_base<self_consistent<Traits>, Traits> {
 public:
@@ -153,21 +158,37 @@ public:
   using typename kernel<Traits>::value_type;
   using typename kernel<Traits>::tensor4;
   using spec = object_spec<typename base::parameter_handler>;
+  enum class reference_medium { anisotropic, isotropised };
 
   explicit self_consistent(typename base::parameter_handler p)
-      : base(std::move(p)), m_relaxation(base::template get<value_type>("relaxation")), m_tolerance(base::template get<value_type>("tolerance")),
-        m_max_iterations(base::template get<int>("max_iterations")) {
+      : base(std::move(p)), m_reference(parse_reference(base::template get<std::string>("reference"))),
+        m_relaxation(base::template get<value_type>("relaxation")), m_tolerance(base::template get<value_type>("tolerance")),
+        m_max_iterations(base::template get<int>("max_iterations")), m_order(base::template get<int>("quadrature_order")),
+        m_degree(base::template get<int>("lebedev_degree")), m_quadrature(parse_quadrature(base::template get<std::string>("quadrature"))) {
     if (!(m_relaxation > 0 && m_relaxation <= 1))
       throw std::invalid_argument("self_consistent: relaxation must lie in (0, 1]");
     if (!(m_tolerance > 0))
       throw std::invalid_argument("self_consistent: tolerance must be positive");
     if (m_max_iterations < 1)
       throw std::invalid_argument("self_consistent: max_iterations must be at least one");
+    if (m_quadrature == polarisation::quadrature::legendre && (m_order < 2 || m_order > max_order))
+      throw std::invalid_argument(std::format("self_consistent: quadrature_order must lie in [2, {}], got {}", max_order, m_order));
+    if (m_quadrature == polarisation::quadrature::lebedev) {
+      try {
+        (void)lebedev::rule(static_cast<std::size_t>(m_degree));
+      } catch (std::invalid_argument const &e) {
+        throw std::invalid_argument(std::string{"self_consistent: lebedev_degree: "} + e.what());
+      }
+    }
   }
 
   static typename base::input_parameter_controller parameters() {
     typename base::input_parameter_controller para;
     required<std::map<std::string, spec>>(para, "shapes");
+    optional<std::string>(para, "reference", std::string{"anisotropic"});
+    optional<std::string>(para, "quadrature", std::string{"legendre"});
+    optional<int>(para, "quadrature_order", 12);
+    optional<int>(para, "lebedev_degree", 41);
     optional<value_type>(para, "relaxation", value_type{0.5});
     optional<value_type>(para, "tolerance", value_type{1e-10});
     optional<int>(para, "max_iterations", 100);
@@ -179,11 +200,15 @@ public:
   void bind(std::vector<std::string> const &names) override {
     auto const &shapes{base::template get<std::map<std::string, spec>>("shapes")};
     m_shapes.clear();
+    m_rules.clear();
     for (auto const &n : names) {
       auto const it{shapes.find(n)};
       if (it == shapes.end())
         throw std::invalid_argument("self_consistent: no shape for phase '" + n + "'");
       m_shapes.push_back(shape_registry<Traits>().make(it->second));
+      if (m_reference == reference_medium::anisotropic)
+        m_rules.push_back(m_shapes.back()->polarisation_rule(
+            {m_quadrature, static_cast<std::size_t>(m_quadrature == polarisation::quadrature::lebedev ? m_degree : m_order)}));
     }
   }
 
@@ -197,14 +222,10 @@ public:
     std::vector<tensor4> T(phases.size());
     value_type residual{0};
     for (int it{0}; it < m_max_iterations; ++it) {
-      tensor4 const C_inv{tmech::inv(C)};
-      auto const [K, G]{isotropize(C)};
-      value_type const nu{(3 * K - 2 * G) / (2 * (3 * K + G))};
+      dilute_in(C, phases, T);
       tensor4 T_sum;
-      for (auto const& [t, shape, phase] : std::views::zip(T, m_shapes, phases)) {
-        t = detail::dilute(shape->eshelby(nu), C_inv, C, *phase.tangent);
+      for (auto const& [t, phase] : std::views::zip(T, phases))
         T_sum += phase.fraction * t;
-      }
       tensor4 const T_inv{tmech::inv(T_sum)};
       tensor4 C_new;
       for (auto const& [a, t, phase] : std::views::zip(A, T, phases)) {
@@ -212,6 +233,8 @@ public:
         C_new += phase.fraction * tmech::dcontract(*phase.tangent, a);
       }
       residual = tmech::norm(tensor4{C_new - C}) / tmech::norm(C_new);
+      if (!std::isfinite(residual))
+        throw cutback_error(std::format("self_consistent: no convergence, non-finite residual in iteration {}", it + 1));
       if (residual <= m_tolerance) {
         m_C = C_new;
         return;
@@ -223,9 +246,44 @@ public:
   }
 
 private:
+  /// The dilute concentrations T_r of the phases in the reference medium of C.
+  void dilute_in(tensor4 const &C, std::span<phase_view<value_type> const> phases, std::span<tensor4> T) const {
+    if (m_reference == reference_medium::anisotropic) {
+      for (auto const& [t, rule, phase] : std::views::zip(T, m_rules, phases))
+        t = tmech::inv(sym_identity<value_type, 3>() +
+                       tmech::dcontract(polarisation::hill<value_type>(rule, C), tensor4{*phase.tangent - C}));
+      return;
+    }
+    auto const [K, G]{isotropize(C)};
+    tensor4 const C0{isotropic_stiffness<value_type, 3>(K, G)}, C0_inv{tmech::inv(C0)};
+    for (auto const& [t, shape, phase] : std::views::zip(T, m_shapes, phases))
+      t = detail::dilute(shape->eshelby(poisson_ratio(K, G)), C0_inv, C0, *phase.tangent);
+  }
+
+  static reference_medium parse_reference(std::string const &s) {
+    if (s == "anisotropic")
+      return reference_medium::anisotropic;
+    if (s == "isotropised")
+      return reference_medium::isotropised;
+    throw std::invalid_argument("self_consistent: unknown reference '" + s + "' (anisotropic, isotropised)");
+  }
+
+  static polarisation::quadrature parse_quadrature(std::string const &s) {
+    if (s == "legendre")
+      return polarisation::quadrature::legendre;
+    if (s == "lebedev")
+      return polarisation::quadrature::lebedev;
+    throw std::invalid_argument("self_consistent: unknown quadrature '" + s + "' (legendre, lebedev)");
+  }
+
+  static constexpr int max_order{64}; ///< ~1.8e5 directions per phase at aspect ratio 1000
+
+  reference_medium m_reference;
   value_type m_relaxation, m_tolerance;
-  int m_max_iterations;
+  int m_max_iterations, m_order, m_degree;
+  polarisation::quadrature m_quadrature;
   std::vector<std::unique_ptr<shape<Traits>>> m_shapes;
+  std::vector<typename shape<Traits>::rule> m_rules; ///< polarisation rules of the anisotropic reference
   std::optional<tensor4> m_C; ///< the last converged medium: a warm start, not history
 };
 

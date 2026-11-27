@@ -18,7 +18,7 @@ is a `*_source` parameter. `tools/convert_uvwmaterial_card.py` converts the old 
 | `small_strain_rule_of_mixture_composite` (`kernal` voigt / reuss / vrh) | `mean_field_composite_global` + `linear_stress` | `phases` (phase nodes), `kernel` {`type`: voigt / reuss / hill}; a tangent producer, the stress is a `linear_stress` on it; nonlinear phases go through `mean_field_strain` (same kernels) and `mean_field_composite_local_linear` (Voigt) or `_nonlinear` | #130 |
 | `eshelby_tensor_solid_sphere`, `_cylinder_x1/x2/x3`, `_cylinder`, `_cylindrical_ellipsoid`, `_general_geometry` | `eshelby_sphere`, `eshelby_cylinder`, `eshelby_spheroid`, `eshelby_ellipsoid` | `nu_source` / `nu_property` (Poisson's ratio as a produced property: `poisson_ratio_from_moduli` of K and G, or `isotropic_moduli` of a tangent), `direction`, `aspect_ratio`, `semi_axes`; output `tensor` | #128 |
 | `inclusion` (a phase of any composite) | `phase` | produced properties only: `tangent_source`, `fraction_source` (a `constant_scalar` or a cure), optional `eshelby_source` / `depolarisation_source` (the nodes above); `tangent_edge` local for a nonlinear phase inside `mean_field_strain` | #130, #131, #137, #144 |
-| `small_strain_mean_field_composite` (`kernal` dilute / mori_tanaka / scs) | `mean_field_composite_global` + `linear_stress` | `phases` (phase nodes, the matrix first), `kernel` {`type`: dilute / mori_tanaka / self_consistent}; self-consistent carries the `shapes` of every phase in its kernel and converges inside the node | #131 |
+| `small_strain_mean_field_composite` (`kernal` dilute / mori_tanaka / scs) | `mean_field_composite_global` + `linear_stress` | `phases` (phase nodes, the matrix first), `kernel` {`type`: dilute / mori_tanaka / self_consistent}; self-consistent carries the `shapes` of every phase in its kernel (the matrix a sphere), `reference` `isotropised`, and converges inside the node | #131 |
 | `small_strain_short_fibre_composite` | `short_fibre_composite` + `linear_stress` | `matrix`, `fibre` (phases; the fibre's Eshelby node lies along x1), `orientation` (6 components), `precision`, `averaging` `stiffness` (uvwmaterial averages the unidirectional composites) | #133 |
 | `small_strain_isotropic_damage` | `isotropic_damage` + `*_state_function` + `strain_threshold_yield` + a damage law | `elastic_source`, `damage_source`, `state_source`, `yield_source` | existing; report #138 |
 | propagation law `linear` | `linear_damage_law` | `K` | existing |
@@ -45,7 +45,7 @@ is a `*_source` parameter. `tools/convert_uvwmaterial_card.py` converts the old 
 | `polymer_matrix_conductivity_material`, `gamm2022` | — | | #123 |
 | `plastic_material_*`, `propagation_law_viscous_regularization` | `j2_plasticity`, `drucker_prager_plasticity` exist; Hill and the regularisation | | #120 |
 | `tensor_isotropization_general` | `isotropize` (core) | | #129 |
-| `sphere_lebedev_rule` | `lebedev` (core, precisions 3–23) | | #129 |
+| `sphere_lebedev_rule` | `lebedev` (core, precisions 3–77) | | #129 |
 | `uvwmat_functions` (K/E/ν conversions, rotations) | `core/elastic_constants.h` | | #127 |
 | Boost `ellint_*` | `core/elliptic_integrals.h` | | #127 |
 
@@ -93,3 +93,32 @@ Differences to know: shear strains are tensor components everywhere; every `eshe
 `direction_vector` as its `aspect_ratio` and `direction`; the 9-component `fibre_orientation_tensor` becomes the
 6 symmetric components `orientation`; `vrh` is `hill`, `scs` is `self_consistent`; every volume fraction is a produced property (a `constant_scalar` for a fixed one); the matrix
 phase gets the fraction the inclusions leave; the point names the tangent producer (`tangent_source`) because the stress node has no tangent.
+
+`scs` is not reproduced by either reference of `self_consistent`. uvwmaterial embeds each inclusion in the full
+effective stiffness (C⁻¹ and Cᵢ − C) but keeps the Eshelby tensor of its `eshelby_tensor` block, computed once at
+that block's ν; the ν of iso(C) is computed and not used. It relaxes the inclusion concentrations directly,
+Aᵢ ← 0.75 Aᵢ + 0.25 (I + S : C⁻¹ : (Cᵢ − C))⁻¹, starting from Mori–Tanaka. The matrix has no shape and takes
+C = Cₘ + Σ cᵢ (Cᵢ − Cₘ) : Aᵢ. It stops at an absolute ‖ΔC‖ ≤ 5e-5 within 100 iterations. `self_consistent` gives
+every phase a shape (the converter makes the matrix a sphere) and solves Aᵣ = Tᵣ : (Σ cₛ Tₛ)⁻¹ with one consistent
+reference medium. `anisotropic` uses Hill's polarisation tensor in C, `isotropised` uses S(ν₀) and C₀ = iso(C).
+The converter writes `isotropised`, the cheap closed-form one. Converged results with Eₘ = 3000, Eᵢ = 200 000,
+ν = 0.3 for both phases, cᵢ = 0.3 (MPa; uvwmaterial run to 1e-12 here, since at its own 5e-5 it does not converge
+in 100 iterations for these cards):
+
+| inclusions | | C₁₁₁₁ | C₁₁₂₂ | C₂₂₁₁ | E₁ | E₂ | G₁₂ | G₂₃ |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| spheres | uvwmaterial `scs` | 8520 | 2805 | 2805 | 7130 | 7130 | 2857 | 2857 |
+| | `isotropised` = `anisotropic` | 8751 | 3169 | 3169 | 7066 | 7066 | 2791 | 2791 |
+| cylinders along x₁ | uvwmaterial `scs` | 63 859 | 2931 | 2931 | 62 100 | 5842 | 2690 | 2109 |
+| | `isotropised` | 45 583 | 3655 | 3957 | 43 527 | 8790 | 3844 | 3266 |
+| | `anisotropic` | 32 652 | 3059 | 3059 | 30 854 | 6206 | 2821 | 2266 |
+| spheroids, aspect ratio 20 | uvwmaterial `scs` | 61 931 | 3018 | 3018 | 60 069 | 5851 | 2719 | 2115 |
+| | `isotropised` | 40 332 | 3624 | 3885 | 38 265 | 8459 | 3703 | 3144 |
+| | `anisotropic` | 28 990 | 3103 | 3103 | 27 144 | 6208 | 2882 | 2275 |
+
+For spheres the difference is the fixed ν of S alone. For fibres the matrix shape dominates: uvwmaterial's matrix
+has none, while the converted card makes it a sphere. Giving the matrix the cylinder shape as well (by hand, in
+the kernel's `shapes`) brings `anisotropic` to within 1.2 % of uvwmaterial for cylinders (C₁₁₁₁ 63 879,
+C₁₁₂₂ 2965, E₂ 5832, G₁₂ 2690, G₂₃ 2094); `isotropised` then stays 42 % off in E₂ (8282). For spheroids of aspect
+ratio 20 with the matrix a spheroid too, neither matches: C₁₁₁₁ is 6 % (`isotropised`) and 11 % (`anisotropic`)
+low, and E₂ of `isotropised` is 38 % high.

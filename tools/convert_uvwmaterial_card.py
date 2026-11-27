@@ -243,6 +243,7 @@ class Converter:
         matrix_phase = self.matrix_phase(matrix, 1 - sum(c for _, c in inclusions), name)
         kernel_doc = {"type": kernel}
         if sc:  # every phase embedded in the effective medium: the shapes are data of the kernel
+            kernel_doc["reference"] = "isotropised"  # closest to uvwmaterial's mixed scheme (docs/uvwmaterial-mapping.md)
             kernel_doc["shapes"] = {matrix_phase: {"type": "sphere"}} | {
                 phase: self.shape(spec["eshelby_tensor"]) for (phase, _), spec in zip(inclusions, card["inclusions"].values())}
         tangent = self.add({"type": "mean_field_composite_global", "name": f"{name}_tangent",

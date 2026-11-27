@@ -56,8 +56,10 @@ class ConvertTest(unittest.TestCase):
         doc = convert({**MORI_TANAKA, "kernal": "scs"}, "sc")
         mf = by_name(doc, "sc_tangent")
         matrix, inclusion = mf["phases"]
-        # every phase embedded in the effective medium: the shapes are kernel data, no Eshelby node, no residual
-        self.assertEqual(mf["kernel"], {"type": "self_consistent", "shapes": {matrix: {"type": "sphere"}, inclusion: {"type": "sphere"}}})
+        # every phase embedded in the effective medium: the shapes are kernel data, no Eshelby node, no residual;
+        # the isotropised reference is the closest to uvwmaterial's scs
+        self.assertEqual(mf["kernel"], {"type": "self_consistent", "reference": "isotropised",
+                                        "shapes": {matrix: {"type": "sphere"}, inclusion: {"type": "sphere"}}})
         self.assertNotIn("eshelby_source", by_name(doc, inclusion))
         self.assertFalse(any(m["type"].startswith("eshelby_") for m in doc["model"]["materials"]))
         self.assertEqual(doc["point"], {"strain_source": "strain", "stress_source": "sc", "tangent_source": "sc_tangent"})
